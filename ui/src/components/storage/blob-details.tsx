@@ -20,10 +20,10 @@ import {
   TableRow,
 } from '@askrjs/ui';
 import {
-  downloadBlobContent,
-  loadBlobMetadata,
-  type BlobMetadata,
-} from '../../features/blobs/blobs.query';
+  downloadObjectContent as downloadBlobContent,
+  loadObjectMetadata as loadBlobMetadata,
+} from '../../features/objects/objects.query';
+import type { ObjectMetadata as BlobMetadata } from '../../adapters/api.g';
 import { formatBytes, formatRelativeTime } from '../../shared/format';
 import { bucketPath } from '../../shared/routes';
 
@@ -90,7 +90,7 @@ export default function BlobDetails({
     );
   }
 
-  const customMetadata = metadata.value
+  const customMetadata: Array<[string, string]> = metadata.value
     ? Object.entries(metadata.value.metadata)
     : [];
 

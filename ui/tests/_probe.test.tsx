@@ -2,6 +2,10 @@ import { cleanupApp, createIsland } from '@askrjs/askr/boot';
 import { createQuery } from '@askrjs/askr/data';
 import { describe, expect, it } from 'vite-plus/test';
 
+declare global {
+  var __probeValue: string | undefined;
+}
+
 function Child() {
   const q = createQuery<string>({
     key: 'probe',

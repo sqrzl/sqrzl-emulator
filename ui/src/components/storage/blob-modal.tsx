@@ -19,7 +19,7 @@ import {
   Input,
   Label,
 } from '@askrjs/ui';
-import { putBlobContent } from '../../features/blobs/blobs.query';
+import { putObjectContent as putBlobContent } from '../../features/objects/objects.query';
 import { blobListKey } from '../../features/storage/keys';
 
 export default function BlobModal({ bucketName }: { bucketName: string }) {
@@ -96,7 +96,11 @@ export default function BlobModal({ bucketName }: { bucketName: string }) {
                 <Stack gap="4">
                   <Field>
                     <Label for="blob-key">Blob key</Label>
-                    <Input id="blob-key" name="blob-key" disabled={upload.pending} />
+                    <Input
+                      id="blob-key"
+                      name="blob-key"
+                      disabled={upload.pending}
+                    />
                   </Field>
                   <Field>
                     <Label for="blob-file">File</Label>

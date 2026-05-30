@@ -2,16 +2,10 @@ import { Show } from '@askrjs/askr/control';
 import { Button } from '@askrjs/themes/controls';
 import { EmptyState, Spinner } from '@askrjs/themes/feedback';
 import { Inline, Stack } from '@askrjs/themes/layouts';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@askrjs/themes/surfaces';
 import CursorPagination from './cursor-pagination';
 import StorageSearchForm from './storage-search-form';
 
-export default function DataTableCard({
+export default function DataTableSection({
   title,
   searchInputId,
   searchLabel,
@@ -48,19 +42,20 @@ export default function DataTableCard({
   onPrevious: () => void;
   children?: unknown;
 }) {
+  const titleId = `${searchInputId}-title`;
+
   return (
-    <Card>
-      <CardHeader>
+    <section aria-labelledby={titleId}>
+      <Stack gap="4">
         <Stack gap="3">
-          <CardTitle>{title}</CardTitle>
+          <h2 id={titleId}>{title}</h2>
           <StorageSearchForm
             inputId={searchInputId}
             label={searchLabel}
             onSearch={onSearch}
           />
         </Stack>
-      </CardHeader>
-      <CardContent>
+
         <Show when={errored}>
           <EmptyState
             title={errorTitle}
@@ -90,7 +85,7 @@ export default function DataTableCard({
             />
           </Stack>
         </Show>
-      </CardContent>
-    </Card>
+      </Stack>
+    </section>
   );
 }

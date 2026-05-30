@@ -12,7 +12,7 @@ import {
 } from '@askrjs/ui';
 import { createMutation } from '@askrjs/askr/data';
 import BucketDeleteDialog from './bucket-delete-dialog';
-import DataTableCard from './data-table-card';
+import DataTableSection from './data-table-section';
 import { useCursorList } from '../../features/storage/use-cursor-list';
 import { useDeleteTarget } from '../../features/storage/use-delete-target';
 import { bucketListKey } from '../../features/storage/keys';
@@ -60,7 +60,7 @@ export default function BucketTable() {
 
   return (
     <>
-      <DataTableCard
+      <DataTableSection
         title="Buckets"
         searchInputId="bucket-search"
         searchLabel="Search buckets"
@@ -113,7 +113,7 @@ export default function BucketTable() {
             </For>
           </TableBody>
         </Table>
-      </DataTableCard>
+      </DataTableSection>
 
       <BucketDeleteDialog
         target={remover.target()}

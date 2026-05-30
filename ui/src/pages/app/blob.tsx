@@ -4,7 +4,7 @@ import { Button } from '@askrjs/themes/controls';
 import { EmptyState } from '@askrjs/themes/feedback';
 import { Stack } from '@askrjs/themes/layouts';
 import BlobDetails from '../../components/storage/blob-details';
-import { loadAllBlobPages } from '../../features/blobs/blobs.query';
+import { loadAllObjectPages as loadAllBlobPages } from '../../features/objects/objects.query';
 import { bucketPath, blobIdFromBlobKey } from '../../shared/routes';
 
 export default function Blob({

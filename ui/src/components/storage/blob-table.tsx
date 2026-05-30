@@ -11,15 +11,15 @@ import {
 } from '@askrjs/ui';
 import { createMutation } from '@askrjs/askr/data';
 import BlobDeleteDialog from './blob-delete-dialog';
-import DataTableCard from './data-table-card';
+import DataTableSection from './data-table-section';
 import { useCursorList } from '../../features/storage/use-cursor-list';
 import { useDeleteTarget } from '../../features/storage/use-delete-target';
 import { blobListKey } from '../../features/storage/keys';
 import {
-  deleteBlob,
-  loadBlobPage,
-  type BlobInfo,
-} from '../../features/blobs/blobs.query';
+  deleteObject as deleteBlob,
+  loadObjectPage as loadBlobPage,
+} from '../../features/objects/objects.query';
+import type { ObjectInfo as BlobInfo } from '../../adapters/api.g';
 import { formatBytes, formatRelativeTime } from '../../shared/format';
 import { blobPath } from '../../shared/routes';
 
@@ -28,11 +28,11 @@ function formatBlobSize(size: number): string {
 }
 
 export default function BlobTable({ bucketName }: { bucketName: string }) {
-  const list = useCursorList<BlobInfo>(blobListKey(bucketName), ({
-    next,
-    search,
-    signal,
-  }) => loadBlobPage({ bucketName, next, search, signal }));
+  const list = useCursorList<BlobInfo>(
+    blobListKey(bucketName),
+    ({ next, search, signal }) =>
+      loadBlobPage({ bucketName, next, search, signal })
+  );
 
   const remove = createMutation({
     action: (id: { blobKey: string }, { signal }) =>
@@ -53,7 +53,7 @@ export default function BlobTable({ bucketName }: { bucketName: string }) {
 
   return (
     <>
-      <DataTableCard
+      <DataTableSection
         title="Blobs"
         searchInputId="blob-search"
         searchLabel="Search blobs"
@@ -116,7 +116,7 @@ export default function BlobTable({ bucketName }: { bucketName: string }) {
             </For>
           </TableBody>
         </Table>
-      </DataTableCard>
+      </DataTableSection>
 
       <BlobDeleteDialog
         bucketName={bucketName}
