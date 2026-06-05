@@ -1,9 +1,10 @@
+use crate::body::Body;
 use crate::server::http::{Request, ResponseBuilder};
 use crate::services::xml_error_response;
 use crate::utils::headers as header_utils;
 use crate::utils::xml as xml_utils;
 use http::StatusCode;
-use hyper::{Body, Response};
+use hyper::Response;
 use std::collections::HashMap;
 use urlencoding::decode;
 

@@ -3,6 +3,7 @@ use crate::server::http::{Request, ResponseBuilder};
 use crate::services::bucket as bucket_service;
 use crate::storage::Storage;
 use crate::utils::xml as xml_utils;
+use quick_xml::escape::unescape;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
@@ -22,7 +23,7 @@ pub(super) fn escape_xml_str(input: &str) -> String {
 
 pub(super) fn parse_delete_keys(xml: &str) -> Vec<(String, Option<String>)> {
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
     let mut in_key = false;
@@ -40,9 +41,11 @@ pub(super) fn parse_delete_keys(xml: &str) -> Vec<(String, Option<String>)> {
             },
             Ok(Event::Text(t)) => {
                 if in_key {
-                    current_key = Some(t.unescape().unwrap_or_default().to_string());
+                    let decoded = t.decode().unwrap_or_default();
+                    current_key = Some(unescape(&decoded).unwrap_or_default().to_string());
                 } else if in_version {
-                    current_version = Some(t.unescape().unwrap_or_default().to_string());
+                    let decoded = t.decode().unwrap_or_default();
+                    current_version = Some(unescape(&decoded).unwrap_or_default().to_string());
                 }
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
@@ -93,7 +96,7 @@ pub(super) fn bucket_get_action(req: &Request) -> &'static str {
 
 pub(super) fn metadata_value(xml: &str, tag: &[u8]) -> Option<String> {
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut in_tag = false;
 
@@ -102,7 +105,8 @@ pub(super) fn metadata_value(xml: &str, tag: &[u8]) -> Option<String> {
             Ok(Event::Start(e)) if e.name().as_ref() == tag => in_tag = true,
             Ok(Event::End(e)) if e.name().as_ref() == tag => in_tag = false,
             Ok(Event::Text(t)) if in_tag => {
-                return Some(t.unescape().unwrap_or_default().to_string());
+                let decoded = t.decode().unwrap_or_default();
+                return Some(unescape(&decoded).unwrap_or_default().to_string());
             }
             Ok(Event::Eof) => break,
             Err(_) => break,

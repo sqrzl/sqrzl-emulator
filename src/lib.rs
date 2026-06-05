@@ -2,9 +2,11 @@
 pub mod api;
 pub mod auth;
 pub mod blob;
+pub mod body;
 mod compatibility_matrix;
 pub mod config;
 pub mod error;
+pub mod hyper_compat;
 pub mod lifecycle;
 pub mod models;
 pub mod providers;

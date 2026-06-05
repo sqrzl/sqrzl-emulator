@@ -19,15 +19,47 @@ export type CursorListController<T> = {
   previous: () => void;
 };
 
+function readQueryParam(name: string): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return window.location.search
+    ? new URLSearchParams(window.location.search).get(name)?.trim() ?? ''
+    : '';
+}
+
+function writeQueryParam(name: string, value: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  const nextValue = value.trim();
+
+  if (nextValue) {
+    url.searchParams.set(name, nextValue);
+  } else {
+    url.searchParams.delete(name);
+  }
+
+  const nextHref = `${url.pathname}${url.search}${url.hash}`;
+  const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextHref !== currentHref) {
+    window.history.pushState({}, '', nextHref);
+  }
+}
+
 export function useCursorList<T>(
   keyPrefix: string,
+  queryParam: string,
   fetchPage: (opts: {
     next?: string;
     search?: string;
     signal: AbortSignal;
   }) => Promise<CursorPage<T>>
 ): CursorListController<T> {
-  const [search, setSearchValue] = state('');
+  const [search, setSearchValue] = state(readQueryParam(queryParam));
   const [cursor, setCursor] = state<string | undefined>(undefined);
   const [history, setHistory] = state<Array<string | undefined>>([]);
 
@@ -42,10 +74,13 @@ export function useCursorList<T>(
   });
 
   function setSearch(value: string) {
-    if (value === search()) {
+    const nextValue = value.trim();
+    if (nextValue === search()) {
       return;
     }
-    setSearchValue(value);
+
+    writeQueryParam(queryParam, nextValue);
+    setSearchValue(nextValue);
     setCursor(undefined);
     setHistory([]);
   }

@@ -3,10 +3,8 @@ import { Stack } from '@askrjs/themes/layouts';
 import {
   AlertDialog,
   AlertDialogContent,
-  AlertDialogDescription,
   AlertDialogOverlay,
   AlertDialogPortal,
-  AlertDialogTitle,
 } from '@askrjs/ui';
 import { Show } from '@askrjs/askr/control';
 import type { DeleteTarget } from '../../features/storage/use-delete-target';
@@ -36,14 +34,14 @@ export default function BucketDeleteDialog({
         <AlertDialogContent>
           <Stack gap="4">
             <Stack gap="1">
-              <AlertDialogTitle>Delete bucket</AlertDialogTitle>
-              <AlertDialogDescription>
+              <h2>Delete bucket</h2>
+              <p>
                 {target?.pendingCount
                   ? 'Checking how many blobs are in this bucket.'
                   : target
                     ? `You are going to delete ${target.count ?? 0} blobs from ${target.bucketName}.`
                     : 'You are going to delete this bucket.'}
-              </AlertDialogDescription>
+              </p>
               <p>This also removes the bucket itself.</p>
             </Stack>
             <Show when={target?.error}>

@@ -1,7 +1,10 @@
 mod common;
 
+use bytes::Bytes;
 use common::e2e::{auth_disabled, auth_enabled, text_body, LiveServer, AZURE_VERSION};
-use hyper::{Body, Request, StatusCode};
+use http_body_util::Full;
+type Body = Full<Bytes>;
+use hyper::{Request, StatusCode};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn should_round_trip_block_blob_given_live_server_when_using_basic_azure_crud_and_range_reads(
@@ -15,7 +18,7 @@ async fn should_round_trip_block_blob_given_live_server_when_using_basic_azure_c
             server.base_url
         ))
         .header("x-ms-version", AZURE_VERSION)
-        .body(Body::empty())
+        .body(Body::default())
         .expect("container create request should build");
     let create_container_response = server.request(create_container).await;
     assert_eq!(create_container_response.status(), StatusCode::CREATED);
@@ -41,7 +44,7 @@ async fn should_round_trip_block_blob_given_live_server_when_using_basic_azure_c
             server.base_url
         ))
         .header("x-ms-version", AZURE_VERSION)
-        .body(Body::empty())
+        .body(Body::default())
         .expect("blob get request should build");
     let get_blob_response = server.request(get_blob).await;
     assert_eq!(get_blob_response.status(), StatusCode::OK);
@@ -55,7 +58,7 @@ async fn should_round_trip_block_blob_given_live_server_when_using_basic_azure_c
         ))
         .header("x-ms-version", AZURE_VERSION)
         .header("x-ms-range", "bytes=0-4")
-        .body(Body::empty())
+        .body(Body::default())
         .expect("blob range request should build");
     let range_blob_response = server.request(range_blob).await;
     assert_eq!(range_blob_response.status(), StatusCode::PARTIAL_CONTENT);
@@ -70,7 +73,7 @@ async fn should_reject_unauthorized_container_list_given_live_server_when_azure_
         .method("GET")
         .uri(format!("{}/devstoreaccount1?comp=list", server.base_url))
         .header("x-ms-version", AZURE_VERSION)
-        .body(Body::empty())
+        .body(Body::default())
         .expect("container list request should build");
     let response = server.request(list_containers).await;
 

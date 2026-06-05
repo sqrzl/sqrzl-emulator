@@ -9,6 +9,7 @@ export default function DataTableSection({
   title,
   searchInputId,
   searchLabel,
+  searchValue,
   onSearch,
   loading,
   errored,
@@ -24,9 +25,10 @@ export default function DataTableSection({
   onPrevious,
   children,
 }: {
-  title: string;
+  title?: string;
   searchInputId: string;
   searchLabel: string;
+  searchValue: string;
   onSearch: (value: string) => void;
   loading: boolean;
   errored: boolean;
@@ -42,16 +44,19 @@ export default function DataTableSection({
   onPrevious: () => void;
   children?: unknown;
 }) {
-  const titleId = `${searchInputId}-title`;
+  const titleId = title ? `${searchInputId}-title` : undefined;
 
   return (
-    <section aria-labelledby={titleId}>
+    <section aria-labelledby={titleId} aria-label={title ?? searchLabel}>
       <Stack gap="4">
         <Stack gap="3">
-          <h2 id={titleId}>{title}</h2>
+          <Show when={title}>
+            <h2 id={titleId}>{title}</h2>
+          </Show>
           <StorageSearchForm
             inputId={searchInputId}
             label={searchLabel}
+            defaultValue={searchValue}
             onSearch={onSearch}
           />
         </Stack>

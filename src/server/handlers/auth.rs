@@ -1,4 +1,5 @@
 use crate::auth::{AuthConfig, AuthInfo, SigV4Config, SignatureVerifier};
+use crate::body::Body;
 use crate::models::policy::{AuthContext, Authorizer, PolicyEffect};
 use crate::models::Owner;
 use crate::services::{bucket as bucket_service, object as object_service, xml_error_response};
@@ -6,7 +7,7 @@ use crate::storage::Storage;
 use crate::utils::headers as header_utils;
 use hex;
 use http::StatusCode;
-use hyper::{Body, Response};
+use hyper::Response;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,13 +29,16 @@ fn default_owner(config: &AuthConfig) -> Owner {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use crate::body::Body;
     use crate::models::policy::{
         Acl, ActionList, BucketPolicyDocument, Grant, Grantee, Permission, PolicyStatementDocument,
         Principal, ResourceList,
     };
     use crate::server::http::Request as ParsedRequest;
     use crate::storage::FilesystemStorage;
-    use hyper::{Body, Request as HyperRequest, StatusCode};
+    use bytes::Bytes;
+    use hyper::Request as HyperRequest;
+    use hyper::StatusCode;
     use std::fs;
     use std::sync::Arc;
 
@@ -64,9 +68,13 @@ mod tests {
             builder = builder.header(*name, *value);
         }
 
-        ParsedRequest::from_hyper(builder.body(Body::empty()).expect("request should build"))
-            .await
-            .expect("request should parse")
+        ParsedRequest::from_hyper(
+            builder
+                .body(Body::from(Bytes::new()))
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should parse")
     }
 
     #[tokio::test(flavor = "multi_thread")]

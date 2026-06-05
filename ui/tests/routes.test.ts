@@ -18,7 +18,7 @@ describe('shared route helpers', () => {
     expect(nestedBlobId).toBe(blobIdFromBlobKey('dir1/dir2/blobkey.png'));
     expect(nestedBlobId).not.toBe(blobIdFromBlobKey('blobkey.png'));
     expect(blobPath('demo-bucket', 'dir1/dir2/blobkey.png')).toBe(
-      `${bucketPath('demo-bucket')}/${nestedBlobId}`
+      `${bucketPath('demo-bucket')}/blob/${nestedBlobId}`
     );
     expect(blobPath('demo-bucket', 'dir1/dir2/blobkey.png')).not.toContain(
       '%2F'

@@ -83,7 +83,7 @@ export default function LoginPage() {
             >
               <Stack gap="4">
                 <Field>
-                  <label for="username">Username</label>
+                  <label htmlFor="username">Username</label>
                   <Input
                     id="username"
                     name="username"
@@ -94,7 +94,7 @@ export default function LoginPage() {
                   />
                 </Field>
                 <Field>
-                  <label for="password">Password</label>
+                  <label htmlFor="password">Password</label>
                   <Input
                     id="password"
                     name="password"

@@ -1,10 +1,11 @@
 use super::http::{Request, ResponseBuilder, RouteMatch, Router};
 use crate::auth::AuthConfig;
+use crate::body::Body;
 use crate::services::xml_error_response;
 use crate::storage::Storage;
 use crate::utils::headers as header_utils;
 use http::StatusCode;
-use hyper::{Body, Response};
+use hyper::Response;
 use std::sync::Arc;
 
 mod acl;

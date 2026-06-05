@@ -58,8 +58,8 @@ describe('simplified page flows', () => {
 
     try {
       await flush();
-      expect(root.textContent).toContain('Peas Admin');
-      expect(root.textContent).toContain('Buckets');
+      expect(root.textContent).toContain('Peas');
+      expect(root.textContent).not.toContain('Buckets');
       expect(root.querySelector('[aria-label="Toggle theme"]')).toBeTruthy();
       expect(root.querySelector('a[href="/logout"]')).toBeTruthy();
     } finally {

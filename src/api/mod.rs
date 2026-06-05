@@ -1,5 +1,4 @@
 pub mod admin;
-pub mod buckets;
 pub mod models;
 pub mod server;
 

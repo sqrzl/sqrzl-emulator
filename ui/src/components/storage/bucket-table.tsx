@@ -33,6 +33,7 @@ type BucketItem = {
 export default function BucketTable() {
   const list = useCursorList<BucketItem>(
     bucketListKey,
+    'search',
     ({ next, search, signal }) => listBucketPage({ next, search, signal })
   );
 
@@ -61,9 +62,9 @@ export default function BucketTable() {
   return (
     <>
       <DataTableSection
-        title="Buckets"
         searchInputId="bucket-search"
         searchLabel="Search buckets"
+        searchValue={list.search()}
         onSearch={list.setSearch}
         loading={list.pending() && !hasBuckets}
         errored={Boolean(list.error()) && !hasBuckets}
@@ -103,9 +104,10 @@ export default function BucketTable() {
                   <TableCell>
                     <Button
                       variant="secondary"
+                      aria-label={`Delete bucket ${bucket.name}`}
                       onPress={() => remover.open({ bucketName: bucket.name })}
                     >
-                      <DeleteIcon />
+                      <DeleteIcon aria-hidden="true" /> Delete
                     </Button>
                   </TableCell>
                 </TableRow>

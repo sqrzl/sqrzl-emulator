@@ -4,10 +4,8 @@ import { Stack } from '@askrjs/themes/layouts';
 import {
   AlertDialog,
   AlertDialogContent,
-  AlertDialogDescription,
   AlertDialogOverlay,
   AlertDialogPortal,
-  AlertDialogTitle,
 } from '@askrjs/ui';
 import type { DeleteTarget } from '../../features/storage/use-delete-target';
 
@@ -38,12 +36,12 @@ export default function BlobDeleteDialog({
         <AlertDialogContent>
           <Stack gap="4">
             <Stack gap="1">
-              <AlertDialogTitle>Delete blob</AlertDialogTitle>
-              <AlertDialogDescription>
+              <h2>Delete blob</h2>
+              <p>
                 {target
                   ? `Delete ${target.blobKey} from ${bucketName}.`
                   : 'Delete this blob.'}
-              </AlertDialogDescription>
+              </p>
             </Stack>
             <Show when={target?.error}>
               <FieldError role="alert">{target?.error}</FieldError>

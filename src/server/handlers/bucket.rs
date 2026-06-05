@@ -3,6 +3,7 @@ use super::auth::check_authorization;
 use super::cors;
 use super::ResponseBuilder;
 use crate::auth::AuthConfig;
+use crate::body::Body;
 use crate::services::{
     bucket as bucket_service, object as object_service, storage_error_response, xml_error_response,
     xml_success_response,
@@ -10,7 +11,7 @@ use crate::services::{
 use crate::storage::Storage;
 use crate::utils::{headers as header_utils, validation, xml as xml_utils};
 use http::StatusCode;
-use hyper::{Body, Response};
+use hyper::Response;
 use std::sync::Arc;
 
 mod helpers;
@@ -1288,12 +1289,16 @@ pub async fn bucket_post(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::body::Body;
     use crate::config::Config;
     use crate::models::Object;
     use crate::server::RequestExt;
     use crate::storage::FilesystemStorage;
+    use bytes::Bytes;
     use chrono::{TimeZone, Utc};
-    use hyper::{Body, Request as HyperRequest, StatusCode};
+    use http_body_util::BodyExt;
+    use hyper::Request as HyperRequest;
+    use hyper::StatusCode;
     use std::fs;
     use std::sync::Arc;
 
@@ -1334,7 +1339,7 @@ mod tests {
         let request = HyperRequest::builder()
             .method("GET")
             .uri(uri)
-            .body(Body::empty())
+            .body(Body::from(Bytes::new()))
             .expect("request should build");
 
         RequestExt::from_hyper(request)
@@ -1447,9 +1452,12 @@ mod tests {
         // Assert
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = hyper::body::to_bytes(resp.into_body())
+        let body = resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let body = String::from_utf8(body.to_vec()).expect("body should be utf8");
         assert!(body.contains("<ListVersionsResult"));
         assert!(body.contains(&first_version_id));
@@ -1494,9 +1502,12 @@ mod tests {
         // Assert
         assert_eq!(first_resp.status(), StatusCode::OK);
 
-        let first_body = hyper::body::to_bytes(first_resp.into_body())
+        let first_body = first_resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let first_body = String::from_utf8(first_body.to_vec()).expect("body should be utf8");
         assert!(first_body.contains("<ListBucketResult"));
         assert!(first_body.contains("<KeyCount>2</KeyCount>"));
@@ -1519,9 +1530,12 @@ mod tests {
 
         assert_eq!(second_resp.status(), StatusCode::OK);
 
-        let second_body = hyper::body::to_bytes(second_resp.into_body())
+        let second_body = second_resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let second_body = String::from_utf8(second_body.to_vec()).expect("body should be utf8");
         assert!(second_body.contains("<KeyCount>1</KeyCount>"));
         assert!(second_body.contains("gamma.txt"));
@@ -1567,9 +1581,12 @@ mod tests {
         // Assert
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = hyper::body::to_bytes(resp.into_body())
+        let body = resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let body = String::from_utf8(body.to_vec()).expect("body should be utf8");
         assert!(body.contains("<ListBucketResult"));
         assert!(body.contains("<KeyCount>3</KeyCount>"));
@@ -1648,13 +1665,14 @@ mod tests {
         )
         .await
         .expect("request payment get should complete");
-        let request_payment_body = String::from_utf8(
-            hyper::body::to_bytes(request_payment.into_body())
-                .await
-                .expect("body should read")
-                .to_vec(),
-        )
-        .expect("body should be utf8");
+        let request_payment_body_bytes = request_payment
+            .into_body()
+            .collect()
+            .await
+            .expect("body should read")
+            .to_bytes();
+        let request_payment_body =
+            String::from_utf8(request_payment_body_bytes.to_vec()).expect("body should be utf8");
         assert!(request_payment_body.contains("<Payer>Requester</Payer>"));
 
         let website = bucket_get_or_list_objects(
@@ -1666,13 +1684,14 @@ mod tests {
         )
         .await
         .expect("website get should complete");
-        let website_body = String::from_utf8(
-            hyper::body::to_bytes(website.into_body())
-                .await
-                .expect("body should read")
-                .to_vec(),
-        )
-        .expect("body should be utf8");
+        let website_body_bytes = website
+            .into_body()
+            .collect()
+            .await
+            .expect("body should read")
+            .to_bytes();
+        let website_body =
+            String::from_utf8(website_body_bytes.to_vec()).expect("body should be utf8");
         assert!(website_body.contains("index.html"));
 
         let cors = bucket_get_or_list_objects(
@@ -1684,13 +1703,13 @@ mod tests {
         )
         .await
         .expect("cors get should complete");
-        let cors_body = String::from_utf8(
-            hyper::body::to_bytes(cors.into_body())
-                .await
-                .expect("body should read")
-                .to_vec(),
-        )
-        .expect("body should be utf8");
+        let cors_body_bytes = cors
+            .into_body()
+            .collect()
+            .await
+            .expect("body should read")
+            .to_bytes();
+        let cors_body = String::from_utf8(cors_body_bytes.to_vec()).expect("body should be utf8");
         assert!(cors_body.contains("<AllowedMethod>GET</AllowedMethod>"));
 
         assert_eq!(
@@ -1734,7 +1753,7 @@ mod tests {
                     "x-amz-grant-read",
                     "uri=\"http://acs.amazonaws.com/groups/global/AllUsers\"",
                 )
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await
@@ -1762,9 +1781,12 @@ mod tests {
         .await
         .expect("bucket acl get should complete");
         let body = String::from_utf8(
-            hyper::body::to_bytes(get_response.into_body())
+            get_response
+                .into_body()
+                .collect()
                 .await
                 .expect("body should read")
+                .to_bytes()
                 .to_vec(),
         )
         .expect("body should be utf8");
@@ -1817,9 +1839,12 @@ mod tests {
         .await
         .expect("bucket acl get should complete");
         let body = String::from_utf8(
-            hyper::body::to_bytes(get_response.into_body())
+            get_response
+                .into_body()
+                .collect()
                 .await
                 .expect("body should read")
+                .to_bytes()
                 .to_vec(),
         )
         .expect("body should be utf8");
@@ -1866,7 +1891,7 @@ mod tests {
                 .method("GET")
                 .uri("http://localhost/bucket")
                 .header("Origin", "https://app.example")
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await
@@ -1894,7 +1919,7 @@ mod tests {
                 .method("HEAD")
                 .uri("http://localhost/bucket")
                 .header("Origin", "https://app.example")
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await
@@ -1943,7 +1968,7 @@ mod tests {
                 .uri("http://localhost/bucket")
                 .header("Origin", "https://blocked.example")
                 .header("Access-Control-Request-Method", "GET")
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await
@@ -1964,7 +1989,7 @@ mod tests {
                 .method("GET")
                 .uri("http://localhost/bucket")
                 .header("Origin", "https://blocked.example")
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await
@@ -2079,7 +2104,7 @@ mod tests {
                 .method("DELETE")
                 .uri("http://localhost/bucket?website")
                 .header("Origin", "https://app.example")
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await
@@ -2107,7 +2132,7 @@ mod tests {
                 .method("DELETE")
                 .uri("http://localhost/bucket?cors")
                 .header("Origin", "https://app.example")
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await
@@ -2296,7 +2321,7 @@ mod tests {
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 )
-                .body(hyper::Body::from(body))
+                .body(Body::from(body))
                 .expect("request should build"),
         )
         .await

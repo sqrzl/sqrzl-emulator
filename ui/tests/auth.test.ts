@@ -76,7 +76,7 @@ describe('admin authentication', () => {
         (record) => record.path === '/admin/buckets/{bucketName}'
       );
       const blob = manifest.records.find(
-        (record) => record.path === '/admin/buckets/{bucketName}/{blobId}'
+        (record) => record.path === '/admin/buckets/{bucketName}/blob/{blobId}'
       );
       const login = manifest.records.find((record) => record.path === '/login');
       const logout = manifest.records.find(

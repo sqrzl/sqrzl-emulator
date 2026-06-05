@@ -1,8 +1,9 @@
 use super::ProviderAdapter;
 use crate::auth::AuthConfig;
+use crate::body::Body;
 use crate::server::{handle_s3_request, RequestExt as Request};
 use crate::storage::Storage;
-use hyper::{Body, Response};
+use hyper::Response;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

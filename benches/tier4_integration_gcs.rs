@@ -1,9 +1,12 @@
 use bytes::Bytes;
 use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode,
-    Throughput,
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
-use hyper::{Body, Request, StatusCode};
+use http_body_util::Full;
+use std::hint::black_box;
+type Body = Full<Bytes>;
+
+use hyper::{Request, StatusCode};
 use tokio::runtime::{Builder, Runtime};
 
 #[path = "support/criterion_config.rs"]
@@ -28,7 +31,7 @@ async fn create_xml_bucket(server: &LiveServer, bucket: &str) {
         .method("PUT")
         .uri(format!("{}/{}", server.base_url, bucket))
         .header("host", GCS_HOST)
-        .body(Body::empty())
+        .body(Body::default())
         .expect("xml bucket create request should build");
     let response = server.request(request).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -109,7 +112,7 @@ fn bench_xml_get_object(c: &mut Criterion) {
                     .method("GET")
                     .uri(&object_url)
                     .header("host", GCS_HOST)
-                    .body(Body::empty())
+                    .body(Body::default())
                     .expect("object get request should build")
             },
             |request| {
@@ -158,7 +161,7 @@ fn bench_xml_list_objects(c: &mut Criterion) {
                     .method("GET")
                     .uri(&list_url)
                     .header("host", GCS_HOST)
-                    .body(Body::empty())
+                    .body(Body::default())
                     .expect("object list request should build")
             },
             |request| {
@@ -194,7 +197,7 @@ fn bench_json_resumable_upload(c: &mut Criterion) {
                 .header("host", GCS_HOST)
                 .header("x-upload-content-type", "text/plain")
                 .header("x-goog-meta-owner", "bench")
-                .body(Body::empty())
+                .body(Body::default())
                 .expect("resumable init request should build");
             let init_response = runtime.block_on(server.request(init_request));
             assert_eq!(init_response.status(), StatusCode::OK);

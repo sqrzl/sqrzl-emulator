@@ -1,14 +1,15 @@
 use super::ProviderAdapter;
 use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::{BlobBackend, BlobRange, PutBlobRequest, UpdateBlobMetadataRequest};
+use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
 use crate::storage::Storage;
 use crate::utils::request_origin;
 use crate::utils::xml::push_escaped_xml;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use http::{Method, StatusCode};
-use hyper::{Body, Response};
+use hyper::Response;
 use sha1::Sha1;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -486,6 +487,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::storage::FilesystemStorage;
+    use http_body_util::BodyExt;
     use hyper::Request as HyperRequest;
     use std::fs;
 
@@ -592,9 +594,12 @@ mod tests {
             )
             .await
             .expect("list should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert!(String::from_utf8(body.to_vec())
             .expect("xml")
             .contains("kitten.txt"));
@@ -613,9 +618,12 @@ mod tests {
             )
             .await
             .expect("get should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"hello gcs");
     }
 
@@ -696,9 +704,12 @@ mod tests {
             .handle_request(storage, gcs_auth(), signed_request)
             .await
             .expect("signed get should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"chunked");
     }
 
@@ -801,9 +812,12 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("riley")
         );
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"gcs");
     }
 
@@ -885,9 +899,12 @@ mod tests {
             )
             .await
             .expect("json object metadata should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let json = String::from_utf8(body.to_vec()).expect("json");
         assert!(json.contains("\"name\":\"hello.txt\""));
         assert!(json.contains("\"owner\":\"jules\""));
@@ -906,9 +923,12 @@ mod tests {
             )
             .await
             .expect("download should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"json api");
 
         let response = adapter
@@ -926,9 +946,12 @@ mod tests {
             .await
             .expect("range download should succeed");
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"json");
     }
 
@@ -977,9 +1000,12 @@ mod tests {
             )
             .await
             .expect("metadata fetch should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let json = String::from_utf8(body.to_vec()).expect("json");
         assert!(json.contains("\"name\":\"multi.txt\""));
         assert!(json.contains("\"owner\":\"sdk\""));
@@ -1054,9 +1080,12 @@ mod tests {
             )
             .await
             .expect("json metadata fetch should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
         assert_eq!(
             json.get("generation").and_then(|value| value.as_str()),
@@ -1084,9 +1113,12 @@ mod tests {
             )
             .await
             .expect("patch should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
         assert_eq!(
             json.get("generation").and_then(|value| value.as_str()),
@@ -1142,9 +1174,12 @@ mod tests {
             )
             .await
             .expect("json fetch should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
         let generation = json
             .get("generation")
@@ -1333,29 +1368,27 @@ impl GcsAdapter {
                 Ok(Self::xml_response(StatusCode::OK, body))
             }
             (&Method::PUT, Some(object)) => {
-                let stored = storage
-                    .as_ref()
-                    .put_blob(PutBlobRequest {
-                        namespace: bucket,
-                        key: object,
-                        data: req.body.to_vec(),
-                        content_type: req
-                            .header("content-type")
-                            .unwrap_or("application/octet-stream")
-                            .to_string(),
-                        metadata: Self::metadata_from_headers(&req),
-                        tags: HashMap::new(),
-                    })
-                    .map_err(|err| err.to_string())?;
+                let stored = Self::put_blob_with_generation(
+                    storage.as_ref(),
+                    bucket,
+                    object,
+                    req.body.to_vec(),
+                    req.header("content-type")
+                        .unwrap_or("application/octet-stream")
+                        .to_string(),
+                    Self::metadata_from_headers(&req),
+                )
+                .map_err(|err| err.to_string())?;
                 Ok(Self::response(StatusCode::OK)
                     .header("etag", &format!("\"{}\"", stored.etag))
                     .header(
                         "x-goog-generation",
-                        &stored.version_id.clone().unwrap_or_else(|| {
-                            stored.last_modified.timestamp_millis().max(1).to_string()
-                        }),
+                        &Self::generation_from_metadata(&stored.metadata),
                     )
-                    .header("x-goog-metageneration", "1")
+                    .header(
+                        "x-goog-metageneration",
+                        &Self::metageneration_from_metadata(&stored.metadata),
+                    )
                     .empty())
             }
             (&Method::GET, Some(object)) => {

@@ -1,9 +1,11 @@
 use super::ResponseBuilder;
+use crate::body::Body;
 use crate::server::RequestExt as Request;
 use crate::services::bucket as bucket_service;
 use crate::storage::Storage;
 use http::StatusCode;
-use hyper::{Body, Response};
+use hyper::Response;
+use quick_xml::escape::unescape;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
@@ -243,7 +245,7 @@ fn load_rules(storage: &dyn Storage, bucket: &str) -> Result<Vec<CorsRule>, crat
 
 fn parse_cors_rules(xml: &str) -> Result<Vec<CorsRule>, crate::error::Error> {
     let mut reader = Reader::from_str(xml);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
 
     let mut buf = Vec::new();
     let mut rules = Vec::new();
@@ -276,8 +278,10 @@ fn parse_cors_rules(xml: &str) -> Result<Vec<CorsRule>, crate::error::Error> {
                     buf.clear();
                     continue;
                 };
-                let value = text
-                    .unescape()
+                let decoded = text
+                    .decode()
+                    .map_err(|err| crate::error::Error::InvalidRequest(err.to_string()))?;
+                let value = unescape(&decoded)
                     .map_err(|err| crate::error::Error::InvalidRequest(err.to_string()))?
                     .to_string();
                 match current_field {

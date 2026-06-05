@@ -75,3 +75,51 @@ Keep `state()` only for UI that is **not** bound to an input's `value` (e.g. `pe
 - `ui/src/components/storage/bucket-modal.tsx`
 - `ui/src/components/storage/blob-modal.tsx`
 - `ui/src/components/storage/storage-search-form.tsx`
+
+---
+
+# askr themes bug: ThemeToggle icon props desync after toggling
+
+## Summary
+
+Using `ThemeToggle` with `darkIcon` and `lightIcon` can render the wrong icon after one or more
+toggles. The theme itself changes, but the displayed icon can become stale or inverted.
+
+## Impact
+
+- Header/theme controls provide incorrect visual state.
+- Users cannot trust the icon to represent current theme mode.
+
+## Environment
+
+- `@askrjs/askr`: `0.0.40`
+- `@askrjs/themes`: `0.0.6`
+- `@askrjs/ui`: `0.0.7`
+- App usage: `ui/src/pages/app/_layout.tsx`
+
+## Reproduction
+
+```tsx
+<ThemeToggle
+  aria-label="Toggle theme"
+  darkIcon={<MoonIcon aria-hidden="true" />}
+  lightIcon={<SunIcon aria-hidden="true" />}
+/>
+```
+
+1. Load page with default light theme.
+2. Click toggle to switch to dark.
+3. Click toggle again to switch to light.
+4. Repeat toggle a few times.
+
+Observed:
+- Theme state and `data-theme` change correctly.
+- Icon can become inconsistent with current theme.
+
+Expected:
+- Displayed icon always matches current theme deterministically.
+
+## Notes
+
+- A render-callback child on `ThemeToggle` can keep icons in sync, but this is a workaround, not
+  the intended API path.

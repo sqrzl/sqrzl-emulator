@@ -1,9 +1,12 @@
 mod common;
 
+use bytes::Bytes;
 use common::e2e::{
     auth_disabled, auth_enabled, auth_enabled_with_admin_bypass, text_body, LiveServer,
 };
-use hyper::{Body, Request, Response, StatusCode};
+use http_body_util::Full;
+type Body = Full<Bytes>;
+use hyper::{body::Incoming, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -77,7 +80,7 @@ struct AdminSessionResponse {
     username: Option<String>,
 }
 
-async fn json_body<T: DeserializeOwned>(response: Response<Body>) -> T {
+async fn json_body<T: DeserializeOwned>(response: Response<Incoming>) -> T {
     let body = text_body(response).await;
     serde_json::from_str(&body).expect("response body should deserialize")
 }
@@ -133,7 +136,7 @@ async fn should_round_trip_admin_bucket_and_object_given_live_server_when_using_
             "{}/admin/v1/buckets/e2e-admin/objects/hello.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("metadata request should build");
     let get_metadata_response = server.request(get_metadata).await;
     assert_eq!(get_metadata_response.status(), StatusCode::OK);
@@ -161,7 +164,7 @@ async fn should_round_trip_admin_bucket_and_object_given_live_server_when_using_
             "{}/admin/v1/buckets/e2e-admin/objects/hello.txt/content",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("object get request should build");
     let get_object_response = server.request(get_object).await;
     assert_eq!(get_object_response.status(), StatusCode::OK);
@@ -187,7 +190,7 @@ async fn should_round_trip_admin_bucket_and_object_given_live_server_when_using_
             "{}/admin/v1/buckets/e2e-admin/objects/docs%2Freadme.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("nested metadata request should build");
     let get_nested_metadata_response = server.request(get_nested_metadata).await;
     assert_eq!(get_nested_metadata_response.status(), StatusCode::OK);
@@ -200,7 +203,7 @@ async fn should_round_trip_admin_bucket_and_object_given_live_server_when_using_
             "{}/admin/v1/buckets/e2e-admin/objects/hello.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("object delete request should build");
     let delete_object_response = server.request(delete_object).await;
     assert_eq!(delete_object_response.status(), StatusCode::NO_CONTENT);
@@ -211,7 +214,7 @@ async fn should_round_trip_admin_bucket_and_object_given_live_server_when_using_
             "{}/admin/v1/buckets/e2e-admin/objects/docs%2Freadme.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("nested object delete request should build");
     let delete_nested_object_response = server.request(delete_nested_object).await;
     assert_eq!(
@@ -222,7 +225,7 @@ async fn should_round_trip_admin_bucket_and_object_given_live_server_when_using_
     let delete_bucket = Request::builder()
         .method("DELETE")
         .uri(format!("{}/admin/v1/buckets/e2e-admin", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("bucket delete request should build");
     let delete_bucket_response = server.request(delete_bucket).await;
     assert_eq!(delete_bucket_response.status(), StatusCode::NO_CONTENT);
@@ -245,7 +248,7 @@ async fn should_reject_legacy_api_surface_given_live_server_when_mutating_storag
     let list_buckets = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/buckets", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("admin list request should build");
     let list_buckets_response = server.request(list_buckets).await;
     assert_eq!(list_buckets_response.status(), StatusCode::OK);
@@ -274,7 +277,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
             "{}/admin/v1/buckets?limit=1&search=a",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("bucket list request should build");
     let list_buckets_response = server.request(list_buckets).await;
     assert_eq!(list_buckets_response.status(), StatusCode::OK);
@@ -293,7 +296,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
             "{}/admin/v1/buckets?limit=1&search=a&next={}",
             server.base_url, next
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("bucket list next request should build");
     let list_buckets_next_response = server.request(list_buckets_next).await;
     assert_eq!(list_buckets_next_response.status(), StatusCode::OK);
@@ -306,7 +309,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
             "{}/admin/v1/buckets?next=not-a-valid-token",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("invalid next request should build");
     let invalid_next_response = server.request(invalid_next).await;
     assert_eq!(invalid_next_response.status(), StatusCode::BAD_REQUEST);
@@ -321,7 +324,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
     let invalid_limit = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/buckets?limit=0", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("invalid limit request should build");
     let invalid_limit_response = server.request(invalid_limit).await;
     assert_eq!(invalid_limit_response.status(), StatusCode::BAD_REQUEST);
@@ -393,7 +396,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
             "{}/admin/v1/buckets/demo/objects?limit=1&search=.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("object list request should build");
     let list_objects_response = server.request(list_objects).await;
     assert_eq!(list_objects_response.status(), StatusCode::OK);
@@ -412,7 +415,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
             "{}/admin/v1/buckets/demo/objects?limit=1&search=.txt&next={}",
             server.base_url, next
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("object list next request should build");
     let list_objects_next_response = server.request(list_objects_next).await;
     assert_eq!(list_objects_next_response.status(), StatusCode::OK);
@@ -425,7 +428,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
             "{}/admin/v1/buckets/demo/objects/versioned.txt/versions?limit=1&search=versioned",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("version list request should build");
     let list_versions_response = server.request(list_versions).await;
     assert_eq!(list_versions_response.status(), StatusCode::OK);
@@ -440,7 +443,7 @@ async fn should_page_and_search_admin_collections_given_live_server_when_listing
             "{}/admin/v1/buckets/demo/objects/versioned.txt/versions?limit=10",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("full version list request should build");
     let list_all_versions_response = server.request(list_all_versions).await;
     assert_eq!(list_all_versions_response.status(), StatusCode::OK);
@@ -501,7 +504,7 @@ async fn should_return_expected_errors_given_invalid_admin_requests_when_using_l
             "{}/admin/v1/buckets/missing-bucket",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("missing bucket request should build");
     let missing_bucket_response = server.request(missing_bucket).await;
     assert_eq!(missing_bucket_response.status(), StatusCode::NOT_FOUND);
@@ -524,7 +527,7 @@ async fn should_return_expected_errors_given_invalid_admin_requests_when_using_l
     let delete_non_empty_bucket = Request::builder()
         .method("DELETE")
         .uri(format!("{}/admin/v1/buckets/errors-demo", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("non-empty bucket delete request should build");
     let delete_non_empty_bucket_response = server.request(delete_non_empty_bucket).await;
     assert_eq!(
@@ -542,7 +545,7 @@ async fn should_return_expected_errors_given_invalid_admin_requests_when_using_l
             "{}/admin/v1/buckets/errors-demo/objects/missing.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("missing object request should build");
     let missing_object_response = server.request(missing_object).await;
     assert_eq!(missing_object_response.status(), StatusCode::NOT_FOUND);
@@ -553,7 +556,7 @@ async fn should_return_expected_errors_given_invalid_admin_requests_when_using_l
     let unsupported_method = Request::builder()
         .method("POST")
         .uri(format!("{}/admin/v1/buckets/errors-demo", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("unsupported method request should build");
     let unsupported_method_response = server.request(unsupported_method).await;
     assert_eq!(
@@ -568,7 +571,7 @@ async fn should_return_expected_errors_given_invalid_admin_requests_when_using_l
     let missing_route = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/does-not-exist", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("missing route request should build");
     let missing_route_response = server.request(missing_route).await;
     assert_eq!(missing_route_response.status(), StatusCode::NOT_FOUND);
@@ -584,7 +587,7 @@ async fn should_require_session_cookie_given_admin_auth_enabled_when_request_has
     let unauthenticated = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/buckets", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("unauthenticated admin request should build");
     let unauthenticated_response = server.request_without_default_auth(unauthenticated).await;
     assert_eq!(unauthenticated_response.status(), StatusCode::UNAUTHORIZED);
@@ -595,7 +598,7 @@ async fn should_require_session_cookie_given_admin_auth_enabled_when_request_has
         .method("GET")
         .uri(format!("{}/admin/v1/auth/session", server.base_url))
         .header("cookie", "peas_admin_session=invalid")
-        .body(Body::empty())
+        .body(Body::default())
         .expect("invalid cookie request should build");
     let invalid_session_response = server.request_without_default_auth(invalid_session).await;
     assert_eq!(invalid_session_response.status(), StatusCode::UNAUTHORIZED);
@@ -603,7 +606,7 @@ async fn should_require_session_cookie_given_admin_auth_enabled_when_request_has
     let authenticated = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/buckets", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("authenticated admin request should build");
     let authenticated_response = server.request(authenticated).await;
     assert_eq!(authenticated_response.status(), StatusCode::OK);
@@ -611,7 +614,7 @@ async fn should_require_session_cookie_given_admin_auth_enabled_when_request_has
     let session_request = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/auth/session", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("session request should build");
     let session_response = server.request(session_request).await;
     assert_eq!(session_response.status(), StatusCode::OK);
@@ -628,7 +631,7 @@ async fn should_allow_admin_requests_without_credentials_given_admin_auth_bypass
     let request = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/buckets", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("bypass admin request should build");
     let response = server.request_without_default_auth(request).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -636,7 +639,7 @@ async fn should_allow_admin_requests_without_credentials_given_admin_auth_bypass
     let session_request = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/auth/session", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("open session request should build");
     let session_response = server.request_without_default_auth(session_request).await;
     assert_eq!(session_response.status(), StatusCode::OK);
@@ -677,7 +680,7 @@ async fn should_issue_admin_session_cookie_given_valid_login_and_authorize_admin
         .method("GET")
         .uri(format!("{}/admin/v1/buckets", server.base_url))
         .header("cookie", session_cookie.clone())
-        .body(Body::empty())
+        .body(Body::default())
         .expect("authenticated admin request should build");
     let authenticated_response = server.request_without_default_auth(authenticated).await;
     assert_eq!(authenticated_response.status(), StatusCode::OK);
@@ -686,7 +689,7 @@ async fn should_issue_admin_session_cookie_given_valid_login_and_authorize_admin
         .method("GET")
         .uri(format!("{}/admin/v1/auth/session", server.base_url))
         .header("cookie", session_cookie.clone())
-        .body(Body::empty())
+        .body(Body::default())
         .expect("cookie session request should build");
     let session_response = server.request_without_default_auth(session_request).await;
     assert_eq!(session_response.status(), StatusCode::OK);
@@ -698,7 +701,7 @@ async fn should_issue_admin_session_cookie_given_valid_login_and_authorize_admin
         .method("POST")
         .uri(format!("{}/admin/v1/auth/logout", server.base_url))
         .header("cookie", session_cookie)
-        .body(Body::empty())
+        .body(Body::default())
         .expect("logout request should build");
     let logout_response = server.request_without_default_auth(logout_request).await;
     assert_eq!(logout_response.status(), StatusCode::OK);
@@ -713,7 +716,7 @@ async fn should_issue_admin_session_cookie_given_valid_login_and_authorize_admin
     let signed_out_session = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/auth/session", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("signed out session request should build");
     let signed_out_response = server
         .request_without_default_auth(signed_out_session)

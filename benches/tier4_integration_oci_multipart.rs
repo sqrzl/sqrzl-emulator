@@ -1,9 +1,12 @@
 use bytes::Bytes;
 use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode,
-    Throughput,
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
-use hyper::{Body, Request, StatusCode};
+use http_body_util::Full;
+use std::hint::black_box;
+type Body = Full<Bytes>;
+
+use hyper::{Request, StatusCode};
 use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
 
@@ -99,7 +102,7 @@ fn abort_request(multipart_url: &str, upload_id: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
         .uri(format!("{multipart_url}?uploadId={upload_id}"))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("multipart abort request should build")
 }
 

@@ -1,6 +1,9 @@
 use bytes::Bytes;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use hyper::{Body, Request, StatusCode};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use http_body_util::Full;
+type Body = Full<Bytes>;
+
+use hyper::{Request, StatusCode};
 use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
 
@@ -76,7 +79,7 @@ fn abort_request(multipart_url: &str, upload_id: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
         .uri(format!("{multipart_url}?uploadId={upload_id}"))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("multipart abort request should build")
 }
 
@@ -132,7 +135,7 @@ fn bench_multipart_stream_upload(c: &mut Criterion) {
                     for request in requests {
                         let response = runtime.block_on(server.request(request));
                         assert_eq!(response.status(), StatusCode::OK);
-                        black_box(response.headers().get("etag").cloned());
+                        let _ = response.headers().get("etag").cloned();
                     }
                     total += start.elapsed();
 

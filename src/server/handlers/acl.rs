@@ -113,7 +113,9 @@ fn parse_quoted_value(input: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyper::{Body, Request as HyperRequest};
+    use crate::body::Body;
+    use bytes::Bytes;
+    use hyper::Request as HyperRequest;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn should_reject_malformed_acl_grant_header_values() {
@@ -122,7 +124,7 @@ mod tests {
                 .method("PUT")
                 .uri("http://localhost/bucket?acl")
                 .header("x-amz-grant-read", "emailAddress=\"test@example.com\"")
-                .body(Body::empty())
+                .body(Body::from(Bytes::new()))
                 .expect("request should build"),
         )
         .await

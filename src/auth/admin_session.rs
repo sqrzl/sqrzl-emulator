@@ -1,9 +1,9 @@
+use crate::body::RequestBody;
 use crate::error::{Error, Result};
 use chrono::Utc;
-use hyper::{Body, Request};
+use getrandom::fill;
+use hyper::Request;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use rand::rngs::OsRng;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -38,7 +38,7 @@ struct AdminSessionClaims {
 impl AdminSessionManager {
     pub fn new() -> Result<Self> {
         let mut signing_secret = [0_u8; 32];
-        OsRng.fill_bytes(&mut signing_secret);
+        fill(&mut signing_secret).map_err(|e| Error::InternalError(e.to_string()))?;
 
         Ok(Self {
             signing_secret,
@@ -63,11 +63,11 @@ impl AdminSessionManager {
         )
     }
 
-    pub fn has_valid_session(&self, req: &Request<Body>) -> bool {
+    pub fn has_valid_session(&self, req: &Request<RequestBody>) -> bool {
         self.subject_from_request(req).is_some()
     }
 
-    pub fn subject_from_request(&self, req: &Request<Body>) -> Option<String> {
+    pub fn subject_from_request(&self, req: &Request<RequestBody>) -> Option<String> {
         req.headers()
             .get("cookie")
             .and_then(|header| header.to_str().ok())

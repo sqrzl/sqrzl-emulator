@@ -1,4 +1,5 @@
 use crossbeam_skiplist::SkipMap;
+use std::ops::Bound;
 
 /// Lock-free concurrent index for object keys by bucket
 /// Uses crossbeam's SkipMap for atomic, wait-free reads
@@ -47,18 +48,73 @@ impl LockFreeIndex {
     /// Get all keys in a bucket matching optional prefix
     pub fn list(&self, bucket: &str, prefix: Option<&str>) -> Vec<String> {
         if let Some(entry) = self.buckets.get(bucket) {
-            entry
-                .value()
-                .iter()
-                .filter_map(|node| {
-                    let key = node.key();
-                    if prefix.is_none_or(|p| key.starts_with(p)) {
-                        Some(key.clone())
+            if let Some(prefix) = prefix {
+                let mut result = Vec::new();
+                let mut current = entry.value().lower_bound(Bound::Included(prefix));
+                while let Some(entry) = current {
+                    let key = entry.key();
+                    if key.starts_with(prefix) {
+                        result.push(key.clone());
+                        current = entry.next();
                     } else {
-                        None
+                        break;
                     }
-                })
-                .collect()
+                }
+                result
+            } else {
+                entry
+                    .value()
+                    .iter()
+                    .map(|node| node.key().clone())
+                    .collect()
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get keys in a bucket by prefix, marker, and optional max count.
+    ///
+    /// This avoids loading the full bucket index for large buckets.
+    pub fn list_prefix_marker(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+        marker: Option<&str>,
+        max_keys: Option<usize>,
+    ) -> Vec<String> {
+        if let Some(entry) = self.buckets.get(bucket) {
+            let mut current = match (prefix, marker) {
+                (Some(prefix), Some(marker)) if marker >= prefix => {
+                    entry.value().lower_bound(Bound::Excluded(marker))
+                }
+                (Some(prefix), _) => entry.value().lower_bound(Bound::Included(prefix)),
+                (None, Some(marker)) => entry.value().lower_bound(Bound::Excluded(marker)),
+                (None, None) => None,
+            };
+
+            let mut result = Vec::new();
+            if current.is_none() && prefix.is_none() && marker.is_none() {
+                current = entry.value().iter().next();
+            }
+
+            while let Some(entry) = current {
+                let key = entry.key();
+                if let Some(prefix) = prefix {
+                    if !key.starts_with(prefix) {
+                        break;
+                    }
+                }
+
+                result.push(key.clone());
+                if let Some(max) = max_keys {
+                    if result.len() >= max {
+                        break;
+                    }
+                }
+                current = entry.next();
+            }
+            result
         } else {
             Vec::new()
         }
@@ -93,6 +149,50 @@ impl LockFreeIndex {
     /// Check if bucket exists
     pub fn bucket_exists(&self, bucket: &str) -> bool {
         self.buckets.contains_key(bucket)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LockFreeIndex;
+
+    #[test]
+    fn list_prefix_marker_uses_start_bounds() {
+        let index = LockFreeIndex::new();
+        index.insert("bucket".to_string(), "apple".to_string());
+        index.insert("bucket".to_string(), "banana".to_string());
+        index.insert("bucket".to_string(), "cherry".to_string());
+
+        assert_eq!(
+            index.list_prefix_marker("bucket", None, Some("banana"), Some(10)),
+            vec!["cherry".to_string()]
+        );
+        assert_eq!(
+            index.list_prefix_marker("bucket", Some("b"), None, Some(10)),
+            vec!["banana".to_string()]
+        );
+        assert_eq!(
+            index.list_prefix_marker("bucket", Some("b"), Some("apple"), Some(10)),
+            vec!["banana".to_string()]
+        );
+        assert_eq!(
+            index.list_prefix_marker("bucket", Some("c"), Some("a"), Some(10)),
+            vec!["cherry".to_string()]
+        );
+    }
+
+    #[test]
+    fn list_prefix_limits_to_prefix_range() {
+        let index = LockFreeIndex::new();
+        index.insert("bucket".to_string(), "alpha".to_string());
+        index.insert("bucket".to_string(), "beta".to_string());
+        index.insert("bucket".to_string(), "beta2".to_string());
+        index.insert("bucket".to_string(), "gamma".to_string());
+
+        assert_eq!(
+            index.list("bucket", Some("beta")),
+            vec!["beta".to_string(), "beta2".to_string()]
+        );
     }
 }
 

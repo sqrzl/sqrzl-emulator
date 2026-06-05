@@ -115,6 +115,21 @@ export function bucketPath(bucketName: string): string {
   return `${adminBucketsPath()}/${encodeURIComponent(bucketName)}`;
 }
 
+export function bucketFolderPath(bucketName: string, pathPrefix: string): string {
+  const normalized = pathPrefix.trim().replace(/^\/+|\/+$/g, '');
+  if (!normalized) {
+    return bucketPath(bucketName);
+  }
+
+  const encodedPath = normalized
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+
+  return `${bucketPath(bucketName)}/${encodedPath}`;
+}
+
 export function blobIdFromBlobKey(blobKey: string): string {
   const cached = blobIdCache.get(blobKey);
   if (cached) {
@@ -130,5 +145,5 @@ export function blobIdFromBlobKey(blobKey: string): string {
 }
 
 export function blobPath(bucketName: string, blobKey: string): string {
-  return `${bucketPath(bucketName)}/${blobIdFromBlobKey(blobKey)}`;
+  return `${bucketPath(bucketName)}/blob/${blobIdFromBlobKey(blobKey)}`;
 }

@@ -1,9 +1,12 @@
 use bytes::Bytes;
 use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode,
-    Throughput,
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
-use hyper::{Body, Request, StatusCode};
+use http_body_util::Full;
+use std::hint::black_box;
+type Body = Full<Bytes>;
+
+use hyper::{Request, StatusCode};
 use tokio::runtime::{Builder, Runtime};
 
 #[path = "support/criterion_config.rs"]
@@ -95,7 +98,7 @@ fn bench_get_object(c: &mut Criterion) {
                 Request::builder()
                     .method("GET")
                     .uri(&object_url)
-                    .body(Body::empty())
+                    .body(Body::default())
                     .expect("object get request should build")
             },
             |request| {

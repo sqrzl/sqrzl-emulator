@@ -1,7 +1,10 @@
 mod common;
 
+use bytes::Bytes;
 use common::e2e::{auth_disabled, text_body, LiveServer};
-use hyper::{Body, Request, StatusCode};
+use http_body_util::Full;
+type Body = Full<Bytes>;
+use hyper::{Request, StatusCode};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn should_round_trip_namespace_bucket_and_object_given_live_server_when_using_oci_core_flows()
@@ -11,7 +14,7 @@ async fn should_round_trip_namespace_bucket_and_object_given_live_server_when_us
     let namespace_request = Request::builder()
         .method("GET")
         .uri(format!("{}/n/tenant", server.base_url))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("namespace request should build");
     let namespace_response = server.request(namespace_request).await;
     assert_eq!(namespace_response.status(), StatusCode::OK);
@@ -46,7 +49,7 @@ async fn should_round_trip_namespace_bucket_and_object_given_live_server_when_us
             "{}/n/tenant/b/e2e-oci/o/hello.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("object get request should build");
     let get_object_response = server.request(get_object).await;
     assert_eq!(get_object_response.status(), StatusCode::OK);
@@ -140,7 +143,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
             "{}/n/tenant/b/multipart-bucket/o/multi.txt",
             server.base_url
         ))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("multipart object get request should build");
     let get_object_response = server.request(get_object).await;
     assert_eq!(get_object_response.status(), StatusCode::OK);

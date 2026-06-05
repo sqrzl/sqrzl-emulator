@@ -8,41 +8,47 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
+  backend:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - name: Install test validator
-        run: cargo install --git https://github.com/cntryl/tools --locked --force
+      - name: Update Rust toolchain
+        run: rustup update stable
 
-      - name: Validate tests
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci"
+
+      - name: Install cntryl-tools
+        run: cargo install --git https://github.com/cntryl/tools --locked
+
+      - name: Validate Test Structure
         run: cntryl-tools validate-tests
 
-      - name: Validate compatibility matrix
-        run: cargo test compatibility_matrix
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Check
+        run: cargo check --workspace --all-targets
 
       - name: Build
-        run: cargo build --all-targets
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo build --workspace --all-targets
 
       - name: Test
-        run: cargo test
+        run: cargo test --workspace --all-targets --all-features
 
-      - name: Compile benches
-        run: cargo bench --no-run
-
-  ui:
+  frontend:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -74,6 +80,3 @@ jobs:
       - name: Build
         working-directory: ui
         run: npm run build
-
-  interop:
-    uses: ./.github/workflows/interop.yml

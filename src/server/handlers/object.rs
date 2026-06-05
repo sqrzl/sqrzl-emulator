@@ -3,13 +3,14 @@ use super::auth::{check_authorization, verify_presigned_url};
 use super::cors;
 use super::ResponseBuilder;
 use crate::auth::AuthConfig;
+use crate::body::Body;
 use crate::services::{
     object as object_service, storage_error_response, xml_error_response, xml_success_response,
 };
 use crate::storage::Storage;
 use crate::utils::{headers as header_utils, validation, xml as xml_utils};
 use http::StatusCode;
-use hyper::{Body, Response};
+use hyper::Response;
 use std::sync::Arc;
 
 mod helpers;
@@ -654,11 +655,15 @@ pub async fn object_put(
 mod tests {
     use super::*;
     use crate::auth::AuthConfig;
+    use crate::body::Body;
     use crate::models::Object;
     use crate::server::RequestExt;
     use crate::storage::FilesystemStorage;
+    use bytes::Bytes;
     use chrono::{TimeZone, Utc};
-    use hyper::{Body, Request as HyperRequest, StatusCode};
+    use http_body_util::BodyExt;
+    use hyper::Request as HyperRequest;
+    use hyper::StatusCode;
     use std::fs;
     use std::sync::Arc;
     use std::time::Duration;
@@ -692,9 +697,13 @@ mod tests {
             builder = builder.header(*name, *value);
         }
 
-        RequestExt::from_hyper(builder.body(Body::empty()).expect("request should build"))
-            .await
-            .expect("request should parse")
+        RequestExt::from_hyper(
+            builder
+                .body(Body::from(Bytes::new()))
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should parse")
     }
 
     async fn parsed_request_with_method(method: &str, headers: &[(&str, &str)]) -> RequestExt {
@@ -706,9 +715,13 @@ mod tests {
             builder = builder.header(*name, *value);
         }
 
-        RequestExt::from_hyper(builder.body(Body::empty()).expect("request should build"))
-            .await
-            .expect("request should parse")
+        RequestExt::from_hyper(
+            builder
+                .body(Body::from(Bytes::new()))
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should parse")
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -801,9 +814,12 @@ mod tests {
         // Assert
         assert_eq!(resp.status(), StatusCode::RANGE_NOT_SATISFIABLE);
 
-        let body = hyper::body::to_bytes(resp.into_body())
+        let body = resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let body = String::from_utf8(body.to_vec()).expect("body should be utf8");
         assert!(body.contains("InvalidRange"));
     }
@@ -891,9 +907,12 @@ mod tests {
             resp.headers().get("etag").and_then(|v| v.to_str().ok()),
             Some(etag.as_str())
         );
-        let body = hyper::body::to_bytes(resp.into_body())
+        let body = resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert!(body.is_empty());
     }
 
@@ -931,9 +950,12 @@ mod tests {
 
         // Assert
         assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
-        let body = hyper::body::to_bytes(resp.into_body())
+        let body = resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let body = String::from_utf8(body.to_vec()).expect("body should be utf8");
         assert!(body.contains("PreconditionFailed"));
     }
@@ -974,9 +996,12 @@ mod tests {
 
         // Assert
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
-        let body = hyper::body::to_bytes(resp.into_body())
+        let body = resp
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert!(body.is_empty());
     }
 }
@@ -1384,9 +1409,11 @@ pub async fn object_post(
 mod s3_contract_tests {
     use super::*;
     use crate::auth::AuthConfig;
+    use crate::body::Body;
     use crate::services::bucket as bucket_service;
     use crate::storage::FilesystemStorage;
-    use hyper::{Body, Request as HyperRequest};
+    use http_body_util::BodyExt;
+    use hyper::Request as HyperRequest;
     use std::fs;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1933,9 +1960,12 @@ mod s3_contract_tests {
         .await
         .expect("object acl get should complete");
         let body = String::from_utf8(
-            hyper::body::to_bytes(get_response.into_body())
+            get_response
+                .into_body()
+                .collect()
                 .await
                 .expect("body should read")
+                .to_bytes()
                 .to_vec(),
         )
         .expect("body should be utf8");
@@ -2005,9 +2035,12 @@ mod s3_contract_tests {
         .await
         .expect("object acl get should complete");
         let body = String::from_utf8(
-            hyper::body::to_bytes(get_response.into_body())
+            get_response
+                .into_body()
+                .collect()
                 .await
                 .expect("body should read")
+                .to_bytes()
                 .to_vec(),
         )
         .expect("body should be utf8");
@@ -2099,9 +2132,12 @@ mod s3_contract_tests {
         .expect("upload part request should respond");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let body = String::from_utf8(body.to_vec()).expect("body should be utf8");
         assert!(body.contains("<Code>InvalidPartNumber</Code>"));
     }

@@ -9,7 +9,7 @@ services:
     environment:
       BLOBS_PATH: /app/blobs
       ACCESS_KEY_ID: admin
-      SECRET_ACCESS_KEY: peasplease
+      SECRET_ACCESS_KEY: admin
     volumes:
       - peas-blobs:/app/blobs
 

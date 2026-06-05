@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
-use hyper::body::to_bytes;
-use hyper::{Body, Request as HyperRequest, Response};
+use bytes::Bytes;
+use http_body_util::BodyExt;
+use http_body_util::Full;
+type Body = Full<Bytes>;
+use hyper::{Request as HyperRequest, Response};
 use peas_emulator::providers::AdapterRegistry;
 use peas_emulator::server::RequestExt;
 use peas_emulator::storage::{FilesystemStorage, Storage};
@@ -88,9 +91,12 @@ pub async fn call_with_registry(
 }
 
 pub async fn body_bytes(response: Response<Body>) -> Vec<u8> {
-    to_bytes(response.into_body())
+    response
+        .into_body()
+        .collect()
         .await
-        .expect("body should read")
+        .expect("response body should read")
+        .to_bytes()
         .to_vec()
 }
 

@@ -1,8 +1,10 @@
+use crate::body::Body;
 use crate::error::Error;
 use crate::server::ResponseBuilder;
 use crate::utils::{headers as header_utils, xml as xml_utils};
+use bytes::Bytes;
 use http::StatusCode;
-use hyper::{Body, Response};
+use hyper::Response;
 use serde::Serialize;
 
 pub mod bucket;
@@ -54,12 +56,12 @@ pub fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response<Bod
             .status(status)
             .header("content-type", "application/json; charset=utf-8")
             .body(Body::from(bytes))
-            .unwrap_or_else(|_| Response::new(Body::empty())),
+            .unwrap_or_else(|_| Response::new(Body::from(Bytes::new()))),
         Err(_) => Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("content-type", "application/json; charset=utf-8")
             .body(Body::from("{\"error\":\"serialization failed\"}"))
-            .unwrap_or_else(|_| Response::new(Body::empty())),
+            .unwrap_or_else(|_| Response::new(Body::from(Bytes::new()))),
     }
 }
 
@@ -80,6 +82,7 @@ pub fn json_error_response(err: &Error) -> Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt;
 
     #[tokio::test]
     async fn should_render_storage_errors_as_xml_responses() {
@@ -88,7 +91,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(response.headers().get("x-amz-request-id").unwrap(), "req-1");
 
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("<Code>NoSuchBucket</Code>"));
         assert!(body.contains("<Message>Bucket not found</Message>"));
@@ -106,7 +109,7 @@ mod tests {
         assert_eq!(response.headers().get("x-amz-request-id").unwrap(), "req-2");
         assert!(response.headers().get("x-amz-id-2").is_some());
 
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body.as_ref(), b"<ok/>");
     }
 
@@ -120,7 +123,7 @@ mod tests {
             "application/json; charset=utf-8"
         );
 
-        let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("InvalidRequest"));
     }

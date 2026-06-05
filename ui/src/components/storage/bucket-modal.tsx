@@ -12,10 +12,8 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogOverlay,
   DialogPortal,
-  DialogTitle,
   Input,
   Label,
 } from '@askrjs/ui';
@@ -72,10 +70,8 @@ export default function BucketModal() {
           <DialogContent>
             <Stack gap="4">
               <Stack gap="1">
-                <DialogTitle>Add bucket</DialogTitle>
-                <DialogDescription>
-                  Create a bucket in the emulator.
-                </DialogDescription>
+                <h2>Add bucket</h2>
+                <p>Create a bucket in the emulator.</p>
               </Stack>
               <form onSubmit={(event: Event) => void submit(event)}>
                 <Stack gap="4">

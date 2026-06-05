@@ -1,12 +1,13 @@
 use crate::models::policy::{Grant, Grantee, Permission};
 use crate::models::{Acl, CannedAcl};
+use quick_xml::escape::unescape;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
 
 pub fn parse_versioning_xml(body: &str) -> Result<bool, String> {
     let mut reader = Reader::from_str(body);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut in_status = false;
     let mut enabled = false;
@@ -20,7 +21,10 @@ pub fn parse_versioning_xml(body: &str) -> Result<bool, String> {
                 in_status = false;
             }
             Ok(Event::Text(e)) if in_status => {
-                let text = e.unescape().map_err(|err| err.to_string())?.to_string();
+                let decoded = e.decode().map_err(|err| err.to_string())?;
+                let text = unescape(&decoded)
+                    .map_err(|err| err.to_string())?
+                    .to_string();
                 enabled = text == "Enabled";
             }
             Ok(Event::Eof) => break,
@@ -35,7 +39,7 @@ pub fn parse_versioning_xml(body: &str) -> Result<bool, String> {
 
 pub fn parse_tagging_xml(body: &str) -> Result<HashMap<String, String>, String> {
     let mut reader = Reader::from_str(body);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut in_key = false;
     let mut in_value = false;
@@ -55,7 +59,10 @@ pub fn parse_tagging_xml(body: &str) -> Result<HashMap<String, String>, String> 
                 _ => {}
             },
             Ok(Event::Text(e)) => {
-                let text = e.unescape().map_err(|err| err.to_string())?.to_string();
+                let decoded = e.decode().map_err(|err| err.to_string())?;
+                let text = unescape(&decoded)
+                    .map_err(|err| err.to_string())?
+                    .to_string();
                 if in_key {
                     current_key = Some(text);
                 } else if in_value {
@@ -94,7 +101,7 @@ pub fn parse_tagging_xml(body: &str) -> Result<HashMap<String, String>, String> 
 
 pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
     let mut reader = Reader::from_str(body);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
     let mut grants = Vec::new();
     let mut in_grant = false;
@@ -146,7 +153,10 @@ pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
                     continue;
                 }
 
-                let text = e.unescape().map_err(|err| err.to_string())?.to_string();
+                let decoded = e.decode().map_err(|err| err.to_string())?;
+                let text = unescape(&decoded)
+                    .map_err(|err| err.to_string())?
+                    .to_string();
                 match current_tag.as_deref() {
                     Some(b"ID") => current_id = Some(text),
                     Some(b"DisplayName") => current_display_name = Some(text),
@@ -183,7 +193,7 @@ pub fn parse_lifecycle_xml(
     use crate::models::lifecycle::*;
 
     let mut reader = Reader::from_str(body);
-    reader.trim_text(true);
+    reader.config_mut().trim_text(true);
 
     let mut rules = Vec::new();
     let mut current_rule: Option<Rule> = None;
@@ -245,7 +255,8 @@ pub fn parse_lifecycle_xml(
                 text_buffer.clear();
             }
             Ok(Event::Text(e)) => {
-                text_buffer = e.unescape().unwrap_or_default().to_string();
+                let decoded = e.decode().unwrap_or_default();
+                text_buffer = unescape(&decoded).unwrap_or_default().to_string();
             }
             Ok(Event::End(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();

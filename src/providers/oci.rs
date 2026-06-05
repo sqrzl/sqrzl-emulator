@@ -1,12 +1,13 @@
 use super::ProviderAdapter;
 use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::{BlobBackend, BlobRange, CreateUploadSessionRequest, PutBlobRequest};
+use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
 use crate::storage::Storage;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use http::{Method, StatusCode};
-use hyper::{Body, Response};
+use hyper::Response;
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::future::Future;
@@ -607,6 +608,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::storage::FilesystemStorage;
+    use http_body_util::BodyExt;
     use hyper::Request as HyperRequest;
     use std::fs;
 
@@ -722,9 +724,12 @@ mod tests {
             )
             .await
             .expect("object list should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert!(String::from_utf8(body.to_vec())
             .expect("json")
             .contains("report.txt"));
@@ -743,9 +748,12 @@ mod tests {
             )
             .await
             .expect("object get should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"oci data");
     }
 
@@ -825,9 +833,12 @@ mod tests {
             )
             .await
             .expect("list should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let json = String::from_utf8(body.to_vec()).expect("json");
         assert!(json.contains("folder/report.txt"));
         assert!(json.contains("timeCreated"));
@@ -919,9 +930,12 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("bytes 0-2/9")
         );
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"oci");
     }
 
@@ -938,9 +952,12 @@ mod tests {
             )
             .await
             .expect("namespace lookup should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(String::from_utf8(body.to_vec()).expect("text"), "tenant");
 
         let response = adapter
@@ -967,9 +984,12 @@ mod tests {
             )
             .await
             .expect("bucket get should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert!(String::from_utf8(body.to_vec())
             .expect("json")
             .contains("\"sdk-bucket\""));
@@ -1009,9 +1029,12 @@ mod tests {
             )
             .await
             .expect("multipart create should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
         let upload_id = json
             .get("uploadId")

@@ -15,21 +15,16 @@ export default function AppLayout({ children }: { children?: unknown }) {
   return (
     <>
       <Header>
-        <Container size="lg">
+        <Container>
           <Navbar breakpoint="md" aria-label="Application navigation">
             <NavBrand>
-              <Link href={adminBucketsPath()}>Peas Admin</Link>
+              <Link href={adminBucketsPath()}>Peas</Link>
             </NavBrand>
-            <NavGroup>
-              <NavLink href={adminBucketsPath()} match="prefix">
-                Buckets
-              </NavLink>
-            </NavGroup>
             <NavGroup align="end">
               <ThemeToggle
                 aria-label="Toggle theme"
-                darkIcon={<MoonIcon />}
-                lightIcon={<SunIcon />}
+                darkIcon={<MoonIcon aria-hidden="true" />}
+                lightIcon={<SunIcon aria-hidden="true" />}
               />
 
               <NavLink href={logoutPath()} match="exact">
@@ -40,7 +35,7 @@ export default function AppLayout({ children }: { children?: unknown }) {
         </Container>
       </Header>
       <Section size="4">
-        <Container size="lg">
+        <Container>
           <Stack gap="4">{children}</Stack>
         </Container>
       </Section>

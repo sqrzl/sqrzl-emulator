@@ -1,20 +1,22 @@
+use crate::body::Body;
 use crate::error::{Error, Result};
 use crate::services::{bucket as bucket_service, json_response, object as object_service};
 use crate::storage::Storage;
 use crate::utils::validation;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use hyper::body::to_bytes;
-use hyper::{Body, Method, Request, Response, StatusCode};
+use http_body_util::BodyExt;
+use hyper::{Method, Request, Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use urlencoding::decode;
 
-pub async fn handle_request(
-    storage: Arc<dyn Storage>,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+pub async fn handle_request<B>(storage: Arc<dyn Storage>, req: Request<B>) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
@@ -124,18 +126,25 @@ fn decode_component(input: &str) -> String {
         .unwrap_or_else(|_| input.to_string())
 }
 
-async fn read_json<T: DeserializeOwned>(req: Request<Body>) -> Result<T> {
-    let bytes = to_bytes(req.into_body())
+async fn read_json<T: DeserializeOwned, B>(req: Request<B>) -> Result<T>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
+    let bytes = req
+        .into_body()
+        .collect()
         .await
-        .map_err(|e| Error::InvalidRequest(e.to_string()))?;
+        .map_err(|e| Error::InvalidRequest(e.to_string()))?
+        .to_bytes();
     serde_json::from_slice(&bytes).map_err(|e| Error::InvalidRequest(e.to_string()))
 }
 
 fn empty_response(status: StatusCode) -> Response<Body> {
     Response::builder()
         .status(status)
-        .body(Body::empty())
-        .unwrap_or_else(|_| Response::new(Body::empty()))
+        .body(Body::default())
+        .unwrap_or_else(|_| Response::new(Body::default()))
 }
 
 fn object_to_metadata(obj: crate::models::Object) -> crate::api::models::ObjectMetadata {
@@ -320,7 +329,11 @@ fn list_buckets(storage: Arc<dyn Storage>, query: &str) -> Result<Response<Body>
     ))
 }
 
-async fn create_bucket(storage: Arc<dyn Storage>, req: Request<Body>) -> Result<Response<Body>> {
+async fn create_bucket<B>(storage: Arc<dyn Storage>, req: Request<B>) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     #[derive(Deserialize)]
     struct CreateReq {
         name: String,
@@ -363,11 +376,15 @@ fn get_bucket_versioning(storage: Arc<dyn Storage>, bucket: &str) -> Result<Resp
     ))
 }
 
-async fn set_bucket_versioning(
+async fn set_bucket_versioning<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     #[derive(Deserialize)]
     struct VersioningReq {
         enabled: bool,
@@ -392,11 +409,15 @@ fn get_bucket_acl(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Bo
     Ok(json_response(StatusCode::OK, &acl))
 }
 
-async fn set_bucket_acl(
+async fn set_bucket_acl<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let acl: crate::models::policy::Acl = read_json(req).await?;
     tokio::task::block_in_place(|| {
         bucket_service::put_bucket_acl(storage.as_ref(), bucket, acl.clone())
@@ -411,11 +432,15 @@ fn get_bucket_policy(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response
     Ok(json_response(StatusCode::OK, &policy))
 }
 
-async fn set_bucket_policy(
+async fn set_bucket_policy<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let policy: crate::models::policy::BucketPolicyDocument = read_json(req).await?;
     tokio::task::block_in_place(|| {
         bucket_service::put_bucket_policy(storage.as_ref(), bucket, policy.clone())
@@ -435,11 +460,15 @@ fn get_bucket_lifecycle(storage: Arc<dyn Storage>, bucket: &str) -> Result<Respo
     Ok(json_response(StatusCode::OK, &lifecycle))
 }
 
-async fn set_bucket_lifecycle(
+async fn set_bucket_lifecycle<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let lifecycle: crate::models::lifecycle::LifecycleConfiguration = read_json(req).await?;
     tokio::task::block_in_place(|| {
         bucket_service::put_bucket_lifecycle(storage.as_ref(), bucket, lifecycle.clone())
@@ -505,12 +534,16 @@ fn list_multipart_uploads(
     ))
 }
 
-async fn handle_multipart_upload_request(
+async fn handle_multipart_upload_request<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
     remainder: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let upload_id = remainder
@@ -550,13 +583,17 @@ fn abort_multipart_upload(
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 
-async fn handle_object_request(
+async fn handle_object_request<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
     object_rest: &str,
     query: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let method = req.method().clone();
     let path = req.uri().path().to_string();
 
@@ -645,15 +682,19 @@ fn download_object_content(
         .header("content-type", obj.content_type);
     Ok(builder
         .body(Body::from(obj.data))
-        .unwrap_or_else(|_| Response::new(Body::empty())))
+        .unwrap_or_else(|_| Response::new(Body::default())))
 }
 
-async fn put_object_content(
+async fn put_object_content<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
     key: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     if let Err(message) = validation::validate_blob_key(key) {
         return Err(Error::InvalidRequest(message));
     }
@@ -661,9 +702,12 @@ async fn put_object_content(
         object_service::object_exists(storage.as_ref(), bucket, key)
     })?;
     let headers = req.headers().clone();
-    let bytes = to_bytes(req.into_body())
+    let bytes = req
+        .into_body()
+        .collect()
         .await
-        .map_err(|e| Error::InvalidRequest(e.to_string()))?;
+        .map_err(|e| Error::InvalidRequest(e.to_string()))?
+        .to_bytes();
     let content_type = headers
         .get("content-type")
         .and_then(|value| value.to_str().ok())
@@ -763,12 +807,16 @@ fn get_object_acl(storage: Arc<dyn Storage>, bucket: &str, key: &str) -> Result<
     Ok(json_response(StatusCode::OK, &acl))
 }
 
-async fn set_object_acl(
+async fn set_object_acl<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
     key: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     if let Err(message) = validation::validate_blob_key(key) {
         return Err(Error::InvalidRequest(message));
     }
@@ -791,12 +839,16 @@ fn delete_object_version(
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 
-async fn put_object_tags(
+async fn put_object_tags<B>(
     storage: Arc<dyn Storage>,
     bucket: &str,
     key: &str,
-    req: Request<Body>,
-) -> Result<Response<Body>> {
+    req: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     #[derive(Deserialize)]
     struct TagsReq {
         tags: HashMap<String, String>,
@@ -823,7 +875,7 @@ mod tests {
         ListObjectsResponse, ListVersionsResponse, ObjectMetadata, TagsResponse, VersioningStatus,
     };
     use crate::storage::FilesystemStorage;
-    use hyper::body::to_bytes;
+    use http_body_util::BodyExt;
     use hyper::Request;
     use serde::de::DeserializeOwned;
     use serde_json::Value;
@@ -835,7 +887,11 @@ mod tests {
         Arc::new(FilesystemStorage::new(dir))
     }
 
-    async fn call(api_req: Request<Body>, storage: Arc<dyn Storage>) -> Response<Body> {
+    async fn call<B>(api_req: Request<B>, storage: Arc<dyn Storage>) -> Response<Body>
+    where
+        B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+        B::Error: std::fmt::Display,
+    {
         match handle_request(storage, api_req).await {
             Ok(resp) => resp,
             Err(err) => error_response(&err),
@@ -843,9 +899,12 @@ mod tests {
     }
 
     async fn json_body<T: DeserializeOwned>(resp: Response<Body>) -> T {
-        let bytes = to_bytes(resp.into_body())
+        let bytes = resp
+            .into_body()
+            .collect()
             .await
-            .expect("response body should read");
+            .expect("response body should read")
+            .to_bytes();
         serde_json::from_slice(&bytes).expect("response body should deserialize")
     }
 
@@ -883,7 +942,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -921,7 +980,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::DELETE)
             .uri("/admin/v1/buckets/demo")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -960,7 +1019,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/objects/hello.txt")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -988,30 +1047,30 @@ mod tests {
         let tags: TagsResponse = json_body(resp).await;
         assert_eq!(tags.tags.get("env"), Some(&"dev".to_string()));
 
-            let req = Request::builder()
-                .method(Method::PUT)
-                .uri("/admin/v1/buckets/demo/objects/dir1/dir2/blobkey.png/content")
-                .header("content-type", "text/plain")
-                .body(Body::from("nested"))
-                .unwrap();
-            let resp = call(req, storage.clone()).await;
+        let req = Request::builder()
+            .method(Method::PUT)
+            .uri("/admin/v1/buckets/demo/objects/dir1/dir2/blobkey.png/content")
+            .header("content-type", "text/plain")
+            .body(Body::from("nested"))
+            .unwrap();
+        let resp = call(req, storage.clone()).await;
 
-            assert_eq!(resp.status(), StatusCode::CREATED);
-            assert_json_content_type(&resp);
-            let nested: ObjectMetadata = json_body(resp).await;
-            assert_eq!(nested.key, "dir1/dir2/blobkey.png");
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_json_content_type(&resp);
+        let nested: ObjectMetadata = json_body(resp).await;
+        assert_eq!(nested.key, "dir1/dir2/blobkey.png");
 
-            let req = Request::builder()
-                .method(Method::GET)
-                .uri("/admin/v1/buckets/demo/objects/dir1/dir2/blobkey.png")
-                .body(Body::empty())
-                .unwrap();
-            let resp = call(req, storage.clone()).await;
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/admin/v1/buckets/demo/objects/dir1/dir2/blobkey.png")
+            .body(Body::default())
+            .unwrap();
+        let resp = call(req, storage.clone()).await;
 
-            assert_eq!(resp.status(), StatusCode::OK);
-            assert_json_content_type(&resp);
-            let nested_metadata: ObjectMetadata = json_body(resp).await;
-            assert_eq!(nested_metadata.key, "dir1/dir2/blobkey.png");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_json_content_type(&resp);
+        let nested_metadata: ObjectMetadata = json_body(resp).await;
+        assert_eq!(nested_metadata.key, "dir1/dir2/blobkey.png");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1042,7 +1101,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/acl")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1067,7 +1126,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/policy")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1077,7 +1136,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::DELETE)
             .uri("/admin/v1/buckets/demo/policy")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -1098,7 +1157,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/lifecycle")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1108,7 +1167,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::DELETE)
             .uri("/admin/v1/buckets/demo/lifecycle")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -1125,7 +1184,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/multipart-uploads?limit=10")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1140,7 +1199,7 @@ mod tests {
                 "/admin/v1/buckets/demo/multipart-uploads/{}",
                 upload.upload_id
             ))
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1154,7 +1213,7 @@ mod tests {
                 "/admin/v1/buckets/demo/multipart-uploads/{}",
                 upload.upload_id
             ))
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -1210,7 +1269,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/objects/versioned.txt/acl")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1220,7 +1279,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/objects/versioned.txt/versions?limit=10")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1241,7 +1300,7 @@ mod tests {
                 "/admin/v1/buckets/demo/objects/versioned.txt/versions/{}",
                 stale_version
             ))
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -1249,7 +1308,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/objects/versioned.txt/versions?limit=10")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1275,7 +1334,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets?limit=1&search=a")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -1334,7 +1393,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/objects?limit=1&search=.txt")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -1350,7 +1409,7 @@ mod tests {
                 "/admin/v1/buckets/demo/objects?limit=1&search=.txt&next={}",
                 next
             ))
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -1361,7 +1420,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/buckets/demo/objects/versioned.txt/versions?limit=10&search=versioned")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -1379,7 +1438,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::POST)
             .uri("/admin/v1/buckets/demo")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 
@@ -1392,7 +1451,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri("/admin/v1/does-not-exist")
-            .body(Body::empty())
+            .body(Body::default())
             .unwrap();
         let resp = call(req, storage.clone()).await;
 

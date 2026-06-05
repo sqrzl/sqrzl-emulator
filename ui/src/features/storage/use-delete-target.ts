@@ -29,13 +29,13 @@ export function useDeleteTarget<Id extends Record<string, unknown>>(config: {
   const [target, setTarget] = state<DeleteTarget<Id> | null>(null);
 
   function open(id: Id) {
-    setTarget({
+    setTarget(() => ({
       ...id,
       deleting: false,
       error: '',
       pendingCount: Boolean(config.precount),
       count: null,
-    });
+    }));
 
     if (!config.precount) {
       return;
@@ -73,12 +73,12 @@ export function useDeleteTarget<Id extends Record<string, unknown>>(config: {
       return;
     }
 
-    setTarget({ ...current, deleting: true, error: '' });
+    setTarget(() => ({ ...current, deleting: true, error: '' }));
 
     void (async () => {
       try {
         await config.remove(current);
-        setTarget(null);
+        setTarget(() => null);
         await config.onDeleted?.();
       } catch (caughtError) {
         setTarget((value) =>
@@ -98,7 +98,7 @@ export function useDeleteTarget<Id extends Record<string, unknown>>(config: {
   }
 
   function cancel() {
-    setTarget(null);
+    setTarget(() => null);
   }
 
   return { target, open, confirm, cancel };

@@ -514,37 +514,23 @@ impl Storage for FilesystemStorage {
             return Err(Error::BucketNotFound);
         }
 
-        let keys = self.index.list(bucket, prefix);
-        let mut all_objects = Vec::with_capacity(keys.len());
+        let max_keys = max_keys.unwrap_or(1000);
+        let keys = self
+            .index
+            .list_prefix_marker(bucket, prefix, marker, Some(max_keys + 1));
 
-        // Load objects for each key
-        for obj_key in keys {
-            let object_id = Self::compute_object_id(bucket, &obj_key);
+        let mut objects = Vec::with_capacity(keys.len().min(max_keys));
+        for obj_key in keys.iter().take(max_keys) {
+            let object_id = Self::compute_object_id(bucket, obj_key);
             let metadata_path = self.object_metadata_path(bucket, &object_id);
             if let Ok(obj) = self.read_object_metadata(&metadata_path) {
-                all_objects.push(obj);
+                objects.push(obj);
             }
         }
 
-        // Apply marker filter - skip objects until we find the marker
-        if let Some(m) = marker {
-            all_objects.retain(|obj| obj.key.as_str() > m);
-        }
-
-        // Apply pagination
-        let max_keys = max_keys.unwrap_or(1000); // S3 default is 1000
-        let is_truncated = all_objects.len() > max_keys;
-
-        let mut objects = all_objects;
+        let is_truncated = keys.len() > max_keys;
         let next_marker = if is_truncated {
-            // Take max_keys + 1 to get the next marker
-            if objects.len() > max_keys {
-                let next_key = objects[max_keys].key.clone();
-                objects.truncate(max_keys);
-                Some(next_key)
-            } else {
-                None
-            }
+            keys.get(max_keys).cloned()
         } else {
             None
         };
@@ -738,7 +724,7 @@ impl Storage for FilesystemStorage {
         for part in &parts {
             etag_hash.consume(part.etag.as_bytes());
         }
-        let final_etag = format!("{:x}-{}", etag_hash.compute(), parts.len());
+        let final_etag = format!("{:x}-{}", etag_hash.finalize(), parts.len());
 
         // Save completed object
         let mut obj = Object::new_with_metadata_and_etag(

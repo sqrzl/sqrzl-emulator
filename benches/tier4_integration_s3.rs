@@ -1,9 +1,12 @@
 use bytes::Bytes;
 use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode,
-    Throughput,
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
-use hyper::{Body, Request, StatusCode};
+use http_body_util::Full;
+use std::hint::black_box;
+type Body = Full<Bytes>;
+
+use hyper::{Request, StatusCode};
 use tokio::runtime::{Builder, Runtime};
 
 #[path = "support/criterion_config.rs"]
@@ -30,7 +33,7 @@ async fn create_bucket(server: &LiveServer, bucket: &str) {
     let request = Request::builder()
         .method("PUT")
         .uri(format!("{}/{}", server.base_url, bucket))
-        .body(Body::empty())
+        .body(Body::default())
         .expect("bucket create request should build");
     let response = server.request(request).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -102,7 +105,7 @@ fn bench_get_object(c: &mut Criterion) {
                 Request::builder()
                     .method("GET")
                     .uri(&object_url)
-                    .body(Body::empty())
+                    .body(Body::default())
                     .expect("object get request should build")
             },
             |request| {
@@ -148,7 +151,7 @@ fn bench_list_objects(c: &mut Criterion) {
             let request = Request::builder()
                 .method("GET")
                 .uri(&list_url)
-                .body(Body::empty())
+                .body(Body::default())
                 .expect("object list request should build");
             let listing = runtime.block_on(server.response_text(request));
             assert!(listing.contains("item-000.txt"));
@@ -192,7 +195,7 @@ fn bench_list_versions(c: &mut Criterion) {
                 Request::builder()
                     .method("GET")
                     .uri(&versions_url)
-                    .body(Body::empty())
+                    .body(Body::default())
                     .expect("versions list request should build")
             },
             |request| {

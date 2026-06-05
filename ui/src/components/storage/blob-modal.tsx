@@ -12,10 +12,8 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogOverlay,
   DialogPortal,
-  DialogTitle,
   Input,
   Label,
 } from '@askrjs/ui';
@@ -87,10 +85,8 @@ export default function BlobModal({ bucketName }: { bucketName: string }) {
           <DialogContent>
             <Stack gap="4">
               <Stack gap="1">
-                <DialogTitle>Add blob</DialogTitle>
-                <DialogDescription>
-                  Upload a file into {bucketName}.
-                </DialogDescription>
+                <h2>Add blob</h2>
+                <p>Upload a file into {bucketName}.</p>
               </Stack>
               <form onSubmit={(event: Event) => void submit(event)}>
                 <Stack gap="4">

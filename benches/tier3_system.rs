@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use http::header::CONTENT_TYPE;
 use http::{HeaderMap, HeaderValue, Method, Uri};
@@ -9,6 +9,7 @@ use peas_emulator::providers::AdapterRegistry;
 use peas_emulator::server::RequestExt;
 use peas_emulator::storage::{FilesystemStorage, Storage};
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Builder;

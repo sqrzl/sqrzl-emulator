@@ -1,7 +1,9 @@
 use crate::auth::HttpRequestLike;
+use crate::body::Body;
 use bytes::Bytes;
 use http::{Method, Response as HttpResponse, StatusCode, Uri};
-use hyper::{Body, Request as HyperRequest};
+use http_body_util::BodyExt;
+use hyper::Request as HyperRequest;
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -50,11 +52,13 @@ impl HttpRequestLike for Request {
 }
 
 impl Request {
-    pub async fn from_hyper(req: HyperRequest<Body>) -> Result<Self, String> {
+    pub async fn from_hyper<B>(req: HyperRequest<B>) -> Result<Self, String>
+    where
+        B: hyper::body::Body<Data = Bytes> + Send + 'static,
+        B::Error: std::fmt::Display,
+    {
         let (parts, body) = req.into_parts();
-        let body_bytes = hyper::body::to_bytes(body)
-            .await
-            .map_err(|e| e.to_string())?;
+        let body_bytes = body.collect().await.map_err(|e| e.to_string())?.to_bytes();
 
         let mut query_params = HashMap::new();
         if let Some(query) = parts.uri.query() {
@@ -173,9 +177,9 @@ impl ResponseBuilder {
             response = response.header(name.clone(), value.clone());
         }
 
-        response.body(Body::empty()).unwrap_or_else(|_| {
+        response.body(Body::default()).unwrap_or_else(|_| {
             // Last resort fallback - should never fail
-            HttpResponse::new(Body::empty())
+            HttpResponse::new(Body::default())
         })
     }
 }
@@ -183,7 +187,10 @@ impl ResponseBuilder {
 #[cfg(test)]
 mod tests {
     use super::{Request, RouteMatch, Router};
-    use hyper::{Body, Request as HyperRequest};
+    use bytes::Bytes;
+    use http_body_util::Full;
+    type Body = Full<Bytes>;
+    use hyper::Request as HyperRequest;
 
     #[tokio::test]
     async fn should_preserve_bare_query_flags_when_parsing_requests() {
@@ -191,7 +198,7 @@ mod tests {
         let request = HyperRequest::builder()
             .method("GET")
             .uri("http://localhost/bucket?versions&prefix=logs%2F")
-            .body(Body::empty())
+            .body(Body::default())
             .expect("request should build");
 
         // Act
@@ -211,7 +218,7 @@ mod tests {
             .method("GET")
             .uri("http://localhost/photos/kitten.jpg")
             .header("host", "media.localhost")
-            .body(Body::empty())
+            .body(Body::default())
             .expect("request should build");
 
         let parsed = Request::from_hyper(request)
@@ -232,7 +239,7 @@ mod tests {
         let bucket_request = HyperRequest::builder()
             .method("OPTIONS")
             .uri("http://localhost/media")
-            .body(Body::empty())
+            .body(Body::default())
             .expect("request should build");
         let bucket_parsed = Request::from_hyper(bucket_request)
             .await
@@ -246,7 +253,7 @@ mod tests {
         let object_request = HyperRequest::builder()
             .method("OPTIONS")
             .uri("http://localhost/media/kitten.jpg")
-            .body(Body::empty())
+            .body(Body::default())
             .expect("request should build");
         let object_parsed = Request::from_hyper(object_request)
             .await

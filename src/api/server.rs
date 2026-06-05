@@ -1,10 +1,12 @@
 use crate::auth::{AdminLoginRequest, AdminSessionManager};
+use crate::body::{Body, RequestBody};
 use crate::error::{Error, Result};
+use crate::server::{serve_h1_connection, ResponseBuilder};
 use crate::services::{json_error_response, json_response};
 use crate::storage::Storage;
-use hyper::body::to_bytes;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server as HyperServer, StatusCode};
+use http_body_util::BodyExt;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
 use mime_guess::from_path;
 use serde::de::DeserializeOwned;
 use std::convert::Infallible;
@@ -18,37 +20,43 @@ pub async fn start_ui_server(
     config: Arc<crate::Config>,
 ) -> crate::error::Result<()> {
     let ui_port = config.ui_port;
-    let addr = ([0, 0, 0, 0], ui_port).into();
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], ui_port));
     let admin_session = Arc::new(AdminSessionManager::new()?);
 
-    let make_svc = make_service_fn(move |_conn| {
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
+    tracing::info!("UI server listening on http://0.0.0.0:{}", ui_port);
+
+    loop {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
         let storage = storage.clone();
         let config = config.clone();
         let admin_session = admin_session.clone();
 
-        async move {
-            Ok::<_, Infallible>(service_fn(move |req| {
+        tokio::spawn(async move {
+            let service = service_fn(move |req| {
                 let storage = storage.clone();
                 let config = config.clone();
                 let admin_session = admin_session.clone();
                 handle_ui_request(storage, config, admin_session, req)
-            }))
-        }
-    });
+            });
 
-    let server = HyperServer::bind(&addr).serve(make_svc);
-    tracing::info!("UI server listening on http://0.0.0.0:{}", ui_port);
-
-    server
-        .await
-        .map_err(|e| crate::error::Error::InternalError(e.to_string()))
+            if let Err(e) = serve_h1_connection(stream, service).await {
+                tracing::error!("UI connection error: {}", e);
+            }
+        });
+    }
 }
 
 async fn handle_ui_request(
     storage: Arc<dyn Storage>,
     config: Arc<crate::Config>,
     admin_session: Arc<AdminSessionManager>,
-    req: Request<Body>,
+    req: Request<RequestBody>,
 ) -> std::result::Result<Response<Body>, Infallible> {
     let path = req.uri().path().to_string();
 
@@ -96,11 +104,10 @@ async fn handle_ui_request(
     } else {
         let default_content =
             "<html><body><h1>Peas Emulator</h1><p>Running in headless mode</p></body></html>";
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("content-type", "text/html; charset=utf-8")
-            .body(Body::from(default_content))
-            .unwrap_or_else(|_| Response::new(Body::from(default_content))))
+        Ok(ResponseBuilder::new(StatusCode::OK)
+            .content_type("text/html; charset=utf-8")
+            .body_str(default_content)
+            .build())
     }
 }
 
@@ -138,25 +145,23 @@ async fn serve_static_content(static_dir: &Path, request_path: &str) -> Response
                     .to_string()
             };
 
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header("content-type", content_type)
-                .body(Body::from(content))
-                .unwrap_or_else(|_| Response::new(Body::empty()));
+            return ResponseBuilder::new(StatusCode::OK)
+                .content_type(&content_type)
+                .body(content)
+                .build();
         }
     }
 
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .header("content-type", "text/plain; charset=utf-8")
-        .body(Body::from("Static content not found"))
-        .unwrap_or_else(|_| Response::new(Body::from("Static content not found")))
+    ResponseBuilder::new(StatusCode::NOT_FOUND)
+        .content_type("text/plain; charset=utf-8")
+        .body_str("Static content not found")
+        .build()
 }
 
 async fn handle_admin_login(
     config: Arc<crate::Config>,
     admin_session: Arc<AdminSessionManager>,
-    req: Request<Body>,
+    req: Request<RequestBody>,
 ) -> Response<Body> {
     if req.method() != Method::POST {
         return json_error_response(&Error::MethodNotAllowed(format!(
@@ -200,7 +205,7 @@ async fn handle_admin_login(
     }
 }
 
-fn handle_admin_logout(req: Request<Body>) -> Response<Body> {
+fn handle_admin_logout(req: Request<RequestBody>) -> Response<Body> {
     if req.method() != Method::POST {
         return json_error_response(&Error::MethodNotAllowed(format!(
             "{} {}",
@@ -229,7 +234,7 @@ fn handle_admin_logout(req: Request<Body>) -> Response<Body> {
 fn handle_admin_session(
     config: Arc<crate::Config>,
     admin_session: Arc<AdminSessionManager>,
-    req: Request<Body>,
+    req: Request<RequestBody>,
 ) -> Response<Body> {
     if req.method() != Method::GET {
         return json_error_response(&Error::MethodNotAllowed(format!(
@@ -257,7 +262,7 @@ fn handle_admin_session(
 }
 
 fn admin_request_is_authorized(
-    req: &Request<Body>,
+    req: &Request<RequestBody>,
     config: &crate::Config,
     admin_session: &AdminSessionManager,
 ) -> bool {
@@ -287,17 +292,20 @@ fn admin_login_unauthorized_response() -> Response<Body> {
     json_response(StatusCode::UNAUTHORIZED, &body)
 }
 
-async fn read_json<T: DeserializeOwned>(req: Request<Body>) -> Result<T> {
-    let bytes = to_bytes(req.into_body())
+async fn read_json<T: DeserializeOwned>(req: Request<RequestBody>) -> Result<T> {
+    let bytes = req
+        .into_body()
+        .collect()
         .await
-        .map_err(|e| Error::InvalidRequest(e.to_string()))?;
+        .map_err(|e| Error::InvalidRequest(e.to_string()))?
+        .to_bytes();
     serde_json::from_slice(&bytes).map_err(|e| Error::InvalidRequest(e.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::serve_static_content;
-    use hyper::body::to_bytes;
+    use http_body_util::BodyExt;
     use hyper::StatusCode;
     use std::fs;
 
@@ -331,9 +339,12 @@ mod tests {
             "content-type = {content_type}"
         );
 
-        let body = to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"export const app = 'peas';");
     }
 
@@ -359,9 +370,12 @@ mod tests {
             "text/html; charset=utf-8"
         );
 
-        let body = to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert!(String::from_utf8(body.to_vec())
             .expect("body should be utf-8")
             .contains("id=\"app\""));
@@ -379,9 +393,12 @@ mod tests {
         let response = serve_static_content(&static_dir, "/assets/missing.js").await;
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body = to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"Static content not found");
     }
 

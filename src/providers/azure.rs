@@ -1,6 +1,7 @@
 use super::ProviderAdapter;
 use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::{BlobBackend, BlobRange, CreateUploadSessionRequest, UpdateBlobMetadataRequest};
+use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
 use crate::storage::Storage;
 use crate::utils::request_origin;
@@ -10,9 +11,10 @@ use base64::{
     Engine as _,
 };
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use http::{Method, StatusCode};
-use hyper::{Body, Response};
+use hyper::Response;
+use quick_xml::escape::unescape;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use sha2::Sha256;
@@ -684,7 +686,7 @@ impl AzureBlobAdapter {
 
     fn parse_block_list(xml: &str) -> Result<Vec<String>, String> {
         let mut reader = Reader::from_str(xml);
-        reader.trim_text(true);
+        reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
         let mut in_name = false;
         let mut block_ids = Vec::new();
@@ -708,7 +710,11 @@ impl AzureBlobAdapter {
                     }
                 }
                 Ok(Event::Text(text)) if in_name => {
-                    block_ids.push(text.unescape().map_err(|err| err.to_string())?.to_string());
+                    let decoded = text.decode().map_err(|err| err.to_string())?;
+                    let value = unescape(&decoded)
+                        .map_err(|err| err.to_string())?
+                        .to_string();
+                    block_ids.push(value);
                 }
                 Ok(Event::Eof) => break,
                 Err(err) => return Err(err.to_string()),
@@ -1430,6 +1436,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::storage::FilesystemStorage;
+    use http_body_util::BodyExt;
     use hyper::Request as HyperRequest;
     use std::fs;
 
@@ -1568,9 +1575,12 @@ mod tests {
             )
             .await
             .expect("list blobs should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert!(String::from_utf8(body.to_vec())
             .expect("xml")
             .contains("kitten.txt"));
@@ -1589,9 +1599,12 @@ mod tests {
             )
             .await
             .expect("get blob should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"hello azure");
     }
 
@@ -1677,9 +1690,12 @@ mod tests {
             )
             .await
             .expect("get blob should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"abcdef");
     }
 
@@ -1827,9 +1843,12 @@ mod tests {
             )
             .await
             .expect("block list fetch should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         let xml = String::from_utf8(body.to_vec()).expect("xml");
         assert!(xml.contains(&block_one));
         assert!(xml.contains(&block_two));
@@ -1904,9 +1923,12 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("bob")
         );
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"azure");
     }
 
@@ -1985,9 +2007,12 @@ mod tests {
             )
             .await
             .expect("append blob get should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"hello world");
 
         let response = adapter
@@ -2049,9 +2074,12 @@ mod tests {
             )
             .await
             .expect("page blob range get should succeed");
-        let body = hyper::body::to_bytes(response.into_body())
+        let body = response
+            .into_body()
+            .collect()
             .await
-            .expect("body should read");
+            .expect("body should read")
+            .to_bytes();
         assert_eq!(body.as_ref(), b"aaaaaaaa");
     }
 
@@ -2206,9 +2234,12 @@ mod tests {
             )
             .await
             .expect("snapshot get should succeed");
-        let snapshot_body = hyper::body::to_bytes(snapshot_get.into_body())
+        let snapshot_body = snapshot_get
+            .into_body()
+            .collect()
             .await
-            .expect("snapshot body should read");
+            .expect("snapshot body should read")
+            .to_bytes();
         assert_eq!(snapshot_body.as_ref(), b"initial");
 
         let retention_response = adapter

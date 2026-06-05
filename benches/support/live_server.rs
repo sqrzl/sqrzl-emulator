@@ -1,8 +1,13 @@
 #![allow(dead_code)]
 
-use hyper::body::to_bytes;
-use hyper::client::HttpConnector;
-use hyper::{Body, Client, Request, Response};
+use bytes::Bytes;
+use http_body_util::BodyExt;
+use http_body_util::Full;
+use hyper_util::client::legacy::connect::HttpConnector;
+type Body = Full<Bytes>;
+use hyper::{body::Incoming, Request, Response};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use peas_emulator::server::Server;
 use peas_emulator::storage::{FilesystemStorage, Storage};
 use peas_emulator::Config;
@@ -65,7 +70,7 @@ impl LiveServer {
         let task = tokio::spawn(Server::new(storage, config, api_port).start());
         let server = Self {
             base_url: format!("http://127.0.0.1:{api_port}"),
-            client: Client::new(),
+            client: Client::builder(TokioExecutor::new()).build_http(),
             task,
             storage_dir,
             default_admin_authorization: None,
@@ -88,7 +93,7 @@ impl LiveServer {
             let request = Request::builder()
                 .method("GET")
                 .uri(format!("{}{}", self.base_url, path))
-                .body(Body::empty())
+                .body(Body::default())
                 .expect("readiness request should build");
 
             match self.send_request(request, true).await {
@@ -100,17 +105,22 @@ impl LiveServer {
         panic!("server did not become ready before timeout");
     }
 
-    pub async fn request(&self, request: Request<Body>) -> Response<Body> {
+    pub async fn request(&self, request: Request<Body>) -> Response<Incoming> {
         self.send_request(request, true)
             .await
             .expect("live request should complete")
     }
 
     pub async fn response_bytes(&self, request: Request<Body>) -> Vec<u8> {
-        to_bytes(self.request(request).await.into_body())
+        let body = self
+            .request(request)
+            .await
+            .into_body()
+            .collect()
             .await
             .expect("response body should read")
-            .to_vec()
+            .to_bytes();
+        body.to_vec()
     }
 
     pub async fn response_text(&self, request: Request<Body>) -> String {
@@ -121,7 +131,7 @@ impl LiveServer {
         &self,
         mut request: Request<Body>,
         use_default_admin_auth: bool,
-    ) -> Result<Response<Body>, hyper::Error> {
+    ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
         if use_default_admin_auth
             && request.uri().path().starts_with("/admin/v1")
             && !request.headers().contains_key("authorization")

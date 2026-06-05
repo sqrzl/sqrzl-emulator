@@ -1,9 +1,9 @@
 use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode,
-    Throughput,
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use peas_emulator::models::Object;
 use peas_emulator::storage::{FilesystemStorage, Storage};
+use std::hint::black_box;
 use std::path::PathBuf;
 use uuid::Uuid;
 

@@ -1,8 +1,13 @@
 #![allow(dead_code)]
 
-use hyper::body::to_bytes;
-use hyper::client::HttpConnector;
-use hyper::{Body, Client, Request, Response};
+use bytes::Bytes;
+use http_body_util::BodyExt;
+use http_body_util::Full;
+use hyper_util::client::legacy::connect::HttpConnector;
+type Body = Full<Bytes>;
+use hyper::{body::Incoming, Request, Response};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use peas_emulator::api::server::start_ui_server;
 use peas_emulator::server::Server;
 use peas_emulator::storage::{FilesystemStorage, Storage};
@@ -55,7 +60,7 @@ impl LiveServer {
         let task = tokio::spawn(Server::new(storage, config, api_port).start());
         let server = Self {
             base_url: format!("http://127.0.0.1:{api_port}"),
-            client: Client::new(),
+            client: Client::builder(TokioExecutor::new()).build_http(),
             task,
             storage_dir,
             default_admin_cookie: None,
@@ -80,7 +85,7 @@ impl LiveServer {
         let task = tokio::spawn(start_ui_server(storage, config.clone()));
         let mut server = Self {
             base_url: format!("http://127.0.0.1:{ui_port}"),
-            client: Client::new(),
+            client: Client::builder(TokioExecutor::new()).build_http(),
             task,
             storage_dir,
             default_admin_cookie: None,
@@ -140,7 +145,7 @@ impl LiveServer {
             let request = Request::builder()
                 .method("GET")
                 .uri(format!("{}{}", self.base_url, path))
-                .body(Body::empty())
+                .body(Body::default())
                 .expect("readiness request should build");
 
             match self.send_request(request, true).await {
@@ -152,13 +157,13 @@ impl LiveServer {
         panic!("server did not become ready before timeout");
     }
 
-    pub async fn request(&self, request: Request<Body>) -> Response<Body> {
+    pub async fn request(&self, request: Request<Body>) -> Response<Incoming> {
         self.send_request(request, true)
             .await
             .expect("live request should complete")
     }
 
-    pub async fn request_without_default_auth(&self, request: Request<Body>) -> Response<Body> {
+    pub async fn request_without_default_auth(&self, request: Request<Body>) -> Response<Incoming> {
         self.send_request(request, false)
             .await
             .expect("live request should complete")
@@ -168,7 +173,7 @@ impl LiveServer {
         &self,
         mut request: Request<Body>,
         use_default_admin_auth: bool,
-    ) -> Result<Response<Body>, hyper::Error> {
+    ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
         if use_default_admin_auth
             && request.uri().path().starts_with("/admin/v1")
             && !request.headers().contains_key("cookie")
@@ -231,10 +236,13 @@ pub fn auth_enabled_with_admin_bypass(key: &str, secret: &str) -> Config {
     }
 }
 
-pub async fn text_body(response: Response<Body>) -> String {
-    let bytes = to_bytes(response.into_body())
+pub async fn text_body(response: Response<Incoming>) -> String {
+    let bytes = response
+        .into_body()
+        .collect()
         .await
-        .expect("response body should read");
+        .expect("response body should read")
+        .to_bytes();
     String::from_utf8(bytes.to_vec()).expect("response body should be utf8")
 }
 

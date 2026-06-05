@@ -42,9 +42,11 @@ pub fn extract_metadata_from_http_headers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::body::Body;
     use crate::server::RequestExt as ParsedRequest;
+    use bytes::Bytes;
     use chrono::{Duration as ChronoDuration, TimeZone, Utc};
-    use hyper::{Body, Request as HyperRequest};
+    use hyper::Request as HyperRequest;
     use uuid::{Uuid, Variant, Version};
 
     #[test]
@@ -119,8 +121,9 @@ mod tests {
             builder = builder.header(*name, *value);
         }
 
-        let request: HyperRequest<Body> =
-            builder.body(Body::empty()).expect("request should build");
+        let request: HyperRequest<Body> = builder
+            .body(Body::from(Bytes::new()))
+            .expect("request should build");
 
         ParsedRequest::from_hyper(request)
             .await
