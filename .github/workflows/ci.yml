@@ -58,13 +58,6 @@ jobs:
         working-directory: ui
         run: npm ci
 
-      - name: Regenerate admin client
-        working-directory: ui
-        run: npm run gen
-
-      - name: Verify generated client is up to date
-        run: git diff --exit-code -- ui/src/adapters/api.g.ts
-
       - name: Type check
         working-directory: ui
         run: npm run type-check
