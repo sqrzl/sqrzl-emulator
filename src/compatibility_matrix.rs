@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn should_require_sdk_verifiers_and_limitations_fields_in_compatibility_matrix() {
+    fn should_require_sdk_verifier_metadata_for_compatibility_matrix_entries() {
         // Arrange
         let matrix: serde_json::Value =
             serde_json::from_str(include_str!("../compatibility-matrix.json"))
