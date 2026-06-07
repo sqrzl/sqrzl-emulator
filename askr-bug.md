@@ -92,7 +92,7 @@ toggles. The theme itself changes, but the displayed icon can become stale or in
 
 ## Environment
 
-- `@askrjs/askr`: `0.0.40`
+- `@askrjs/askr`: `0.0.41`
 - `@askrjs/themes`: `0.0.6`
 - `@askrjs/ui`: `0.0.7`
 - App usage: `ui/src/pages/app/_layout.tsx`
@@ -152,7 +152,7 @@ applyRef node_modules/@askrjs/askr/dist/renderer/dom.js
 
 ## Environment
 
-- `@askrjs/askr`: `0.0.40`
+- `@askrjs/askr`: `0.0.41`
 - `@askrjs/ui`: `0.0.7`
 - App usage:
   - `ui/src/components/storage/bucket-modal.tsx`
@@ -186,8 +186,8 @@ Expected:
 
 ## Notes
 
-- PEAS continues to use `Dialog`, `AlertDialog`, overlays, portals, and content primitives.
-- PEAS keeps plain heading/paragraph copy inside dialog content until the title registration path is fixed.
+- Peas continues to use `Dialog`, `AlertDialog`, overlays, portals, and content primitives.
+- Peas keeps plain heading/paragraph copy inside dialog content until the title registration path is fixed.
 
 ---
 
@@ -207,7 +207,7 @@ width to fit the remaining space.
 
 ## Environment
 
-- `@askrjs/askr`: `0.0.40`
+- `@askrjs/askr`: `0.0.41`
 - `@askrjs/themes`: `0.0.6`
 - `@askrjs/ui`: `0.0.7`
 - App usage:
@@ -218,7 +218,7 @@ width to fit the remaining space.
 
 ## Reproduction
 
-1. Open PEAS at `http://127.0.0.1:5173/admin/buckets/visual-empty/docs/api`.
+1. Open Peas at `http://127.0.0.1:5173/admin/buckets/visual-empty/docs/api`.
 2. Set the viewport to `390 x 844`.
 3. Open the `Add blob` dialog.
 4. Inspect the content bounding box.
@@ -237,7 +237,7 @@ Expected:
 
 ## Notes
 
-- PEAS does not override Askr `data-slot="dialog-content"` or clone dialog primitives to hide this.
+- Peas does not override Askr `data-slot="dialog-content"` or clone dialog primitives to hide this.
 - The issue appears to come from `applyCenteredPosition`, where `maxLeft` can collapse to the
   same value as `viewportPadding` while the content width remains larger than the padded viewport.
 
@@ -298,5 +298,5 @@ Expected:
 
 ## Notes
 
-- PEAS uses exported `Flex` with Askr's responsive prop form for alignment-sensitive rows until
+- Peas uses exported `Flex` with Askr's responsive prop form for alignment-sensitive rows until
   static alignment coverage is fixed.

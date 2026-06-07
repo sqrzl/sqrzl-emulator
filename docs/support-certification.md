@@ -1,19 +1,24 @@
-# PEAS Support Certification
+# Peas Support Certification
 
-PEAS support certification defines which local object-storage workflows are
-expected to be reliable, repeatable, and supportable for development and CI.
+Peas support certification names the local object-storage workflows we expect
+to stay reliable, repeatable, and supportable for development and CI.
 
-Certification does not mean full production cloud parity. PEAS focuses on
-documented bucket/container and object/blob workflows across S3-compatible APIs,
-Azure Blob Storage, Google Cloud Storage, and OCI Object Storage.
+Certification is about local supportability, not production cloud parity. Peas
+focuses on the documented bucket/container and object/blob workflows across
+S3-compatible APIs, Azure Blob Storage, Google Cloud Storage, and OCI Object
+Storage.
 
-## Support Matrix
+## Source Of Truth
 
-The source of truth is `compatibility-matrix.json`.
+`compatibility-matrix.json` is the checked-in source of truth for support tiers
+and operation-level status. When the matrix and prose disagree, the matrix wins.
+
+## Support Tiers
 
 Allowed support tiers:
 
-- `certified`: covered by official SDK smoke tests and PEAS contract/interop tests.
+- `certified`: covered by official SDK smoke tests and Peas contract/interop
+  tests.
 - `partial`: implemented or contract-tested, but not part of the SDK
   certification gate.
 - `unsupported`: intentionally not implemented.
@@ -38,25 +43,30 @@ Both the API and UI ports expose:
 GET /healthz
 ```
 
+The response is JSON. When storage is healthy, the handler returns `200 OK`; if
+storage cannot be read, it returns `503 Service Unavailable` with
+`status: degraded`.
+
 The response includes:
 
 - `status`: `ok` or `degraded`.
-- `version`: PEAS package version.
+- `version`: Peas package version.
 - `api_port` and `ui_port`: configured listener ports.
 - `auth_enforced` and `admin_auth_enforced`: current auth mode.
 - `max_request_bytes`: current request body cap.
 - `storage_ready`: whether the configured storage path is readable.
-- `enabled_providers`: provider adapters compiled into this PEAS build.
+- `enabled_providers`: provider adapters compiled into this Peas build
+  (`s3-family`, `azure-blob`, `gcs`, `oci-object`).
 
 For support tickets, collect:
 
-- PEAS version and Git commit.
+- Peas version and Git commit.
 - Full `/healthz` response from the API port.
 - Container image digest, if running in Docker.
 - `compatibility-matrix.json` entry for the failing operation.
 - SDK name and version.
 - Minimal reproduction code and exact request or exception output.
-- Whether the issue reproduces after restarting PEAS with the same `BLOBS_PATH`.
+- Whether the issue reproduces after restarting Peas with the same `BLOBS_PATH`.
 
 ## SDK Certification Harness
 
@@ -68,14 +78,14 @@ python3.12 -m venv .venv
 python -m pip install -e ".[sdk-tests]"
 ```
 
-Run PEAS through the pytest harness:
+Run Peas through the pytest harness:
 
 ```bash
 python -m pytest
 ```
 
 By default the harness builds and starts `target/debug/peas-emulator` with
-temporary storage and authentication disabled. To target an existing PEAS
+temporary storage and authentication disabled. To target an existing Peas
 process:
 
 ```bash
@@ -88,13 +98,13 @@ To run a subset:
 PEAS_SDK_PROVIDERS=s3,azure python -m pytest
 ```
 
-The CI gate runs all SDK tests against a live PEAS process. The container smoke
+The CI gate runs all SDK tests against a live Peas process. The container smoke
 gate builds the Docker image, verifies `/healthz`, and runs the S3 core SDK flow
 against the running container.
 
 ## Request Size Boundary
 
-PEAS buffers request bodies today. Configure the guardrail with:
+Peas buffers request bodies today. Configure the guardrail with:
 
 ```bash
 MAX_REQUEST_BYTES=134217728
@@ -102,12 +112,13 @@ MAX_REQUEST_BYTES=134217728
 
 Requests above the configured limit are rejected before provider handling with
 stable provider-compatible `413 Payload Too Large` responses. Streaming uploads
-can be certified later, but oversized buffered uploads are not accepted by design.
+can be certified later, but oversized buffered uploads are not accepted by
+design.
 
 ## Restart And Durability Expectations
 
-Certified workflows must survive a normal PEAS restart when `BLOBS_PATH` points to
-the same filesystem path.
+Certified workflows must survive a normal Peas restart when `BLOBS_PATH` points
+to the same filesystem path.
 
 Durability hardening covers:
 
@@ -120,23 +131,26 @@ Durability hardening covers:
 
 ## Known Limitations
 
-These are support boundaries, not bugs unless `compatibility-matrix.json` marks the
-operation as `certified`.
+These are support boundaries, not bugs unless `compatibility-matrix.json` marks
+the operation as `certified`.
 
 - Lifecycle configuration can be stored and returned, but production lifecycle
   execution parity is not certified.
 - ACL and policy behavior is simplified for common local workflows.
 - S3 requester-pays billing, static website hosting behavior, advanced SSE key
-  management, and full object-lock governance/compliance parity are not certified.
-- Azure append blob, page blob, lease, snapshot, and immutability edge cases are partial.
+  management, and full object-lock governance/compliance parity are not
+  certified.
+- Azure append blob, page blob, lease, snapshot, and immutability edge cases are
+  partial.
 - GCS signed URL V2 validation is contract-tested, but official SDK signed URL
   generation is not in the certification gate.
-- Provider control-plane behavior outside object/blob storage workflows is out of scope.
+- Provider control-plane behavior outside object/blob storage workflows is out
+  of scope.
 
 ## Reproducible Issue Template
 
 ```text
-PEAS version:
+Peas version:
 Commit or image digest:
 Runtime: local binary / Docker / Compose
 API /healthz response:
@@ -146,5 +160,5 @@ compatibility-matrix operation:
 Expected behavior:
 Actual behavior:
 Minimal reproduction:
-Does it reproduce after PEAS restart with the same BLOBS_PATH? yes/no
+Does it reproduce after Peas restart with the same BLOBS_PATH? yes/no
 ```

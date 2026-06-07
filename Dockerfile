@@ -57,7 +57,8 @@ COPY --from=runtime-fs --chown=65532:65532 /app/blobs /app/blobs
 COPY --from=backend /usr/src/peas-emulator/target/release/peas-emulator /app/peas-emulator
 COPY --from=frontend /ui/dist /app/ui/dist
 
-ENV BLOBS_PATH=/app/blobs
+ENV BLOBS_PATH=/app/blobs \
+  PEAS_LOG_FORMAT=text
 
 USER 65532:65532
 

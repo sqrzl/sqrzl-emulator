@@ -16,6 +16,8 @@ const ENV_API_PORT: &str = "API_PORT";
 const ENV_UI_PORT: &str = "UI_PORT";
 const ENV_ADMIN_AUTH_DISABLED: &str = "ADMIN_AUTH_DISABLED";
 const ENV_MAX_REQUEST_BYTES: &str = "MAX_REQUEST_BYTES";
+const ENV_PEAS_BUCKET_LIST: &str = "PEAS_BUCKET_LIST";
+const ENV_PEAS_LOG_FORMAT: &str = "PEAS_LOG_FORMAT";
 
 // Default values
 const DEFAULT_BLOBS_PATH: &str = "./blobs";
@@ -23,6 +25,15 @@ const DEFAULT_LIFECYCLE_HOURS: u64 = 1;
 const DEFAULT_API_PORT: u16 = 9000;
 const DEFAULT_UI_PORT: u16 = 9001;
 pub const DEFAULT_MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
+
+/// Logging format for tracing output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogFormat {
+    /// Human-readable text logs.
+    Text,
+    /// Structured JSON logs.
+    Json,
+}
 
 /// Global application configuration loaded from environment variables.
 #[derive(Clone, Debug)]
@@ -99,8 +110,55 @@ impl Config {
     /// - `LIFECYCLE_HOURS`: Hours between lifecycle rule executions (default: 1)
     /// - `MAX_REQUEST_BYTES`: Maximum request body bytes accepted before streaming is supported (default: 128 MiB)
     /// - `ADMIN_AUTH_DISABLED`: Disable `/admin/v1` session auth even when provider auth is enabled
+    /// - `PEAS_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
+    /// - `PEAS_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)
     pub fn from_env() -> Self {
         Self::from_env_with(|name| env::var(name).ok())
+    }
+
+    /// Load comma-delimited startup bucket names from the environment.
+    ///
+    /// Empty segments are ignored, and names are trimmed of surrounding whitespace.
+    pub fn startup_bucket_names_from_env() -> Vec<String> {
+        Self::startup_bucket_names_from_env_with(|name| env::var(name).ok())
+    }
+
+    /// Load the configured logging format from the environment.
+    ///
+    /// Unknown values fall back to human-readable text logs.
+    pub fn log_format_from_env() -> LogFormat {
+        Self::log_format_from_env_with(|name| env::var(name).ok())
+    }
+
+    fn startup_bucket_names_from_env_with<F>(mut lookup: F) -> Vec<String>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        lookup(ENV_PEAS_BUCKET_LIST)
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn log_format_from_env_with<F>(mut lookup: F) -> LogFormat
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        match lookup(ENV_PEAS_LOG_FORMAT)
+            .as_deref()
+            .map(str::trim)
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("json") => LogFormat::Json,
+            _ => LogFormat::Text,
+        }
     }
 
     /// Get the access key ID if authentication is enabled.
@@ -150,6 +208,7 @@ mod tests {
         // Arrange
         // Act
         let config = Config::from_env_with(|_| None);
+        let startup_buckets = Config::startup_bucket_names_from_env_with(|_| None);
 
         // Assert
         assert_eq!(config.access_key_id, None);
@@ -164,6 +223,7 @@ mod tests {
         assert_eq!(config.api_port, DEFAULT_API_PORT);
         assert_eq!(config.ui_port, DEFAULT_UI_PORT);
         assert_eq!(config.max_request_bytes, DEFAULT_MAX_REQUEST_BYTES);
+        assert!(startup_buckets.is_empty());
     }
 
     #[test]
@@ -267,5 +327,49 @@ mod tests {
 
         // Assert
         assert_eq!(config.max_request_bytes, DEFAULT_MAX_REQUEST_BYTES);
+    }
+
+    #[test]
+    fn should_parse_comma_delimited_startup_bucket_names() {
+        // Arrange
+        // Act
+        let startup_buckets = Config::startup_bucket_names_from_env_with(|name| match name {
+            ENV_PEAS_BUCKET_LIST => Some("alpha, beta , , gamma,delta ".to_string()),
+            _ => None,
+        });
+
+        // Assert
+        assert_eq!(
+            startup_buckets,
+            vec![
+                "alpha".to_string(),
+                "beta".to_string(),
+                "gamma".to_string(),
+                "delta".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_load_text_log_format_by_default_when_env_is_empty() {
+        // Arrange
+        // Act
+        let log_format = Config::log_format_from_env_with(|_| None);
+
+        // Assert
+        assert_eq!(log_format, LogFormat::Text);
+    }
+
+    #[test]
+    fn should_load_json_log_format_when_env_requests_structured_logging() {
+        // Arrange
+        // Act
+        let log_format = Config::log_format_from_env_with(|name| match name {
+            ENV_PEAS_LOG_FORMAT => Some("json".to_string()),
+            _ => None,
+        });
+
+        // Assert
+        assert_eq!(log_format, LogFormat::Json);
     }
 }
