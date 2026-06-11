@@ -18,12 +18,12 @@
     "@askrjs/charts": ">=0.0.1 <0.1.0",
     "@askrjs/lucide": "^0.0.3",
     "@askrjs/themes": "^0.0.7",
-    "@askrjs/ui": "^0.0.9",
+    "@askrjs/ui": "^0.0.10",
     "@fgrzl/fetch": "^2.0.0"
   },
   "devDependencies": {
     "@askrjs/vite": "^0.0.4",
-    "@types/node": "^25.9.2",
+    "@types/node": "^25.9.3",
     "jiti": "^2.7.0",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",

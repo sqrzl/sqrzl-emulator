@@ -26,6 +26,24 @@ type CursorListFetch<T> = (opts: {
 }) => Promise<CursorPage<T>>;
 
 const fetchByQueryKey = new Map<string, CursorListFetch<unknown>>();
+const fetchByQueryKeyLimit = 256;
+
+function cacheFetchForQueryKey<T>(key: string, fetch: CursorListFetch<T>): CursorListFetch<T> {
+  const cached = fetchByQueryKey.get(key) as CursorListFetch<T> | undefined;
+  if (cached) {
+    return cached;
+  }
+
+  if (fetchByQueryKey.size >= fetchByQueryKeyLimit) {
+    const oldestKey = fetchByQueryKey.keys().next().value as string | undefined;
+    if (oldestKey !== undefined) {
+      fetchByQueryKey.delete(oldestKey);
+    }
+  }
+
+  fetchByQueryKey.set(key, fetch as CursorListFetch<unknown>);
+  return fetch;
+}
 function currentSearchFromRoute(queryParam: string): string {
   return currentRoute().query.get(queryParam)?.trim() ?? '';
 }
@@ -77,19 +95,6 @@ function writeSearchParam(
   }
 }
 
-function canonicalFetch<T>(
-  key: string,
-  fetch: CursorListFetch<T>
-): CursorListFetch<T> {
-  const cached = fetchByQueryKey.get(key) as CursorListFetch<T> | undefined;
-  if (cached) {
-    return cached;
-  }
-
-  fetchByQueryKey.set(key, fetch as CursorListFetch<unknown>);
-  return fetch;
-}
-
 export function useCursorList<T>(
   keyPrefix: string,
   queryParam: string,
@@ -112,7 +117,7 @@ export function useCursorList<T>(
 
   const query = createQuery<CursorPage<T>>({
     key: queryKey,
-    fetch: canonicalFetch(queryKey, ({ signal }) =>
+    fetch: cacheFetchForQueryKey(queryKey, ({ signal }) =>
       fetchPage({
         next: currentCursor,
         search: routeSearch || undefined,

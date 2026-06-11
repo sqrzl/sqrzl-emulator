@@ -1,5 +1,17 @@
 const textEncoder = new TextEncoder();
 const blobIdCache = new Map<string, string>();
+const blobIdCacheLimit = 4096;
+
+function setWithEviction<K, V>(cache: Map<K, V>, key: K, value: V, limit: number): void {
+  if (!cache.has(key) && cache.size >= limit) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+
+  cache.set(key, value);
+}
 
 function rotateLeft(value: number, bits: number): number {
   return ((value << bits) | (value >>> (32 - bits))) >>> 0;
@@ -143,7 +155,7 @@ export function blobIdFromBlobKey(blobKey: string): string {
   digest[6] = (digest[6] & 0x0f) | 0x50;
   digest[8] = (digest[8] & 0x3f) | 0x80;
   const blobId = formatUuid(digest.subarray(0, 16));
-  blobIdCache.set(blobKey, blobId);
+  setWithEviction(blobIdCache, blobKey, blobId, blobIdCacheLimit);
   return blobId;
 }
 
@@ -152,7 +164,9 @@ export function blobPath(
   blobKey: string,
   objectKey?: string
 ): string {
-  const blobHref = `${bucketPath(bucketName)}/blob/${blobIdFromBlobKey(blobKey)}`;
+  const blobHref = `/admin/blobs/${encodeURIComponent(bucketName)}/${blobIdFromBlobKey(
+    blobKey
+  )}`;
   if (!objectKey) {
     return blobHref;
   }

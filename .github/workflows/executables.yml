@@ -1,0 +1,30 @@
+name: Executables
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build Linux executables
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build linux x86_64
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild cargo zigbuild --release --locked --bin peas-emulator --target x86_64-unknown-linux-gnu && mkdir -p dist/executables/x86_64-unknown-linux-gnu && cp target/x86_64-unknown-linux-gnu/release/peas-emulator dist/executables/x86_64-unknown-linux-gnu/
+
+      - name: Build linux aarch64
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild cargo zigbuild --release --locked --bin peas-emulator --target aarch64-unknown-linux-gnu && mkdir -p dist/executables/aarch64-unknown-linux-gnu && cp target/aarch64-unknown-linux-gnu/release/peas-emulator dist/executables/aarch64-unknown-linux-gnu/
+
+      - name: Upload executable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: peas-emulator-linux-executables
+          path: dist/executables
+          if-no-files-found: error

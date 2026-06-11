@@ -75,8 +75,11 @@ describe('admin authentication', () => {
       const bucket = manifest.records.find(
         (record) => record.path === '/admin/buckets/{bucketName}'
       );
+      const deepBucket = manifest.records.find(
+        (record) => record.path === '/admin/buckets/{bucketName}/*'
+      );
       const blob = manifest.records.find(
-        (record) => record.path === '/admin/buckets/{bucketName}/blob/{blobId}'
+        (record) => record.path === '/admin/blobs/{bucketName}/{blobId}'
       );
       const login = manifest.records.find((record) => record.path === '/login');
       const logout = manifest.records.find(
@@ -86,6 +89,7 @@ describe('admin authentication', () => {
       expect(resolved.session).toBe(null);
       expect(app?.options.policies?.length).toBeGreaterThan(0);
       expect(bucket?.options.policies?.length).toBeGreaterThan(0);
+      expect(deepBucket?.options.policies?.length).toBeGreaterThan(0);
       expect(blob?.options.policies?.length).toBeGreaterThan(0);
       expect(login).toBeDefined();
       expect(logout?.options.policies).toBeUndefined();

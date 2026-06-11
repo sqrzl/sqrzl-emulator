@@ -1,5 +1,5 @@
 import { state } from '@askrjs/askr';
-import { currentRoute, navigate } from '@askrjs/askr/router';
+import { navigate } from '@askrjs/askr/router';
 import { Input } from '@askrjs/ui';
 import { Button, Field } from '@askrjs/themes/controls';
 import { Container, Section, Stack } from '@askrjs/themes/layouts';
@@ -13,7 +13,11 @@ import { loginAdminSession } from '../../features/auth/admin-session';
 import { adminBucketsPath } from '../../shared/routes';
 
 function returnPath(): string {
-  const candidate = currentRoute().query.get('next');
+  if (typeof window === 'undefined') {
+    return adminBucketsPath();
+  }
+
+  const candidate = new URLSearchParams(window.location.search).get('next');
   return candidate?.startsWith('/') && !candidate.startsWith('//')
     ? candidate
     : adminBucketsPath();

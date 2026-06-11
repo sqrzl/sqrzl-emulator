@@ -42,6 +42,18 @@ docker run --rm \
 That container path starts with auth disabled unless you set
 `ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`.
 
+### Native Executables
+
+You can build a native release binary directly with Cargo:
+
+```bash
+cargo build --release --locked --bin peas-emulator
+```
+
+For packaged Linux artifacts, use the GitHub Actions `Executables` workflow
+and download the per-target build artifacts. The workflow runs on a single
+Ubuntu runner and uses Dockerized cross-compilers to produce Linux binaries.
+
 ## What Peas Covers
 
 - S3-compatible, Azure Blob Storage, Google Cloud Storage, and OCI Object Storage

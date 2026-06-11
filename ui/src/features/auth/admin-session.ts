@@ -1,6 +1,5 @@
 import type { FetchResponse } from '@fgrzl/fetch';
 import {
-  currentRoute,
   navigate,
   type RouteAuthState,
 } from '@askrjs/askr/router';
@@ -41,32 +40,24 @@ export async function loadAdminSession({
   return unwrapResponse(await adminApi.getAdminSession({ signal }));
 }
 
-function currentLocationFromRoute(): string {
-  const route = currentRoute();
-  const routeQuery = route.query.toJSON();
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(routeQuery)) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        query.append(key, item);
-      }
-      continue;
-    }
-
-    query.append(key, value);
+function currentLocationFromWindow(): string {
+  if (typeof window === 'undefined') {
+    return '/';
   }
 
-  const search = query.toString();
-  const hash = route.hash ? `#${route.hash}` : '';
-  return `${route.path}${search ? `?${search}` : ''}${hash}`;
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 
 export function unwrapProtectedResponse<T>(response: FetchResponse<T>): T {
   try {
     return unwrapResponse(response);
   } catch (error) {
-    if (isUnauthorized(error) && /^\/admin(?:\/|$)/.test(currentRoute().path)) {
-      const next = currentLocationFromRoute();
+    if (
+      isUnauthorized(error) &&
+      typeof window !== 'undefined' &&
+      /^\/admin(?:\/|$)/.test(window.location.pathname)
+    ) {
+      const next = currentLocationFromWindow();
       navigate(`/auth?next=${encodeURIComponent(next)}`, {
         history: 'replace',
       });

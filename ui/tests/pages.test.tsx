@@ -945,7 +945,9 @@ describe('simplified page flows', () => {
     window.history.pushState(
       null,
       '',
-      `/admin/buckets/alpha/blob/${blobId}?key=${encodeURIComponent(blobKey)}`
+      `/admin/blobs/alpha/${blobId}?key=${encodeURIComponent(
+        blobKey
+      )}`
     );
 
     const root = mount(() => <BlobPage bucketName="alpha" blobId={blobId} />);
