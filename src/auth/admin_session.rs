@@ -10,9 +10,9 @@ use std::time::Duration;
 pub const ADMIN_LOGIN_PATH: &str = "/admin/v1/auth/login";
 pub const ADMIN_LOGOUT_PATH: &str = "/admin/v1/auth/logout";
 pub const ADMIN_SESSION_PATH: &str = "/admin/v1/auth/session";
-pub const ADMIN_SESSION_COOKIE_NAME: &str = "peas_admin_session";
+pub const ADMIN_SESSION_COOKIE_NAME: &str = "sqrzl_admin_session";
 
-const ADMIN_ISSUER: &str = "peas-emulator";
+const ADMIN_ISSUER: &str = "sqrzl-emulator";
 const ADMIN_SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn should_extract_cookie_value_from_cookie_header() {
         // Arrange
-        let cookie_header = "foo=bar; peas_admin_session=abc.def.ghi; theme=tabby";
+        let cookie_header = "foo=bar; sqrzl_admin_session=abc.def.ghi; theme=tabby";
 
         // Act
         let cookie_value = extract_cookie_value(cookie_header, ADMIN_SESSION_COOKIE_NAME);
@@ -176,7 +176,7 @@ mod tests {
         let cookie = AdminSessionManager::clear_session_cookie();
 
         // Assert
-        assert!(cookie.contains("peas_admin_session="));
+        assert!(cookie.contains("sqrzl_admin_session="));
         assert!(cookie.contains("Max-Age=0"));
     }
 }

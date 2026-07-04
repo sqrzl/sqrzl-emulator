@@ -119,7 +119,7 @@ fn object_acl_response(
     }) {
         Ok(acl) => {
             let owner = crate::models::policy::Owner {
-                id: "peas-emulator".to_string(),
+                id: "sqrzl-emulator".to_string(),
                 display_name: "S3 Emulator".to_string(),
             };
             xml_success_response(StatusCode::OK, xml_utils::acl_xml(&owner, &acl), req_id)
@@ -689,7 +689,7 @@ mod tests {
 
     fn temp_storage() -> Arc<dyn Storage> {
         let dir =
-            std::env::temp_dir().join(format!("peas-copy-range-test-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sqrzl-copy-range-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -704,7 +704,7 @@ mod tests {
             lifecycle_interval: Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -1442,7 +1442,7 @@ mod s3_contract_tests {
 
     fn temp_storage() -> Arc<dyn Storage> {
         let dir =
-            std::env::temp_dir().join(format!("peas-s3-contract-test-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sqrzl-s3-contract-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -1457,7 +1457,7 @@ mod s3_contract_tests {
             lifecycle_interval: Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -1471,7 +1471,7 @@ mod s3_contract_tests {
             lifecycle_interval: Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 

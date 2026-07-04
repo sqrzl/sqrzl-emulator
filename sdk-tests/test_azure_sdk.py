@@ -8,17 +8,17 @@ import pytest
 azure_blob = pytest.importorskip("azure.storage.blob")
 
 
-def _service(peas_server):
+def _service(sqrzl_server):
     return azure_blob.BlobServiceClient(
-        account_url=f"{peas_server.api_url}/{peas_server.azure_account}",
+        account_url=f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}",
         credential=None,
     )
 
 
-def test_azure_core_blob_workflows(peas_server):
-    peas_server.require_provider("azure")
-    service = _service(peas_server)
-    container_name = peas_server.bucket_name("sdk-azure-core")
+def test_azure_core_blob_workflows(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    service = _service(sqrzl_server)
+    container_name = sqrzl_server.bucket_name("sdk-azure-core")
     blob_name = "folder/hello.txt"
 
     container = service.create_container(container_name)
@@ -42,10 +42,10 @@ def test_azure_core_blob_workflows(peas_server):
     service.delete_container(container_name)
 
 
-def test_azure_block_blob_workflow(peas_server):
-    peas_server.require_provider("azure")
-    service = _service(peas_server)
-    container_name = peas_server.bucket_name("sdk-azure-block")
+def test_azure_block_blob_workflow(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    service = _service(sqrzl_server)
+    container_name = sqrzl_server.bucket_name("sdk-azure-block")
     blob_name = "blocks/report.txt"
 
     container = service.create_container(container_name)

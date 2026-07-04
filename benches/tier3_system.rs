@@ -4,10 +4,10 @@ use criterion::{
 };
 use http::header::CONTENT_TYPE;
 use http::{HeaderMap, HeaderValue, Method, Uri};
-use peas_emulator::auth::AuthConfig;
-use peas_emulator::providers::AdapterRegistry;
-use peas_emulator::server::RequestExt;
-use peas_emulator::storage::{FilesystemStorage, Storage};
+use sqrzl_emulator::auth::AuthConfig;
+use sqrzl_emulator::providers::AdapterRegistry;
+use sqrzl_emulator::server::RequestExt;
+use sqrzl_emulator::storage::{FilesystemStorage, Storage};
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -24,7 +24,7 @@ mod support;
 use support::live_server::auth_disabled;
 
 fn temp_path() -> PathBuf {
-    std::env::temp_dir().join(format!("peas_bench_tier3_{}", Uuid::new_v4()))
+    std::env::temp_dir().join(format!("sqrzl_bench_tier3_{}", Uuid::new_v4()))
 }
 
 fn direct_request(method: Method, uri: &str, body: &[u8]) -> RequestExt {
@@ -115,7 +115,7 @@ fn bench_direct_get_object(c: &mut Criterion) {
         .put_object(
             "bench",
             "item.txt".to_string(),
-            peas_emulator::models::Object::new(
+            sqrzl_emulator::models::Object::new(
                 "item.txt".to_string(),
                 vec![b'a'; 1024],
                 "text/plain".to_string(),
@@ -162,7 +162,7 @@ fn bench_direct_list_objects(c: &mut Criterion) {
             .put_object(
                 "bench",
                 format!("item-{index:03}.txt"),
-                peas_emulator::models::Object::new(
+                sqrzl_emulator::models::Object::new(
                     format!("item-{index:03}.txt"),
                     payload.clone(),
                     "text/plain".to_string(),

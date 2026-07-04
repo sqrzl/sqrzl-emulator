@@ -2,7 +2,7 @@ use crate::models::policy::{Acl, CannedAcl, Grant, Grantee, Permission};
 use crate::server::RequestExt as Request;
 use crate::utils::xml as xml_utils;
 
-const OWNER_ID: &str = "peas-emulator";
+const OWNER_ID: &str = "sqrzl-emulator";
 
 pub(super) fn acl_from_headers(req: &Request) -> Result<Acl, String> {
     let canned_acl_str = req.header("x-amz-acl").unwrap_or("private");

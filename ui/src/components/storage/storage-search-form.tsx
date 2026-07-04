@@ -53,10 +53,10 @@ export default function StorageSearchForm({
   }
 
   return (
-    <form data-peas-slot="storage-search-form" onSubmit={searchNow}>
+    <form data-sqrzl-slot="storage-search-form" onSubmit={searchNow}>
       <Inline align="end" gap="3" wrap>
         <Box
-          data-peas-slot="storage-search-field"
+          data-sqrzl-slot="storage-search-field"
           grow
           minWidth={{ base: '100%', sm: '18rem' }}
           maxWidth={{ base: '100%', md: '28rem' }}

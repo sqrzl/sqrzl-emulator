@@ -615,7 +615,7 @@ async fn should_require_session_cookie_given_admin_auth_enabled_when_request_has
     let invalid_session = Request::builder()
         .method("GET")
         .uri(format!("{}/admin/v1/auth/session", server.base_url))
-        .header("cookie", "peas_admin_session=invalid")
+        .header("cookie", "sqrzl_admin_session=invalid")
         .body(Body::default())
         .expect("invalid cookie request should build");
     let invalid_session_response = server.request_without_default_auth(invalid_session).await;
@@ -692,7 +692,7 @@ async fn should_issue_admin_session_cookie_given_valid_login_and_authorize_admin
         .expect("set-cookie header should contain a cookie value")
         .to_string();
 
-    assert!(session_cookie.contains("peas_admin_session="));
+    assert!(session_cookie.contains("sqrzl_admin_session="));
 
     let authenticated = Request::builder()
         .method("GET")

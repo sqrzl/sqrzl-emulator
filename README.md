@@ -1,6 +1,6 @@
-# Peas
+# Sqrzl
 
-Peas is a local object and blob storage emulator for development, CI, and
+Sqrzl is a local object and blob storage emulator for development, CI, and
 compatibility testing.
 
 It gives you one shared filesystem-backed storage core behind S3-compatible,
@@ -23,10 +23,10 @@ cargo run
 docker compose up --build
 ```
 
-Docker and Compose both default to readable text logs. Set `PEAS_LOG_FORMAT=json`
+Docker and Compose both default to readable text logs. Set `SQRZL_LOG_FORMAT=json`
 only when you want structured tracing output.
 
-The Compose example uses `admin` / `easy-peasy` credentials so the admin UI can
+The Compose example uses `admin` / `sqrzl-secret` credentials so the admin UI can
 authenticate. The bare `docker run` example below keeps auth disabled.
 
 If you want the bare container instead of Compose:
@@ -35,26 +35,26 @@ If you want the bare container instead of Compose:
 docker run --rm \
   -p 9000:9000 \
   -p 9001:9001 \
-  -v peas-blobs:/app/blobs \
-  sqrzl/peas-emulator
+  -v sqrzl-blobs:/app/blobs \
+  sqrzl/sqrzl-emulator
 ```
 
 That container path starts with auth disabled unless you set
-`ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`.
+`SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`.
 
 ### Native Executables
 
 You can build a native release binary directly with Cargo:
 
 ```bash
-cargo build --release --locked --bin peas-emulator
+cargo build --release --locked --bin sqrzl-emulator
 ```
 
 For packaged Linux artifacts, use the GitHub Actions `Executables` workflow
 and download the per-target build artifacts. The workflow runs on a single
 Ubuntu runner and uses Dockerized cross-compilers to produce Linux binaries.
 
-## What Peas Covers
+## What Sqrzl Covers
 
 - S3-compatible, Azure Blob Storage, Google Cloud Storage, and OCI Object Storage
   API endpoints
@@ -71,7 +71,7 @@ Ubuntu runner and uses Dockerized cross-compilers to produce Linux binaries.
 ## Docs Map
 
 - [Support certification](docs/support-certification.md)
-- [Storage UI guidelines](docs/peas-storage-ui-guidelines.md)
+- [Storage UI guidelines](docs/sqrzl-storage-ui-guidelines.md)
 - [Askr bug log](askr-bug.md)
 - [UI quick start and architecture](ui/README.md)
 - [UI contributor policy](ui/AGENTS.md)
@@ -80,28 +80,28 @@ Ubuntu runner and uses Dockerized cross-compilers to produce Linux binaries.
 
 ## Configuration
 
-Peas reads all runtime configuration from environment variables.
+Sqrzl reads all runtime configuration from environment variables.
 
-- `ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`: enable provider auth only when both
+- `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`: enable provider auth only when both
   values are set.
-- `ADMIN_AUTH_DISABLED`: set to `true` to keep the admin API open for local
+- `SQRZL_ADMIN_AUTH_DISABLED`: set to `true` to keep the admin API open for local
   development while provider auth remains enabled.
-- `BLOBS_PATH`: filesystem storage root, defaulting to `./blobs`.
-- `LIFECYCLE_HOURS`: hours between lifecycle rule executions, defaulting to `1`.
-- `API_PORT`: API listener port, defaulting to `9000`.
-- `UI_PORT`: UI listener port, defaulting to `9001`.
-- `MAX_REQUEST_BYTES`: buffered request body cap, defaulting to 128 MiB.
+- `SQRZL_BLOBS_PATH`: filesystem storage root, defaulting to `./blobs`.
+- `SQRZL_LIFECYCLE_HOURS`: hours between lifecycle rule executions, defaulting to `1`.
+- `SQRZL_API_PORT`: API listener port, defaulting to `9000`.
+- `SQRZL_UI_PORT`: UI listener port, defaulting to `9001`.
+- `SQRZL_MAX_REQUEST_BYTES`: buffered request body cap, defaulting to 128 MiB.
   Requests above the limit fail with provider-compatible `413 Payload Too Large`
   responses.
-- `PEAS_BUCKET_LIST`: comma-delimited bucket names to create on startup.
+- `SQRZL_BUCKET_LIST`: comma-delimited bucket names to create on startup.
   Existing buckets are left alone, and invalid bucket names abort startup.
-- `PEAS_LOG_FORMAT`: `text` by default for human-readable logs; set to `json`
+- `SQRZL_LOG_FORMAT`: `text` by default for human-readable logs; set to `json`
   for structured tracing output. The Docker image and Compose file set `text`
   explicitly.
 
-If you set `ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`, the storage endpoints
+If you set `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`, the storage endpoints
 enforce auth. The admin API at `/admin/v1` also requires auth with those same
-values unless `ADMIN_AUTH_DISABLED=true`. The browser UI exchanges credentials
+values unless `SQRZL_ADMIN_AUTH_DISABLED=true`. The browser UI exchanges credentials
 for an HttpOnly admin session cookie.
 
 ## Health And Support
@@ -114,7 +114,7 @@ curl http://127.0.0.1:9001/healthz
 ```
 
 The health response reports the current status, package version, configured
-listener ports, auth mode, `MAX_REQUEST_BYTES`, storage readiness, and the
+listener ports, auth mode, `SQRZL_MAX_REQUEST_BYTES`, storage readiness, and the
 compiled provider list. See
 [Support certification](docs/support-certification.md) for the full support and
 diagnostics workflow.
@@ -128,15 +128,15 @@ python -m pip install -e ".[sdk-tests]"
 python -m pytest
 ```
 
-To run against an existing Peas process:
+To run against an existing Sqrzl process:
 
 ```bash
-PEAS_API_URL=http://127.0.0.1:9000 python -m pytest
+SQRZL_API_URL=http://127.0.0.1:9000 python -m pytest
 ```
 
-The harness builds and starts `target/debug/peas-emulator` by default with
-temporary storage and auth disabled. Use `PEAS_SDK_PROVIDERS=s3,azure` to run a
-subset. The CI gate runs the full SDK test matrix against a live Peas process,
+The harness builds and starts `target/debug/sqrzl-emulator` by default with
+temporary storage and auth disabled. Use `SQRZL_SDK_PROVIDERS=s3,azure` to run a
+subset. The CI gate runs the full SDK test matrix against a live Sqrzl process,
 and the container smoke gate builds the Docker image, verifies `/healthz`, and
 runs the S3 core SDK flow against the container.
 
@@ -176,25 +176,25 @@ Node 24 or newer is required. The console supports login/logout, bucket search,
 bucket create/delete, folder-like bucket browsing, blob upload/delete, blob
 details, and blob download.
 
-Run `npm run seed:sample` after Peas is running to populate `peas-demo`,
-`peas-logs`, and `peas-archive` with synthetic local objects for UI review. The
+Run `npm run seed:sample` after Sqrzl is running to populate `sqrzl-demo`,
+`sqrzl-logs`, and `sqrzl-archive` with synthetic local objects for UI review. The
 script uses the existing `/admin/v1` API, is safe to rerun, and accepts
-`PEAS_ADMIN_URL`, `PEAS_ADMIN_USERNAME`, and `PEAS_ADMIN_PASSWORD` overrides.
+`SQRZL_ADMIN_URL`, `SQRZL_ADMIN_USERNAME`, and `SQRZL_ADMIN_PASSWORD` overrides.
 
 ## Docker
 
 ```bash
-docker build -t sqrzl/peas-emulator .
+docker build -t sqrzl/sqrzl-emulator .
 docker run --rm \
   -p 9000:9000 \
   -p 9001:9001 \
-  -v peas-blobs:/app/blobs \
-  sqrzl/peas-emulator
+  -v sqrzl-blobs:/app/blobs \
+  sqrzl/sqrzl-emulator
 docker compose up --build
 ```
 
 The image and Compose stack default to readable text logs. Set
-`PEAS_LOG_FORMAT=json` only when you want structured tracing output.
+`SQRZL_LOG_FORMAT=json` only when you want structured tracing output.
 
 ## License
 

@@ -8,7 +8,7 @@ import pytest
 oci = pytest.importorskip("oci")
 
 
-def _client(peas_server, tmp_path):
+def _client(sqrzl_server, tmp_path):
     serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
     rsa = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.rsa")
 
@@ -22,29 +22,29 @@ def _client(peas_server, tmp_path):
         )
     )
     config = {
-        "user": "ocid1.user.oc1..peas",
-        "tenancy": "ocid1.tenancy.oc1..peas",
+        "user": "ocid1.user.oc1..sqrzl",
+        "tenancy": "ocid1.tenancy.oc1..sqrzl",
         "fingerprint": "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
         "key_file": str(key_file),
         "region": "us-ashburn-1",
     }
     client = oci.object_storage.ObjectStorageClient(config)
-    client.base_client.endpoint = peas_server.api_url
+    client.base_client.endpoint = sqrzl_server.api_url
     return client
 
 
-def test_oci_core_object_workflows(peas_server, tmp_path):
-    peas_server.require_provider("oci")
-    client = _client(peas_server, tmp_path)
+def test_oci_core_object_workflows(sqrzl_server, tmp_path):
+    sqrzl_server.require_provider("oci")
+    client = _client(sqrzl_server, tmp_path)
     namespace = client.get_namespace().data
-    bucket_name = peas_server.bucket_name("sdk-oci-core")
+    bucket_name = sqrzl_server.bucket_name("sdk-oci-core")
     object_name = "folder/hello.txt"
 
     client.create_bucket(
         namespace,
         oci.object_storage.models.CreateBucketDetails(
             name=bucket_name,
-            compartment_id="ocid1.compartment.oc1..peas",
+            compartment_id="ocid1.compartment.oc1..sqrzl",
         ),
     )
     client.put_object(
@@ -74,18 +74,18 @@ def test_oci_core_object_workflows(peas_server, tmp_path):
     client.delete_bucket(namespace, bucket_name)
 
 
-def test_oci_multipart_workflow(peas_server, tmp_path):
-    peas_server.require_provider("oci")
-    client = _client(peas_server, tmp_path)
+def test_oci_multipart_workflow(sqrzl_server, tmp_path):
+    sqrzl_server.require_provider("oci")
+    client = _client(sqrzl_server, tmp_path)
     namespace = client.get_namespace().data
-    bucket_name = peas_server.bucket_name("sdk-oci-multipart")
+    bucket_name = sqrzl_server.bucket_name("sdk-oci-multipart")
     object_name = "multi.txt"
 
     client.create_bucket(
         namespace,
         oci.object_storage.models.CreateBucketDetails(
             name=bucket_name,
-            compartment_id="ocid1.compartment.oc1..peas",
+            compartment_id="ocid1.compartment.oc1..sqrzl",
         ),
     )
     upload = client.create_multipart_upload(

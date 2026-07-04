@@ -19,8 +19,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-const GCS_GENERATION_KEY: &str = "__peas_gcs_generation";
-const GCS_METAGENERATION_KEY: &str = "__peas_gcs_metageneration";
+const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
+const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
 const GCS_RESUMABLE_SESSION_STATE: &str = "gcs-resumable-session";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -534,7 +534,7 @@ mod tests {
     use std::fs;
 
     fn temp_storage() -> Arc<dyn Storage> {
-        let dir = std::env::temp_dir().join(format!("peas-gcs-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sqrzl-gcs-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -549,7 +549,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -563,7 +563,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
             .create_bucket("multipart-bucket".to_string())
             .unwrap();
 
-        let boundary = "peas-boundary";
+        let boundary = "sqrzl-boundary";
         let body = format!(
             "--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{{\"name\":\"multi.txt\",\"metadata\":{{\"owner\":\"sdk\"}}}}\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\nmultipart body\r\n--{boundary}--\r\n"
         );
@@ -1072,7 +1072,7 @@ mod tests {
                     "http://localhost/upload/storage/v1/b/multipart-bucket/o?uploadType=multipart",
                     &[
                         ("host", "storage.googleapis.com"),
-                        ("content-type", "multipart/related; boundary=peas-boundary"),
+                        ("content-type", "multipart/related; boundary=sqrzl-boundary"),
                     ],
                     body.as_bytes(),
                 )

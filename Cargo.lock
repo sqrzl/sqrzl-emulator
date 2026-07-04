@@ -1190,42 +1190,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "peas-emulator"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "base64",
- "bytes",
- "chrono",
- "criterion",
- "crossbeam-skiplist",
- "getrandom 0.4.2",
- "hex",
- "hmac 0.13.0",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "jsonwebtoken",
- "md5",
- "mime_guess",
- "quick-xml",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.11.0",
- "thiserror",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
 name = "pem"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1703,6 +1667,42 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sqrzl-emulator"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "base64",
+ "bytes",
+ "chrono",
+ "criterion",
+ "crossbeam-skiplist",
+ "getrandom 0.4.2",
+ "hex",
+ "hmac 0.13.0",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "jsonwebtoken",
+ "md5",
+ "mime_guess",
+ "quick-xml",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2 0.11.0",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
 ]
 
 [[package]]

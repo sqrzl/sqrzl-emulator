@@ -1,6 +1,6 @@
-# Peas Admin UI
+# Sqrzl Admin UI
 
-The Peas admin UI is an Askr SPA for the storage administration API.
+The Sqrzl admin UI is an Askr SPA for the storage administration API.
 
 Keep it small: sign in, search buckets, create/delete buckets, browse
 folder-like blob keys, upload/delete blobs, view metadata, and download blob
@@ -24,9 +24,9 @@ npm test         # Run tests with Vitest
 
 Node 24 or newer is required.
 
-`npm run seed:sample` expects Peas to be running on
-`http://127.0.0.1:9001/admin/v1`. Set `PEAS_ADMIN_URL`,
-`PEAS_ADMIN_USERNAME`, or `PEAS_ADMIN_PASSWORD` when using a different local
+`npm run seed:sample` expects Sqrzl to be running on
+`http://127.0.0.1:9001/admin/v1`. Set `SQRZL_ADMIN_URL`,
+`SQRZL_ADMIN_USERNAME`, or `SQRZL_ADMIN_PASSWORD` when using a different local
 server or admin credentials.
 
 ## Routes
@@ -41,8 +41,8 @@ server or admin credentials.
 ## UI Scope
 
 Everything uses Askr theme and UI primitives as the base. Local CSS is limited
-to Peas-owned `data-peas-slot` polish for layout and storage-specific sizing.
-See [`../docs/peas-storage-ui-guidelines.md`](../docs/peas-storage-ui-guidelines.md)
+to Sqrzl-owned `data-sqrzl-slot` polish for layout and storage-specific sizing.
+See [`../docs/sqrzl-storage-ui-guidelines.md`](../docs/sqrzl-storage-ui-guidelines.md)
 for the visual and interaction rules.
 
 ## Data Flow

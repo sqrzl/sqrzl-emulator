@@ -10,7 +10,7 @@ export default function StorageDialogForm({
   return (
     <Stack
       asChild
-      data-peas-slot="storage-dialog-form"
+      data-sqrzl-slot="storage-dialog-form"
       align="stretch"
       gap="4"
       width="full"

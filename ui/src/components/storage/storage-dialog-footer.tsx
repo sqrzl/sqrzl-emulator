@@ -7,7 +7,7 @@ export default function StorageDialogFooter({
 }) {
   return (
     <Inline
-      data-peas-slot="storage-dialog-footer"
+      data-sqrzl-slot="storage-dialog-footer"
       justify="end"
       align="center"
       gap="2"

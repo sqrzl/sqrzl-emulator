@@ -9,18 +9,18 @@ google_auth = pytest.importorskip("google.auth.credentials")
 gcs_storage = pytest.importorskip("google.cloud.storage")
 
 
-def _client(peas_server):
+def _client(sqrzl_server):
     return gcs_storage.Client(
-        project="peas",
+        project="sqrzl",
         credentials=google_auth.AnonymousCredentials(),
-        client_options={"api_endpoint": peas_server.api_url},
+        client_options={"api_endpoint": sqrzl_server.api_url},
     )
 
 
-def test_gcs_core_json_workflows(peas_server):
-    peas_server.require_provider("gcs")
-    client = _client(peas_server)
-    bucket_name = peas_server.bucket_name("sdk-gcs-core")
+def test_gcs_core_json_workflows(sqrzl_server):
+    sqrzl_server.require_provider("gcs")
+    client = _client(sqrzl_server)
+    bucket_name = sqrzl_server.bucket_name("sdk-gcs-core")
     blob_name = "folder/hello.txt"
 
     bucket = client.bucket(bucket_name)
@@ -40,10 +40,10 @@ def test_gcs_core_json_workflows(peas_server):
     bucket.delete()
 
 
-def test_gcs_resumable_upload_workflow(peas_server):
-    peas_server.require_provider("gcs")
-    client = _client(peas_server)
-    bucket_name = peas_server.bucket_name("sdk-gcs-resumable")
+def test_gcs_resumable_upload_workflow(sqrzl_server):
+    sqrzl_server.require_provider("gcs")
+    client = _client(sqrzl_server)
+    bucket_name = sqrzl_server.bucket_name("sdk-gcs-resumable")
     blob_name = "large/resumable.txt"
 
     bucket = client.bucket(bucket_name)

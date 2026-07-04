@@ -382,7 +382,7 @@ mod tests {
 
     fn temp_storage() -> Arc<dyn Storage> {
         let dir =
-            std::env::temp_dir().join(format!("peas-list-versions-test-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sqrzl-list-versions-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -397,7 +397,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -411,7 +411,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -1241,7 +1241,7 @@ mod tests {
         let storage = temp_storage();
         storage.create_bucket("bucket".to_string()).unwrap();
 
-        let boundary = "----peas-boundary";
+        let boundary = "----sqrzl-boundary";
         let request = browser_upload_request(
             boundary,
             "upload.txt",
@@ -1273,7 +1273,7 @@ mod tests {
         storage.create_bucket("bucket".to_string()).unwrap();
 
         let request = browser_upload_request(
-            "----peas-boundary",
+            "----sqrzl-boundary",
             "binary.bin",
             "application/octet-stream",
             "binary.bin",
@@ -1306,7 +1306,7 @@ mod tests {
 
         let payload = b"line one\r\nline two\r\n\r\n ";
         let request = browser_upload_request(
-            "----peas-boundary",
+            "----sqrzl-boundary",
             "whitespace.txt",
             "text/plain",
             "whitespace.txt",
@@ -1389,7 +1389,7 @@ mod tests {
         .expect("delete request should respond");
         assert_eq!(delete_response.status(), StatusCode::FORBIDDEN);
 
-        let boundary = "----peas-boundary";
+        let boundary = "----sqrzl-boundary";
         let body = format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nupload.txt\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.txt\"\r\nContent-Type: text/plain\r\n\r\nbrowser upload\r\n--{boundary}--\r\n"
         );

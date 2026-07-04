@@ -448,7 +448,7 @@ mod tests {
 
     fn temp_storage() -> Arc<dyn Storage> {
         let dir =
-            std::env::temp_dir().join(format!("peas-lifecycle-test-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("sqrzl-lifecycle-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }

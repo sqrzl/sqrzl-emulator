@@ -94,15 +94,15 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Build container image
-        run: docker build -t peas-emulator:smoke .
+        run: docker build -t sqrzl-emulator:smoke .
 
       - name: Start container
         run: |
           docker run --rm -d \
-            --name peas-emulator-smoke \
+            --name sqrzl-emulator-smoke \
             -p 9000:9000 \
             -p 9001:9001 \
-            peas-emulator:smoke
+            sqrzl-emulator:smoke
 
       - name: Wait for health
         run: |
@@ -112,7 +112,7 @@ jobs:
             fi
             sleep 1
           done
-          docker logs peas-emulator-smoke
+          docker logs sqrzl-emulator-smoke
           exit 1
 
       - name: Set up Python
@@ -127,28 +127,28 @@ jobs:
 
       - name: Run S3 SDK container smoke
         env:
-          PEAS_API_URL: http://127.0.0.1:9000
-          PEAS_SDK_PROVIDERS: s3
+          SQRZL_API_URL: http://127.0.0.1:9000
+          SQRZL_SDK_PROVIDERS: s3
         run: python -m pytest sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows
 
       - name: Run GCS SDK container smoke
         env:
-          PEAS_API_URL: http://127.0.0.1:9000
-          PEAS_SDK_PROVIDERS: gcs
+          SQRZL_API_URL: http://127.0.0.1:9000
+          SQRZL_SDK_PROVIDERS: gcs
         run: python -m pytest sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows
 
       - name: Run Azure SDK container smoke
         env:
-          PEAS_API_URL: http://127.0.0.1:9000
-          PEAS_SDK_PROVIDERS: azure
+          SQRZL_API_URL: http://127.0.0.1:9000
+          SQRZL_SDK_PROVIDERS: azure
         run: python -m pytest sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows
 
       - name: Run OCI SDK container smoke
         env:
-          PEAS_API_URL: http://127.0.0.1:9000
-          PEAS_SDK_PROVIDERS: oci
+          SQRZL_API_URL: http://127.0.0.1:9000
+          SQRZL_SDK_PROVIDERS: oci
         run: python -m pytest sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows
 
       - name: Stop container
         if: always()
-        run: docker rm -f peas-emulator-smoke || true
+        run: docker rm -f sqrzl-emulator-smoke || true

@@ -1,8 +1,8 @@
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
-use peas_emulator::models::object::compute_etag;
-use peas_emulator::utils::xml::{parse_acl_xml, tagging_xml};
+use sqrzl_emulator::models::object::compute_etag;
+use sqrzl_emulator::utils::xml::{parse_acl_xml, tagging_xml};
 use std::collections::HashMap;
 use std::hint::black_box;
 

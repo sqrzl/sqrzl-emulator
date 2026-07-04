@@ -229,7 +229,7 @@ fn get_acl(
     match tokio::task::block_in_place(|| bucket_service::get_bucket_acl(storage.as_ref(), bucket)) {
         Ok(acl) => {
             let owner = crate::models::policy::Owner {
-                id: "peas-emulator".to_string(),
+                id: "sqrzl-emulator".to_string(),
                 display_name: "S3 Emulator".to_string(),
             };
             bucket_xml_response(

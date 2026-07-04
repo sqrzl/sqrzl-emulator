@@ -1,8 +1,8 @@
 use criterion::{
     criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
-use peas_emulator::models::Object;
-use peas_emulator::storage::{FilesystemStorage, Storage};
+use sqrzl_emulator::models::Object;
+use sqrzl_emulator::storage::{FilesystemStorage, Storage};
 use std::hint::black_box;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -11,7 +11,7 @@ use uuid::Uuid;
 mod criterion_config;
 
 fn temp_path() -> PathBuf {
-    std::env::temp_dir().join(format!("peas_bench_tier2_{}", Uuid::new_v4()))
+    std::env::temp_dir().join(format!("sqrzl_bench_tier2_{}", Uuid::new_v4()))
 }
 
 fn bench_put_object(c: &mut Criterion) {

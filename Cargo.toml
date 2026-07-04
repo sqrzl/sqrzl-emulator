@@ -1,5 +1,5 @@
 [package]
-name = "peas-emulator"
+name = "sqrzl-emulator"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.96"
@@ -7,9 +7,9 @@ authors = ["smiggleworth"]
 license = "Apache-2.0"
 readme = "README.md"
 description = "A multi-provider blob and object storage emulator for S3, Azure Blob, GCS, and OCI-compatible workflows"
-homepage = "https://github.com/sqrzl/peas-emulator"
-documentation = "https://docs.rs/peas-emulator"
-repository = "https://github.com/sqrzl/peas-emulator"
+homepage = "https://github.com/sqrzl/sqrzl-emulator"
+documentation = "https://docs.rs/sqrzl-emulator"
+repository = "https://github.com/sqrzl/sqrzl-emulator"
 keywords = ["s3", "azure", "gcs", "oci", "storage", "emulator"]
 
 [dependencies]
@@ -87,7 +87,7 @@ name = "tier4_integration_oci_multipart_stream"
 harness = false
 
 [[bin]]
-name = "peas-emulator"
+name = "sqrzl-emulator"
 path = "src/main.rs"
 
 [profile.release]

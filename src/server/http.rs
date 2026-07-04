@@ -37,7 +37,7 @@ impl fmt::Display for RequestParseError {
                 max_request_bytes, ..
             } => write!(
                 f,
-                "request body exceeds MAX_REQUEST_BYTES ({max_request_bytes} bytes)"
+                "request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)"
             ),
         }
     }

@@ -154,7 +154,8 @@ fn payload_too_large_response(
     headers: &HeaderMap,
     max_request_bytes: usize,
 ) -> Response<Body> {
-    let message = format!("Request body exceeds MAX_REQUEST_BYTES ({max_request_bytes} bytes)");
+    let message =
+        format!("Request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)");
     let path = uri.path();
     let host = headers
         .get("host")
@@ -240,7 +241,7 @@ mod adapter_routing_tests {
     use std::fs;
 
     fn temp_storage() -> Arc<dyn Storage> {
-        let dir = std::env::temp_dir().join(format!("peas-routing-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sqrzl-routing-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -255,7 +256,7 @@ mod adapter_routing_tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 

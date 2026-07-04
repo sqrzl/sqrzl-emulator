@@ -5,17 +5,17 @@ use http_body_util::BodyExt;
 use http_body_util::Full;
 type Body = Full<Bytes>;
 use hyper::{Request as HyperRequest, Response};
-use peas_emulator::providers::AdapterRegistry;
-use peas_emulator::server::RequestExt;
-use peas_emulator::storage::{FilesystemStorage, Storage};
-use peas_emulator::Config;
+use sqrzl_emulator::providers::AdapterRegistry;
+use sqrzl_emulator::server::RequestExt;
+use sqrzl_emulator::storage::{FilesystemStorage, Storage};
+use sqrzl_emulator::Config;
 use std::fs;
 use std::sync::Arc;
 
 pub const AZURE_VERSION: &str = "2023-11-03";
 
 pub fn temp_storage() -> Arc<dyn Storage> {
-    let dir = std::env::temp_dir().join(format!("peas-interop-rust-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("sqrzl-interop-rust-{}", uuid::Uuid::new_v4()));
     let _ = fs::create_dir_all(&dir);
     Arc::new(FilesystemStorage::new(dir))
 }
@@ -30,7 +30,7 @@ pub fn auth_disabled() -> Arc<Config> {
         lifecycle_interval: std::time::Duration::from_secs(3600),
         api_port: 9000,
         ui_port: 9001,
-        max_request_bytes: peas_emulator::config::DEFAULT_MAX_REQUEST_BYTES,
+        max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
     })
 }
 
@@ -44,7 +44,7 @@ pub fn auth_enabled(key: &str, secret: &str) -> Arc<Config> {
         lifecycle_interval: std::time::Duration::from_secs(3600),
         api_port: 9000,
         ui_port: 9001,
-        max_request_bytes: peas_emulator::config::DEFAULT_MAX_REQUEST_BYTES,
+        max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
     })
 }
 

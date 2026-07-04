@@ -11,7 +11,7 @@ export default function StoragePageHeader({
 }) {
   return (
     <PageHeader
-      data-peas-slot="storage-page-header"
+      data-sqrzl-slot="storage-page-header"
       title={title}
       description={description}
       actions={actions}

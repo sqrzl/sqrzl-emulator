@@ -1,6 +1,6 @@
-# Peas Admin UI
+# Sqrzl Admin UI
 
-This directory contains the Peas admin SPA and its generated admin API client.
+This directory contains the Sqrzl admin SPA and its generated admin API client.
 
 ## Required Stack
 
@@ -55,7 +55,7 @@ npm run gen        # Regenerate src/adapters/api.g.ts from public/openapi.yml
   projection lag, stale data, retries, and manual refresh instead of hiding
   everything behind one loading state.
 - **Styling:** Import the theme once in `src/styles.css`. App CSS should use
-  `--ak-*` tokens and Peas-owned `data-peas-slot` hooks for local polish.
+  `--ak-*` tokens and Sqrzl-owned `data-sqrzl-slot` hooks for local polish.
 - **Charts:** Import chart components from `@askrjs/charts/components`; chart
   CSS is loaded from `@askrjs/charts/default`.
 - **Vite plugin:** `askr()` from `@askrjs/vite` handles JSX transform. Do not
@@ -119,4 +119,4 @@ npm run gen        # Regenerate src/adapters/api.g.ts from public/openapi.yml
 ## Related Docs
 
 - [UI quick start and architecture](README.md)
-- [Storage UI guidelines](../docs/peas-storage-ui-guidelines.md)
+- [Storage UI guidelines](../docs/sqrzl-storage-ui-guidelines.md)

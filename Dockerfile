@@ -30,7 +30,7 @@ RUN apt-get update \
     pkg-config \
   && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/peas-emulator
+WORKDIR /usr/src/sqrzl-emulator
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
@@ -40,9 +40,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/usr/local/cargo/git \
   cargo build --release --locked
 
-COPY --from=frontend /ui/dist /usr/src/peas-emulator/ui/dist/
+COPY --from=frontend /ui/dist /usr/src/sqrzl-emulator/ui/dist/
 
-RUN strip target/release/peas-emulator || true
+RUN strip target/release/sqrzl-emulator || true
 
 FROM debian:trixie-slim AS runtime-fs
 
@@ -54,11 +54,11 @@ FROM gcr.io/distroless/cc-debian13 AS runtime
 WORKDIR /app
 
 COPY --from=runtime-fs --chown=65532:65532 /app/blobs /app/blobs
-COPY --from=backend /usr/src/peas-emulator/target/release/peas-emulator /app/peas-emulator
+COPY --from=backend /usr/src/sqrzl-emulator/target/release/sqrzl-emulator /app/sqrzl-emulator
 COPY --from=frontend /ui/dist /app/ui/dist
 
-ENV BLOBS_PATH=/app/blobs \
-  PEAS_LOG_FORMAT=text
+ENV SQRZL_BLOBS_PATH=/app/blobs \
+  SQRZL_LOG_FORMAT=text
 
 USER 65532:65532
 
@@ -66,4 +66,4 @@ EXPOSE 9000 9001
 
 VOLUME ["/app/blobs"]
 
-ENTRYPOINT ["/app/peas-emulator"]
+ENTRYPOINT ["/app/sqrzl-emulator"]

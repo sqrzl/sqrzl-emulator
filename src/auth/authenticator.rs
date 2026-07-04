@@ -7,7 +7,7 @@
 //! ## Configuration
 //!
 //! Authentication configuration is loaded from the global `Config` in `config.rs`.
-//! Credentials are read from `PEAS_ACCESS_KEY_ID` and `PEAS_SECRET_ACCESS_KEY`
+//! Credentials are read from `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`
 //! environment variables during application startup.
 //!
 //! If both variables are not set, authentication is disabled and all requests
@@ -69,7 +69,7 @@ impl AuthInfo {
     pub fn from_request(req: &dyn HttpRequestLike, config: &Config) -> Self {
         if !config.enforce_auth {
             // Auth is disabled, treat as authenticated with default principal
-            return Self::authenticated("peas-emulator".to_string());
+            return Self::authenticated("sqrzl-emulator".to_string());
         }
 
         // Try to extract credentials from Authorization header
@@ -189,7 +189,7 @@ mod tests {
             lifecycle_interval: Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         }
     }
 

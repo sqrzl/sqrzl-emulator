@@ -8,9 +8,9 @@ type Body = Full<Bytes>;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use peas_emulator::server::Server;
-use peas_emulator::storage::{FilesystemStorage, Storage};
-use peas_emulator::Config;
+use sqrzl_emulator::server::Server;
+use sqrzl_emulator::storage::{FilesystemStorage, Storage};
+use sqrzl_emulator::Config;
 use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -44,14 +44,14 @@ pub fn auth_disabled() -> Config {
         lifecycle_interval: Duration::from_secs(3600),
         api_port: 9000,
         ui_port: 9001,
-        max_request_bytes: peas_emulator::config::DEFAULT_MAX_REQUEST_BYTES,
+        max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
     }
 }
 
 pub struct LiveServer {
     pub base_url: String,
     pub client: Client<HttpConnector, Body>,
-    task: JoinHandle<peas_emulator::Result<()>>,
+    task: JoinHandle<sqrzl_emulator::Result<()>>,
     storage_dir: PathBuf,
     default_admin_authorization: Option<String>,
 }
@@ -59,7 +59,7 @@ pub struct LiveServer {
 impl LiveServer {
     pub async fn start_api(auth_config: Config) -> Self {
         let api_port = reserve_port();
-        let storage_dir = temp_storage_dir("peas-bench-api");
+        let storage_dir = temp_storage_dir("sqrzl-bench-api");
         let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&storage_dir));
         let config = Arc::new(Config {
             api_port,

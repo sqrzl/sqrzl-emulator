@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
-  title: Peas Emulator Admin API
+  title: Sqrzl Emulator Admin API
   version: 1.0.0
   license:
     name: Apache License 2.0
     identifier: Apache-2.0
-  summary: Versioned storage administration API for the Peas emulator.
+  summary: Versioned storage administration API for the Sqrzl emulator.
   description: >-
     The admin API provides a RESTful JSON control plane for browsing and
     manipulating emulator-backed storage resources. It is intentionally
@@ -771,7 +771,7 @@ components:
     AdminSessionCookie:
       type: apiKey
       in: cookie
-      name: peas_admin_session
+      name: sqrzl_admin_session
       description: HttpOnly JWT session cookie issued by /auth/login.
   parameters:
     BucketName:

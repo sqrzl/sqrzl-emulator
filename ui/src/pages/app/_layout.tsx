@@ -23,7 +23,7 @@ export default function AppLayout({ children }: { children?: unknown }) {
         <Container>
           <Navbar breakpoint="md" aria-label="Application navigation">
             <NavBrand>
-              <Link href={adminBucketsPath()}>Peas</Link>
+              <Link href={adminBucketsPath()}>Sqrzl</Link>
             </NavBrand>
             <NavGroup align="end">
               <ThemeToggle

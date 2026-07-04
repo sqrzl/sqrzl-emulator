@@ -9,12 +9,12 @@ boto3 = pytest.importorskip("boto3")
 botocore_config = pytest.importorskip("botocore.config")
 
 
-def _client(peas_server):
+def _client(sqrzl_server):
     return boto3.client(
         "s3",
-        endpoint_url=peas_server.api_url,
-        aws_access_key_id=peas_server.access_key_id,
-        aws_secret_access_key=peas_server.secret_access_key,
+        endpoint_url=sqrzl_server.api_url,
+        aws_access_key_id=sqrzl_server.access_key_id,
+        aws_secret_access_key=sqrzl_server.secret_access_key,
         region_name="us-east-1",
         config=botocore_config.Config(
             signature_version="s3v4",
@@ -39,10 +39,10 @@ def _empty_versioned_bucket(client, bucket: str) -> None:
         )
 
 
-def test_s3_core_bucket_object_and_metadata_workflows(peas_server):
-    peas_server.require_provider("s3")
-    client = _client(peas_server)
-    bucket = peas_server.bucket_name("sdk-s3-core")
+def test_s3_core_bucket_object_and_metadata_workflows(sqrzl_server):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-core")
     key = "folder/hello.txt"
 
     client.create_bucket(Bucket=bucket)
@@ -68,10 +68,10 @@ def test_s3_core_bucket_object_and_metadata_workflows(peas_server):
     client.delete_bucket(Bucket=bucket)
 
 
-def test_s3_multipart_and_versioning_workflows(peas_server):
-    peas_server.require_provider("s3")
-    client = _client(peas_server)
-    bucket = peas_server.bucket_name("sdk-s3-multipart")
+def test_s3_multipart_and_versioning_workflows(sqrzl_server):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-multipart")
     key = "multi.txt"
 
     client.create_bucket(Bucket=bucket)

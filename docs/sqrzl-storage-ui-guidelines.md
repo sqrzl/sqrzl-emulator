@@ -1,6 +1,6 @@
-# Peas Storage UI Guidelines
+# Sqrzl Storage UI Guidelines
 
-These are the product-level presentation rules for the Peas admin UI. Use
+These are the product-level presentation rules for the Sqrzl admin UI. Use
 [`ui/AGENTS.md`](../ui/AGENTS.md) for ownership and workflow; use this file for
 visual, layout, and interaction rules.
 
@@ -8,8 +8,8 @@ visual, layout, and interaction rules.
 
 - Keep storage screens operational and quiet: fast scanning, direct actions,
   minimal chrome.
-- Use Askr primitives, themes, and tokens as the base. Keep Peas CSS to small
-  storage-specific polish through `data-peas-slot`.
+- Use Askr primitives, themes, and tokens as the base. Keep Sqrzl CSS to small
+  storage-specific polish through `data-sqrzl-slot`.
 - Do not clone Askr behavior or override Askr-owned `data-slot` styling to hide
   framework bugs. If a bug is real, document it in [`askr-bug.md`](../askr-bug.md).
 
@@ -43,7 +43,7 @@ visual, layout, and interaction rules.
 - No centered modal headings.
 - No `ButtonGroup` in storage dialog footers.
 - No local Askr primitive clones.
-- No Peas CSS targeting Askr `data-slot` except narrow descendants inside
-  Peas-owned slots.
+- No Sqrzl CSS targeting Askr `data-slot` except narrow descendants inside
+  Sqrzl-owned slots.
 - Desktop and mobile browser QA covers at least one create dialog, one
   destructive dialog, and one nested bucket path.

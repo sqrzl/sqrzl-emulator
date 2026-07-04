@@ -37,7 +37,7 @@
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "Supported by PEAS routing tests, but SDK certification uses path-style addressing for deterministic localhost endpoints."
+          "Supported by SQRZL routing tests, but SDK certification uses path-style addressing for deterministic localhost endpoints."
         ]
       },
       "sigv4": {
@@ -136,7 +136,7 @@
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "SSE request headers are validated and surfaced, but PEAS does not perform provider-equivalent encryption key management."
+          "SSE request headers are validated and surfaced, but SQRZL does not perform provider-equivalent encryption key management."
         ]
       },
       "bucket_post_ops": {

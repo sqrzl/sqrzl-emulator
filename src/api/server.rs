@@ -117,7 +117,7 @@ async fn handle_ui_request(
         return Ok(serve_static_content(Path::new(static_dir), &path).await);
     } else {
         let default_content =
-            "<html><body><h1>Peas Emulator</h1><p>Running in headless mode</p></body></html>";
+            "<html><body><h1>Sqrzl Emulator</h1><p>Running in headless mode</p></body></html>";
         Ok(ResponseBuilder::new(StatusCode::OK)
             .content_type("text/html; charset=utf-8")
             .body_str(default_content)
@@ -139,7 +139,7 @@ fn admin_payload_too_large_response(max_request_bytes: usize) -> Response<Body> 
         error: "Payload too large".to_string(),
         code: "PayloadTooLarge".to_string(),
         details: Some(format!(
-            "Request body exceeds MAX_REQUEST_BYTES ({max_request_bytes} bytes)"
+            "Request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)"
         )),
     };
 
@@ -256,7 +256,7 @@ fn handle_admin_logout(req: Request<RequestBody>) -> Response<Body> {
     response.headers_mut().insert(
         "set-cookie",
         hyper::header::HeaderValue::from_static(
-            "peas_admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+            "sqrzl_admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
         ),
     );
     response.headers_mut().insert(
@@ -345,7 +345,7 @@ mod tests {
     use std::fs;
 
     fn temp_static_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("peas-ui-static-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sqrzl-ui-static-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("temp static dir should be created");
         dir
     }
@@ -356,7 +356,7 @@ mod tests {
         fs::create_dir_all(static_dir.join("assets")).expect("asset dir should be created");
         fs::write(
             static_dir.join("assets/app.js"),
-            "export const app = 'peas';",
+            "export const app = 'sqrzl';",
         )
         .expect("asset should be written");
 
@@ -380,7 +380,7 @@ mod tests {
             .await
             .expect("body should read")
             .to_bytes();
-        assert_eq!(body.as_ref(), b"export const app = 'peas';");
+        assert_eq!(body.as_ref(), b"export const app = 'sqrzl';");
     }
 
     #[tokio::test]

@@ -1,13 +1,13 @@
 use std::io::IsTerminal;
 use std::sync::Arc;
 
-use peas_emulator::api::server::start_ui_server;
-use peas_emulator::config::LogFormat;
-use peas_emulator::error::Result;
-use peas_emulator::server::Server;
-use peas_emulator::storage::{FilesystemStorage, Storage};
-use peas_emulator::utils::validation::validate_bucket_name;
-use peas_emulator::{Config, Error};
+use sqrzl_emulator::api::server::start_ui_server;
+use sqrzl_emulator::config::LogFormat;
+use sqrzl_emulator::error::Result;
+use sqrzl_emulator::server::Server;
+use sqrzl_emulator::storage::{FilesystemStorage, Storage};
+use sqrzl_emulator::utils::validation::validate_bucket_name;
+use sqrzl_emulator::{Config, Error};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
     // Initialize structured logging
     init_logging(log_format);
 
-    tracing::info!(version = "0.1.0", "Peas Emulator started");
+    tracing::info!(version = "0.1.0", "Sqrzl Emulator started");
     tracing::info!("Provider-compatible object storage emulator");
 
     // Log authentication status
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
 
     // Start lifecycle executor
     let lifecycle_executor =
-        peas_emulator::LifecycleExecutor::new(storage.clone(), config.lifecycle_interval);
+        sqrzl_emulator::LifecycleExecutor::new(storage.clone(), config.lifecycle_interval);
     let _lifecycle_handle = lifecycle_executor.start();
     tracing::info!("Lifecycle executor started");
 
@@ -64,7 +64,7 @@ fn init_logging(log_format: LogFormat) {
     match log_format {
         LogFormat::Json => {
             let env_filter = tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("peas_emulator=info".parse().unwrap());
+                .add_directive("sqrzl_emulator=info".parse().unwrap());
             tracing_subscriber::fmt()
                 .json()
                 .with_env_filter(env_filter)
@@ -75,7 +75,7 @@ fn init_logging(log_format: LogFormat) {
         }
         LogFormat::Text => {
             let env_filter = tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("peas_emulator=info".parse().unwrap());
+                .add_directive("sqrzl_emulator=info".parse().unwrap());
             tracing_subscriber::fmt()
                 .compact()
                 .with_env_filter(env_filter)

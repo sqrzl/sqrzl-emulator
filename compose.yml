@@ -1,18 +1,18 @@
 services:
-  peas:
-    container_name: peas
-    hostname: peas
+  sqrzl:
+    container_name: sqrzl
+    hostname: sqrzl
     build: .
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      BLOBS_PATH: /app/blobs
-      PEAS_LOG_FORMAT: text
-      ACCESS_KEY_ID: admin
-      SECRET_ACCESS_KEY: easy-peasy
+      SQRZL_BLOBS_PATH: /app/blobs
+      SQRZL_LOG_FORMAT: text
+      SQRZL_ACCESS_KEY_ID: admin
+      SQRZL_SECRET_ACCESS_KEY: sqrzl-secret
     volumes:
-      - peas-blobs:/app/blobs
+      - sqrzl-blobs:/app/blobs
 
 volumes:
-  peas-blobs:
+  sqrzl-blobs:

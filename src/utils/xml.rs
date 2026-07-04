@@ -20,8 +20,8 @@ pub fn list_buckets_xml(buckets: &[Bucket]) -> String {
         r#"{}
 <ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
     <Owner>
-        <ID>peas-emulator</ID>
-        <DisplayName>Peas Emulator</DisplayName>
+        <ID>sqrzl-emulator</ID>
+        <DisplayName>Sqrzl Emulator</DisplayName>
     </Owner>
     <Buckets>"#,
         xml_declaration()
@@ -251,7 +251,7 @@ pub fn list_objects_v2_xml(
                     escape_xml(&obj.etag),
                     obj.size,
                     if fetch_owner {
-                        "<Owner><ID>peas-emulator</ID><DisplayName>Peas Emulator</DisplayName></Owner>\n    "
+                        "<Owner><ID>sqrzl-emulator</ID><DisplayName>Sqrzl Emulator</DisplayName></Owner>\n    "
                     } else {
                         ""
                     },
@@ -339,8 +339,8 @@ pub fn list_versions_xml(
     <ETag>{}</ETag>
     <Size>{}</Size>
     <Owner>
-      <ID>peas-emulator</ID>
-      <DisplayName>Peas Emulator</DisplayName>
+      <ID>sqrzl-emulator</ID>
+      <DisplayName>Sqrzl Emulator</DisplayName>
     </Owner>
     <StorageClass>{}</StorageClass>
   </Version>"#,
@@ -839,7 +839,7 @@ mod tests {
 
         // Assert
         let expected = format!(
-            "{}\n<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n    <Owner>\n        <ID>peas-emulator</ID>\n        <DisplayName>Peas Emulator</DisplayName>\n    </Owner>\n    <Buckets>\n    </Buckets>\n</ListAllMyBucketsResult>",
+            "{}\n<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n    <Owner>\n        <ID>sqrzl-emulator</ID>\n        <DisplayName>Sqrzl Emulator</DisplayName>\n    </Owner>\n    <Buckets>\n    </Buckets>\n</ListAllMyBucketsResult>",
             xml_declaration()
         );
 
@@ -858,7 +858,7 @@ mod tests {
         let xml = list_buckets_xml(&buckets);
         // Assert
         let expected = format!(
-            "{}\n<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n    <Owner>\n        <ID>peas-emulator</ID>\n        <DisplayName>Peas Emulator</DisplayName>\n    </Owner>\n    <Buckets>\n        <Bucket>\n            <Name>alpha</Name>\n            <CreationDate>2024-01-02T03:04:05+00:00</CreationDate>\n        </Bucket>\n        <Bucket>\n            <Name>beta</Name>\n            <CreationDate>2024-02-03T04:05:06+00:00</CreationDate>\n        </Bucket>\n    </Buckets>\n</ListAllMyBucketsResult>",
+            "{}\n<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n    <Owner>\n        <ID>sqrzl-emulator</ID>\n        <DisplayName>Sqrzl Emulator</DisplayName>\n    </Owner>\n    <Buckets>\n        <Bucket>\n            <Name>alpha</Name>\n            <CreationDate>2024-01-02T03:04:05+00:00</CreationDate>\n        </Bucket>\n        <Bucket>\n            <Name>beta</Name>\n            <CreationDate>2024-02-03T04:05:06+00:00</CreationDate>\n        </Bucket>\n    </Buckets>\n</ListAllMyBucketsResult>",
             xml_declaration()
         );
 

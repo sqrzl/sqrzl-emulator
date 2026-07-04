@@ -11,17 +11,17 @@ export default function StorageDialogHeader({
 }) {
   return (
     <Stack
-      data-peas-slot="storage-dialog-header"
+      data-sqrzl-slot="storage-dialog-header"
       align="stretch"
       gap="1"
       width="full"
     >
       <DialogTitle asChild>
-        <h2 data-peas-slot="storage-dialog-title">{title}</h2>
+        <h2 data-sqrzl-slot="storage-dialog-title">{title}</h2>
       </DialogTitle>
       <Show when={children}>
         <DialogDescription asChild>
-          <Stack data-peas-slot="storage-dialog-description" gap="1">
+          <Stack data-sqrzl-slot="storage-dialog-description" gap="1">
             {children}
           </Stack>
         </DialogDescription>

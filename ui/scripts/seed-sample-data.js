@@ -2,13 +2,13 @@
 
 const DEFAULT_ADMIN_URL = 'http://127.0.0.1:9001/admin/v1';
 const DEFAULT_USERNAME = 'admin';
-const DEFAULT_PASSWORD = 'easy-peasy';
+const DEFAULT_PASSWORD = 'sqrzl-secret';
 
-const sampleBuckets = ['peas-demo', 'peas-logs', 'peas-archive'];
+const sampleBuckets = ['sqrzl-demo', 'sqrzl-logs', 'sqrzl-archive'];
 
 const sampleObjects = [
   {
-    bucket: 'peas-demo',
+    bucket: 'sqrzl-demo',
     key: 'readme.md',
     contentType: 'text/markdown; charset=utf-8',
     metadata: {
@@ -16,7 +16,7 @@ const sampleObjects = [
       environment: 'local',
       purpose: 'ui-demo',
     },
-    body: `# Peas demo bucket
+    body: `# Sqrzl demo bucket
 
 This bucket gives the local admin UI enough objects to browse.
 
@@ -26,7 +26,7 @@ This bucket gives the local admin UI enough objects to browse.
 `,
   },
   {
-    bucket: 'peas-demo',
+    bucket: 'sqrzl-demo',
     key: 'docs/admin-api.md',
     contentType: 'text/markdown; charset=utf-8',
     metadata: {
@@ -41,7 +41,7 @@ This file exists so the browser has a nested markdown object to inspect.
 `,
   },
   {
-    bucket: 'peas-demo',
+    bucket: 'sqrzl-demo',
     key: 'docs/changelog-2026-06.md',
     contentType: 'text/markdown; charset=utf-8',
     metadata: {
@@ -57,7 +57,7 @@ This file exists so the browser has a nested markdown object to inspect.
 `,
   },
   {
-    bucket: 'peas-demo',
+    bucket: 'sqrzl-demo',
     key: 'reports/2026/q2/storage-summary.csv',
     contentType: 'text/csv; charset=utf-8',
     metadata: {
@@ -66,13 +66,13 @@ This file exists so the browser has a nested markdown object to inspect.
       report: 'storage-summary',
     },
     body: `bucket,objects,total_bytes,last_checked
-peas-demo,6,4200,2026-06-28T14:30:00Z
-peas-logs,3,1180,2026-06-28T14:30:00Z
-peas-archive,3,2600,2026-06-28T14:30:00Z
+sqrzl-demo,6,4200,2026-06-28T14:30:00Z
+sqrzl-logs,3,1180,2026-06-28T14:30:00Z
+sqrzl-archive,3,2600,2026-06-28T14:30:00Z
 `,
   },
   {
-    bucket: 'peas-demo',
+    bucket: 'sqrzl-demo',
     key: 'reports/2026/q2/inventory.json',
     contentType: 'application/json; charset=utf-8',
     metadata: {
@@ -84,9 +84,9 @@ peas-archive,3,2600,2026-06-28T14:30:00Z
       {
         generated_at: '2026-06-28T14:30:00Z',
         buckets: [
-          { name: 'peas-demo', objects: 6, status: 'active' },
-          { name: 'peas-logs', objects: 3, status: 'active' },
-          { name: 'peas-archive', objects: 3, status: 'cold' },
+          { name: 'sqrzl-demo', objects: 6, status: 'active' },
+          { name: 'sqrzl-logs', objects: 3, status: 'active' },
+          { name: 'sqrzl-archive', objects: 3, status: 'cold' },
         ],
       },
       null,
@@ -94,15 +94,15 @@ peas-archive,3,2600,2026-06-28T14:30:00Z
     ),
   },
   {
-    bucket: 'peas-demo',
-    key: 'images/peas-mark.svg',
+    bucket: 'sqrzl-demo',
+    key: 'images/sqrzl-mark.svg',
     contentType: 'image/svg+xml; charset=utf-8',
     metadata: {
       owner: 'design',
       environment: 'local',
       asset: 'mark',
     },
-    body: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 96" role="img" aria-label="Peas sample mark">
+    body: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 96" role="img" aria-label="Sqrzl sample mark">
   <rect width="160" height="96" rx="8" fill="#f8fafc"/>
   <path d="M24 50c21-28 56-34 112-18" fill="none" stroke="#334155" stroke-width="8" stroke-linecap="round"/>
   <circle cx="46" cy="54" r="12" fill="#16a34a"/>
@@ -112,7 +112,7 @@ peas-archive,3,2600,2026-06-28T14:30:00Z
 `,
   },
   {
-    bucket: 'peas-logs',
+    bucket: 'sqrzl-logs',
     key: '2026/06/28/startup.log',
     contentType: 'text/plain; charset=utf-8',
     metadata: {
@@ -120,13 +120,13 @@ peas-archive,3,2600,2026-06-28T14:30:00Z
       environment: 'local',
       stream: 'startup',
     },
-    body: `2026-06-28T14:20:02Z INFO peas-emulator starting
+    body: `2026-06-28T14:20:02Z INFO sqrzl-emulator starting
 2026-06-28T14:20:02Z INFO api listening on 0.0.0.0:9000
 2026-06-28T14:20:02Z INFO ui listening on 0.0.0.0:9001
 `,
   },
   {
-    bucket: 'peas-logs',
+    bucket: 'sqrzl-logs',
     key: '2026/06/28/admin-access.log',
     contentType: 'text/plain; charset=utf-8',
     metadata: {
@@ -136,11 +136,11 @@ peas-archive,3,2600,2026-06-28T14:30:00Z
     },
     body: `2026-06-28T14:21:17Z GET /admin/v1/auth/session 200
 2026-06-28T14:22:04Z GET /admin/v1/buckets 200
-2026-06-28T14:22:18Z GET /admin/v1/buckets/peas-demo/objects 200
+2026-06-28T14:22:18Z GET /admin/v1/buckets/sqrzl-demo/objects 200
 `,
   },
   {
-    bucket: 'peas-logs',
+    bucket: 'sqrzl-logs',
     key: '2026/06/27/lifecycle.log',
     contentType: 'text/plain; charset=utf-8',
     metadata: {
@@ -153,7 +153,7 @@ peas-archive,3,2600,2026-06-28T14:30:00Z
 `,
   },
   {
-    bucket: 'peas-archive',
+    bucket: 'sqrzl-archive',
     key: 'backups/2026-06-28/manifest.json',
     contentType: 'application/json; charset=utf-8',
     metadata: {
@@ -176,7 +176,7 @@ peas-archive,3,2600,2026-06-28T14:30:00Z
     ),
   },
   {
-    bucket: 'peas-archive',
+    bucket: 'sqrzl-archive',
     key: 'backups/2026-06-28/checksums.txt',
     contentType: 'text/plain; charset=utf-8',
     metadata: {
@@ -190,7 +190,7 @@ ef2d127de37b942baad06145e54b0c61 inventory.json
 `,
   },
   {
-    bucket: 'peas-archive',
+    bucket: 'sqrzl-archive',
     key: 'exports/users.csv',
     contentType: 'text/csv; charset=utf-8',
     metadata: {
@@ -219,7 +219,7 @@ function normalizeAdminUrl(rawUrl) {
   return url.toString().replace(/\/$/, '');
 }
 
-const adminUrl = normalizeAdminUrl(process.env.PEAS_ADMIN_URL);
+const adminUrl = normalizeAdminUrl(process.env.SQRZL_ADMIN_URL);
 
 function adminEndpoint(path) {
   return `${adminUrl}${path.startsWith('/') ? path : `/${path}`}`;
@@ -228,12 +228,12 @@ function adminEndpoint(path) {
 function adminCredentials() {
   return {
     username:
-      process.env.PEAS_ADMIN_USERNAME ||
-      process.env.ACCESS_KEY_ID ||
+      process.env.SQRZL_ADMIN_USERNAME ||
+      process.env.SQRZL_ACCESS_KEY_ID ||
       DEFAULT_USERNAME,
     password:
-      process.env.PEAS_ADMIN_PASSWORD ||
-      process.env.SECRET_ACCESS_KEY ||
+      process.env.SQRZL_ADMIN_PASSWORD ||
+      process.env.SQRZL_SECRET_ACCESS_KEY ||
       DEFAULT_PASSWORD,
   };
 }

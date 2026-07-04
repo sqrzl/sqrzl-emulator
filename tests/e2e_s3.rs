@@ -100,5 +100,5 @@ async fn should_reject_oversized_upload_given_live_server_when_max_request_bytes
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     let body = text_body(response).await;
     assert!(body.contains("EntityTooLarge"));
-    assert!(body.contains("MAX_REQUEST_BYTES"));
+    assert!(body.contains("SQRZL_MAX_REQUEST_BYTES"));
 }

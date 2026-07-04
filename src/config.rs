@@ -1,4 +1,4 @@
-//! Centralized configuration management for the Peas Emulator.
+//! Centralized configuration management for the Sqrzl Emulator.
 //!
 //! This module is the single source of truth for all environment variables
 //! and configuration options. All other modules should use the types and
@@ -8,23 +8,23 @@ use std::env;
 use std::time::Duration;
 
 // Environment variable names
-const ENV_ACCESS_KEY_ID: &str = "ACCESS_KEY_ID";
-const ENV_SECRET_ACCESS_KEY: &str = "SECRET_ACCESS_KEY";
-const ENV_BLOBS_PATH: &str = "BLOBS_PATH";
-const ENV_LIFECYCLE_HOURS: &str = "LIFECYCLE_HOURS";
-const ENV_API_PORT: &str = "API_PORT";
-const ENV_UI_PORT: &str = "UI_PORT";
-const ENV_ADMIN_AUTH_DISABLED: &str = "ADMIN_AUTH_DISABLED";
-const ENV_MAX_REQUEST_BYTES: &str = "MAX_REQUEST_BYTES";
-const ENV_PEAS_BUCKET_LIST: &str = "PEAS_BUCKET_LIST";
-const ENV_PEAS_LOG_FORMAT: &str = "PEAS_LOG_FORMAT";
+const ENV_SQRZL_ACCESS_KEY_ID: &str = "SQRZL_ACCESS_KEY_ID";
+const ENV_SQRZL_SECRET_ACCESS_KEY: &str = "SQRZL_SECRET_ACCESS_KEY";
+const ENV_SQRZL_BLOBS_PATH: &str = "SQRZL_BLOBS_PATH";
+const ENV_SQRZL_LIFECYCLE_HOURS: &str = "SQRZL_LIFECYCLE_HOURS";
+const ENV_SQRZL_API_PORT: &str = "SQRZL_API_PORT";
+const ENV_SQRZL_UI_PORT: &str = "SQRZL_UI_PORT";
+const ENV_SQRZL_ADMIN_AUTH_DISABLED: &str = "SQRZL_ADMIN_AUTH_DISABLED";
+const ENV_SQRZL_MAX_REQUEST_BYTES: &str = "SQRZL_MAX_REQUEST_BYTES";
+const ENV_SQRZL_BUCKET_LIST: &str = "SQRZL_BUCKET_LIST";
+const ENV_SQRZL_LOG_FORMAT: &str = "SQRZL_LOG_FORMAT";
 
 // Default values
-const DEFAULT_BLOBS_PATH: &str = "./blobs";
-const DEFAULT_LIFECYCLE_HOURS: u64 = 1;
-const DEFAULT_API_PORT: u16 = 9000;
-const DEFAULT_UI_PORT: u16 = 9001;
-pub const DEFAULT_MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
+const DEFAULT_SQRZL_BLOBS_PATH: &str = "./blobs";
+const DEFAULT_SQRZL_LIFECYCLE_HOURS: u64 = 1;
+const DEFAULT_SQRZL_API_PORT: u16 = 9000;
+const DEFAULT_SQRZL_UI_PORT: u16 = 9001;
+pub const DEFAULT_SQRZL_MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 
 /// Logging format for tracing output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,27 +63,28 @@ impl Config {
     where
         F: FnMut(&str) -> Option<String>,
     {
-        let access_key_id = lookup(ENV_ACCESS_KEY_ID);
-        let secret_access_key = lookup(ENV_SECRET_ACCESS_KEY);
-        let blobs_path = lookup(ENV_BLOBS_PATH).unwrap_or_else(|| DEFAULT_BLOBS_PATH.to_string());
+        let access_key_id = lookup(ENV_SQRZL_ACCESS_KEY_ID);
+        let secret_access_key = lookup(ENV_SQRZL_SECRET_ACCESS_KEY);
+        let blobs_path =
+            lookup(ENV_SQRZL_BLOBS_PATH).unwrap_or_else(|| DEFAULT_SQRZL_BLOBS_PATH.to_string());
 
-        let lifecycle_interval_hours = lookup(ENV_LIFECYCLE_HOURS)
+        let lifecycle_interval_hours = lookup(ENV_SQRZL_LIFECYCLE_HOURS)
             .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_LIFECYCLE_HOURS);
-        let api_port = lookup(ENV_API_PORT)
+            .unwrap_or(DEFAULT_SQRZL_LIFECYCLE_HOURS);
+        let api_port = lookup(ENV_SQRZL_API_PORT)
             .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(DEFAULT_API_PORT);
-        let ui_port = lookup(ENV_UI_PORT)
+            .unwrap_or(DEFAULT_SQRZL_API_PORT);
+        let ui_port = lookup(ENV_SQRZL_UI_PORT)
             .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(DEFAULT_UI_PORT);
-        let admin_auth_disabled = lookup(ENV_ADMIN_AUTH_DISABLED)
+            .unwrap_or(DEFAULT_SQRZL_UI_PORT);
+        let admin_auth_disabled = lookup(ENV_SQRZL_ADMIN_AUTH_DISABLED)
             .as_deref()
             .map(parse_bool_env)
             .unwrap_or(false);
-        let max_request_bytes = lookup(ENV_MAX_REQUEST_BYTES)
+        let max_request_bytes = lookup(ENV_SQRZL_MAX_REQUEST_BYTES)
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|value| *value > 0)
-            .unwrap_or(DEFAULT_MAX_REQUEST_BYTES);
+            .unwrap_or(DEFAULT_SQRZL_MAX_REQUEST_BYTES);
 
         let enforce_auth = access_key_id.is_some() && secret_access_key.is_some();
 
@@ -104,14 +105,14 @@ impl Config {
     ///
     /// # Environment Variables
     ///
-    /// - `ACCESS_KEY_ID`: AWS access key ID (optional)
-    /// - `SECRET_ACCESS_KEY`: AWS secret access key (optional)
-    /// - `BLOBS_PATH`: Path to storage directory (default: "./blobs")
-    /// - `LIFECYCLE_HOURS`: Hours between lifecycle rule executions (default: 1)
-    /// - `MAX_REQUEST_BYTES`: Maximum request body bytes accepted before streaming is supported (default: 128 MiB)
-    /// - `ADMIN_AUTH_DISABLED`: Disable `/admin/v1` session auth even when provider auth is enabled
-    /// - `PEAS_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
-    /// - `PEAS_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)
+    /// - `SQRZL_ACCESS_KEY_ID`: AWS access key ID (optional)
+    /// - `SQRZL_SECRET_ACCESS_KEY`: AWS secret access key (optional)
+    /// - `SQRZL_BLOBS_PATH`: Path to storage directory (default: "./blobs")
+    /// - `SQRZL_LIFECYCLE_HOURS`: Hours between lifecycle rule executions (default: 1)
+    /// - `SQRZL_MAX_REQUEST_BYTES`: Maximum request body bytes accepted before streaming is supported (default: 128 MiB)
+    /// - `SQRZL_ADMIN_AUTH_DISABLED`: Disable `/admin/v1` session auth even when provider auth is enabled
+    /// - `SQRZL_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
+    /// - `SQRZL_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)
     pub fn from_env() -> Self {
         Self::from_env_with(|name| env::var(name).ok())
     }
@@ -134,7 +135,7 @@ impl Config {
     where
         F: FnMut(&str) -> Option<String>,
     {
-        lookup(ENV_PEAS_BUCKET_LIST)
+        lookup(ENV_SQRZL_BUCKET_LIST)
             .map(|value| {
                 value
                     .split(',')
@@ -150,7 +151,7 @@ impl Config {
     where
         F: FnMut(&str) -> Option<String>,
     {
-        match lookup(ENV_PEAS_LOG_FORMAT)
+        match lookup(ENV_SQRZL_LOG_FORMAT)
             .as_deref()
             .map(str::trim)
             .map(|value| value.to_ascii_lowercase())
@@ -215,14 +216,14 @@ mod tests {
         assert_eq!(config.secret_access_key, None);
         assert!(!config.enforce_auth);
         assert!(!config.admin_auth_disabled);
-        assert_eq!(config.blobs_path, DEFAULT_BLOBS_PATH);
+        assert_eq!(config.blobs_path, DEFAULT_SQRZL_BLOBS_PATH);
         assert_eq!(
             config.lifecycle_interval,
-            Duration::from_secs(DEFAULT_LIFECYCLE_HOURS * 3600)
+            Duration::from_secs(DEFAULT_SQRZL_LIFECYCLE_HOURS * 3600)
         );
-        assert_eq!(config.api_port, DEFAULT_API_PORT);
-        assert_eq!(config.ui_port, DEFAULT_UI_PORT);
-        assert_eq!(config.max_request_bytes, DEFAULT_MAX_REQUEST_BYTES);
+        assert_eq!(config.api_port, DEFAULT_SQRZL_API_PORT);
+        assert_eq!(config.ui_port, DEFAULT_SQRZL_UI_PORT);
+        assert_eq!(config.max_request_bytes, DEFAULT_SQRZL_MAX_REQUEST_BYTES);
         assert!(startup_buckets.is_empty());
     }
 
@@ -231,13 +232,13 @@ mod tests {
         // Arrange
         // Act
         let config = Config::from_env_with(|name| match name {
-            ENV_ACCESS_KEY_ID => Some("test-key".to_string()),
-            ENV_SECRET_ACCESS_KEY => Some("test-secret".to_string()),
-            ENV_BLOBS_PATH => Some("/tmp/peas-blobs".to_string()),
-            ENV_LIFECYCLE_HOURS => Some("2".to_string()),
-            ENV_API_PORT => Some("9100".to_string()),
-            ENV_UI_PORT => Some("9101".to_string()),
-            ENV_MAX_REQUEST_BYTES => Some("1024".to_string()),
+            ENV_SQRZL_ACCESS_KEY_ID => Some("test-key".to_string()),
+            ENV_SQRZL_SECRET_ACCESS_KEY => Some("test-secret".to_string()),
+            ENV_SQRZL_BLOBS_PATH => Some("/tmp/sqrzl-blobs".to_string()),
+            ENV_SQRZL_LIFECYCLE_HOURS => Some("2".to_string()),
+            ENV_SQRZL_API_PORT => Some("9100".to_string()),
+            ENV_SQRZL_UI_PORT => Some("9101".to_string()),
+            ENV_SQRZL_MAX_REQUEST_BYTES => Some("1024".to_string()),
             _ => None,
         });
 
@@ -246,7 +247,7 @@ mod tests {
         assert_eq!(config.secret_key(), Some("test-secret"));
         assert!(config.enforce_auth);
         assert!(!config.admin_auth_disabled);
-        assert_eq!(config.blobs_path, "/tmp/peas-blobs");
+        assert_eq!(config.blobs_path, "/tmp/sqrzl-blobs");
         assert_eq!(config.lifecycle_interval, Duration::from_secs(7200));
         assert_eq!(config.api_port, 9100);
         assert_eq!(config.ui_port, 9101);
@@ -260,12 +261,12 @@ mod tests {
         // Arrange
         // Act
         let access_only = Config::from_env_with(|name| match name {
-            ENV_ACCESS_KEY_ID => Some("test-key".to_string()),
+            ENV_SQRZL_ACCESS_KEY_ID => Some("test-key".to_string()),
             _ => None,
         });
 
         let secret_only = Config::from_env_with(|name| match name {
-            ENV_SECRET_ACCESS_KEY => Some("test-secret".to_string()),
+            ENV_SQRZL_SECRET_ACCESS_KEY => Some("test-secret".to_string()),
             _ => None,
         });
 
@@ -283,8 +284,8 @@ mod tests {
         // Arrange
         // Act
         let config = Config::from_env_with(|name| match name {
-            ENV_BLOBS_PATH => Some("/tmp/custom-blobs".to_string()),
-            ENV_LIFECYCLE_HOURS => Some("invalid".to_string()),
+            ENV_SQRZL_BLOBS_PATH => Some("/tmp/custom-blobs".to_string()),
+            ENV_SQRZL_LIFECYCLE_HOURS => Some("invalid".to_string()),
             _ => None,
         });
 
@@ -292,11 +293,11 @@ mod tests {
         assert_eq!(config.blobs_path, "/tmp/custom-blobs");
         assert_eq!(
             config.lifecycle_interval,
-            Duration::from_secs(DEFAULT_LIFECYCLE_HOURS * 3600)
+            Duration::from_secs(DEFAULT_SQRZL_LIFECYCLE_HOURS * 3600)
         );
-        assert_eq!(config.api_port, DEFAULT_API_PORT);
-        assert_eq!(config.ui_port, DEFAULT_UI_PORT);
-        assert_eq!(config.max_request_bytes, DEFAULT_MAX_REQUEST_BYTES);
+        assert_eq!(config.api_port, DEFAULT_SQRZL_API_PORT);
+        assert_eq!(config.ui_port, DEFAULT_SQRZL_UI_PORT);
+        assert_eq!(config.max_request_bytes, DEFAULT_SQRZL_MAX_REQUEST_BYTES);
     }
 
     #[test]
@@ -304,9 +305,9 @@ mod tests {
         // Arrange
         // Act
         let config = Config::from_env_with(|name| match name {
-            ENV_ACCESS_KEY_ID => Some("test-key".to_string()),
-            ENV_SECRET_ACCESS_KEY => Some("test-secret".to_string()),
-            ENV_ADMIN_AUTH_DISABLED => Some("true".to_string()),
+            ENV_SQRZL_ACCESS_KEY_ID => Some("test-key".to_string()),
+            ENV_SQRZL_SECRET_ACCESS_KEY => Some("test-secret".to_string()),
+            ENV_SQRZL_ADMIN_AUTH_DISABLED => Some("true".to_string()),
             _ => None,
         });
 
@@ -321,12 +322,12 @@ mod tests {
         // Arrange
         // Act
         let config = Config::from_env_with(|name| match name {
-            ENV_MAX_REQUEST_BYTES => Some("0".to_string()),
+            ENV_SQRZL_MAX_REQUEST_BYTES => Some("0".to_string()),
             _ => None,
         });
 
         // Assert
-        assert_eq!(config.max_request_bytes, DEFAULT_MAX_REQUEST_BYTES);
+        assert_eq!(config.max_request_bytes, DEFAULT_SQRZL_MAX_REQUEST_BYTES);
     }
 
     #[test]
@@ -334,7 +335,7 @@ mod tests {
         // Arrange
         // Act
         let startup_buckets = Config::startup_bucket_names_from_env_with(|name| match name {
-            ENV_PEAS_BUCKET_LIST => Some("alpha, beta , , gamma,delta ".to_string()),
+            ENV_SQRZL_BUCKET_LIST => Some("alpha, beta , , gamma,delta ".to_string()),
             _ => None,
         });
 
@@ -365,7 +366,7 @@ mod tests {
         // Arrange
         // Act
         let log_format = Config::log_format_from_env_with(|name| match name {
-            ENV_PEAS_LOG_FORMAT => Some("json".to_string()),
+            ENV_SQRZL_LOG_FORMAT => Some("json".to_string()),
             _ => None,
         });
 

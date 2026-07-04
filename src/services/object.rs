@@ -166,8 +166,10 @@ mod tests {
     use std::sync::Arc;
 
     fn temp_storage() -> Arc<dyn Storage> {
-        let dir =
-            std::env::temp_dir().join(format!("peas-service-object-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "sqrzl-service-object-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }

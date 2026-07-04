@@ -3,9 +3,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "peas-emulator-sdk-certification"
+name = "sqrzl-emulator-sdk-certification"
 version = "0.1.0"
-description = "Official SDK certification harness for PEAS emulator support workflows"
+description = "Official SDK certification harness for SQRZL emulator support workflows"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }

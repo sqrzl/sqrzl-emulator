@@ -50,7 +50,7 @@ function rowButton(
 
 function storageDialogFooter(): HTMLElement {
   const footer = document.querySelector(
-    '[data-peas-slot="storage-dialog-footer"]'
+    '[data-sqrzl-slot="storage-dialog-footer"]'
   );
   expect(footer).toBeTruthy();
   return footer as HTMLElement;
@@ -64,7 +64,7 @@ function storageDialogFooterButtonLabels(): string[] {
 
 function storageDialogTitleText(): string {
   const title = document.querySelector(
-    '[data-peas-slot="storage-dialog-title"]'
+    '[data-sqrzl-slot="storage-dialog-title"]'
   );
   expect(title).toBeTruthy();
   return title?.textContent?.trim() ?? '';
@@ -76,7 +76,7 @@ function storageDialogFormSequence(): string[] {
 
   return Array.from(
     form!.querySelectorAll(
-      '[role="alert"], [data-peas-slot="storage-dialog-footer"]'
+      '[role="alert"], [data-sqrzl-slot="storage-dialog-footer"]'
     )
   ).map((element) =>
     element.getAttribute('role') === 'alert' ? 'error' : 'footer'
@@ -93,7 +93,7 @@ describe('simplified page flows', () => {
 
     try {
       await flush();
-      expect(root.textContent).toContain('Peas');
+      expect(root.textContent).toContain('Sqrzl');
       expect(root.textContent).not.toContain('Buckets');
       expect(root.querySelector('[aria-label="Toggle theme"]')).toBeTruthy();
       expect(root.querySelector('a[href="/logout"]')).toBeTruthy();
@@ -214,7 +214,7 @@ describe('simplified page flows', () => {
       ]);
       expect(
         document.querySelector(
-          '[data-peas-slot="storage-dialog-footer"] [data-slot="button-group"]'
+          '[data-sqrzl-slot="storage-dialog-footer"] [data-slot="button-group"]'
         )
       ).toBeNull();
 
@@ -235,7 +235,7 @@ describe('simplified page flows', () => {
       expect(document.activeElement).toBe(input);
       const submitButton = Array.from(
         document.querySelectorAll(
-          '[data-peas-slot="storage-dialog-footer"] button'
+          '[data-sqrzl-slot="storage-dialog-footer"] button'
         )
       ).find((button) => button.textContent?.trim() === 'Create bucket');
       click(submitButton!);
@@ -395,7 +395,7 @@ describe('simplified page flows', () => {
       ]);
       expect(
         document.querySelector(
-          '[data-peas-slot="storage-dialog-footer"] [data-slot="button-group"]'
+          '[data-sqrzl-slot="storage-dialog-footer"] [data-slot="button-group"]'
         )
       ).toBeNull();
 
@@ -492,7 +492,7 @@ describe('simplified page flows', () => {
       ]);
       expect(
         document.querySelector(
-          '[data-peas-slot="storage-dialog-footer"] [data-slot="button-group"]'
+          '[data-sqrzl-slot="storage-dialog-footer"] [data-slot="button-group"]'
         )
       ).toBeNull();
 
@@ -519,7 +519,7 @@ describe('simplified page flows', () => {
       fileInput.dispatchEvent(new Event('input', { bubbles: true }));
       const submitButton = Array.from(
         document.querySelectorAll(
-          '[data-peas-slot="storage-dialog-footer"] button'
+          '[data-sqrzl-slot="storage-dialog-footer"] button'
         )
       ).find((button) => button.textContent?.trim() === 'Upload blob');
       click(submitButton!);
@@ -835,7 +835,7 @@ describe('simplified page flows', () => {
       ]);
       expect(
         document.querySelector(
-          '[data-peas-slot="storage-dialog-footer"] [data-slot="button-group"]'
+          '[data-sqrzl-slot="storage-dialog-footer"] [data-slot="button-group"]'
         )
       ).toBeNull();
 

@@ -73,7 +73,11 @@ impl OciAdapter {
             return Err("OCI requests must start with /n".to_string());
         }
         Ok((
-            parts.get(1).copied().unwrap_or("peas-emulator").to_string(),
+            parts
+                .get(1)
+                .copied()
+                .unwrap_or("sqrzl-emulator")
+                .to_string(),
             parts
                 .iter()
                 .skip(2)
@@ -619,7 +623,7 @@ mod tests {
     use std::fs;
 
     fn temp_storage() -> Arc<dyn Storage> {
-        let dir = std::env::temp_dir().join(format!("peas-oci-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sqrzl-oci-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -634,7 +638,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -648,7 +652,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 

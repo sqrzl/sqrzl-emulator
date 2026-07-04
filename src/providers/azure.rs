@@ -37,7 +37,7 @@ const AZURE_SNAPSHOT_SOURCE_KEY: &str = "azure_snapshot_source";
 const AZURE_IMMUTABILITY_UNTIL_KEY: &str = "azure_immutability_until";
 const AZURE_IMMUTABILITY_MODE_KEY: &str = "azure_immutability_mode";
 const AZURE_LEGAL_HOLD_KEY: &str = "azure_legal_hold";
-const AZURE_SNAPSHOT_PREFIX: &str = "__peas_azure_snapshot__";
+const AZURE_SNAPSHOT_PREFIX: &str = "__sqrzl_azure_snapshot__";
 const AZURE_BLOCK_SESSION_STATE: &str = "azure-block-session";
 const AZURE_COMMITTED_BLOCKS_STATE: &str = "azure-committed-blocks";
 
@@ -1502,7 +1502,7 @@ mod tests {
     use std::fs;
 
     fn temp_storage() -> Arc<dyn Storage> {
-        let dir = std::env::temp_dir().join(format!("peas-azure-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sqrzl-azure-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -1517,7 +1517,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 
@@ -1531,7 +1531,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         })
     }
 

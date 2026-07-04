@@ -1,9 +1,9 @@
-# Peas Support Certification
+# Sqrzl Support Certification
 
-Peas support certification names the local object-storage workflows we expect
+Sqrzl support certification names the local object-storage workflows we expect
 to stay reliable, repeatable, and supportable for development and CI.
 
-Certification is about local supportability, not production cloud parity. Peas
+Certification is about local supportability, not production cloud parity. Sqrzl
 focuses on the documented bucket/container and object/blob workflows across
 S3-compatible APIs, Azure Blob Storage, Google Cloud Storage, and OCI Object
 Storage.
@@ -17,7 +17,7 @@ and operation-level status. When the matrix and prose disagree, the matrix wins.
 
 Allowed support tiers:
 
-- `certified`: covered by official SDK smoke tests and Peas contract/interop
+- `certified`: covered by official SDK smoke tests and Sqrzl contract/interop
   tests.
 - `partial`: implemented or contract-tested, but not part of the SDK
   certification gate.
@@ -50,23 +50,23 @@ storage cannot be read, it returns `503 Service Unavailable` with
 The response includes:
 
 - `status`: `ok` or `degraded`.
-- `version`: Peas package version.
+- `version`: Sqrzl package version.
 - `api_port` and `ui_port`: configured listener ports.
 - `auth_enforced` and `admin_auth_enforced`: current auth mode.
 - `max_request_bytes`: current request body cap.
 - `storage_ready`: whether the configured storage path is readable.
-- `enabled_providers`: provider adapters compiled into this Peas build
+- `enabled_providers`: provider adapters compiled into this Sqrzl build
   (`s3-family`, `azure-blob`, `gcs`, `oci-object`).
 
 For support tickets, collect:
 
-- Peas version and Git commit.
+- Sqrzl version and Git commit.
 - Full `/healthz` response from the API port.
 - Container image digest, if running in Docker.
 - `compatibility-matrix.json` entry for the failing operation.
 - SDK name and version.
 - Minimal reproduction code and exact request or exception output.
-- Whether the issue reproduces after restarting Peas with the same `BLOBS_PATH`.
+- Whether the issue reproduces after restarting Sqrzl with the same `SQRZL_BLOBS_PATH`.
 
 ## SDK Certification Harness
 
@@ -78,36 +78,36 @@ python3.12 -m venv .venv
 python -m pip install -e ".[sdk-tests]"
 ```
 
-Run Peas through the pytest harness:
+Run Sqrzl through the pytest harness:
 
 ```bash
 python -m pytest
 ```
 
-By default the harness builds and starts `target/debug/peas-emulator` with
-temporary storage and authentication disabled. To target an existing Peas
+By default the harness builds and starts `target/debug/sqrzl-emulator` with
+temporary storage and authentication disabled. To target an existing Sqrzl
 process:
 
 ```bash
-PEAS_API_URL=http://127.0.0.1:9000 python -m pytest
+SQRZL_API_URL=http://127.0.0.1:9000 python -m pytest
 ```
 
 To run a subset:
 
 ```bash
-PEAS_SDK_PROVIDERS=s3,azure python -m pytest
+SQRZL_SDK_PROVIDERS=s3,azure python -m pytest
 ```
 
-The CI gate runs all SDK tests against a live Peas process. The container smoke
+The CI gate runs all SDK tests against a live Sqrzl process. The container smoke
 gate builds the Docker image, verifies `/healthz`, and runs the S3 core SDK flow
 against the running container.
 
 ## Request Size Boundary
 
-Peas buffers request bodies today. Configure the guardrail with:
+Sqrzl buffers request bodies today. Configure the guardrail with:
 
 ```bash
-MAX_REQUEST_BYTES=134217728
+SQRZL_MAX_REQUEST_BYTES=134217728
 ```
 
 Requests above the configured limit are rejected before provider handling with
@@ -117,7 +117,7 @@ design.
 
 ## Restart And Durability Expectations
 
-Certified workflows must survive a normal Peas restart when `BLOBS_PATH` points
+Certified workflows must survive a normal Sqrzl restart when `SQRZL_BLOBS_PATH` points
 to the same filesystem path.
 
 Durability hardening covers:
@@ -150,7 +150,7 @@ the operation as `certified`.
 ## Reproducible Issue Template
 
 ```text
-Peas version:
+Sqrzl version:
 Commit or image digest:
 Runtime: local binary / Docker / Compose
 API /healthz response:
@@ -160,5 +160,5 @@ compatibility-matrix operation:
 Expected behavior:
 Actual behavior:
 Minimal reproduction:
-Does it reproduce after Peas restart with the same BLOBS_PATH? yes/no
+Does it reproduce after Sqrzl restart with the same SQRZL_BLOBS_PATH? yes/no
 ```

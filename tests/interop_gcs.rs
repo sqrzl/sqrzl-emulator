@@ -3,7 +3,7 @@ mod common;
 use common::interop::{
     auth_disabled, body_bytes, body_text, call, call_with_registry, request, temp_storage,
 };
-use peas_emulator::providers::AdapterRegistry;
+use sqrzl_emulator::providers::AdapterRegistry;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread")]

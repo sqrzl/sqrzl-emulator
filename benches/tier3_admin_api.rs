@@ -4,9 +4,9 @@ use criterion::{
 };
 use http_body_util::BodyExt;
 use hyper::{Method, Request};
-use peas_emulator::body::Body;
-use peas_emulator::models::Object;
-use peas_emulator::storage::{FilesystemStorage, Storage};
+use sqrzl_emulator::body::Body;
+use sqrzl_emulator::models::Object;
+use sqrzl_emulator::storage::{FilesystemStorage, Storage};
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ mod criterion_config;
 const ADMIN_BUCKET: &str = "bench-objects";
 
 fn temp_path() -> PathBuf {
-    std::env::temp_dir().join(format!("peas_bench_tier3_admin_{}", Uuid::new_v4()))
+    std::env::temp_dir().join(format!("sqrzl_bench_tier3_admin_{}", Uuid::new_v4()))
 }
 
 fn admin_get(uri: &str) -> Request<Body> {
@@ -31,7 +31,7 @@ fn admin_get(uri: &str) -> Request<Body> {
 }
 
 async fn admin_response_len(storage: Arc<dyn Storage>, uri: &str) -> usize {
-    let response = peas_emulator::api::admin::handle_request(storage, admin_get(uri))
+    let response = sqrzl_emulator::api::admin::handle_request(storage, admin_get(uri))
         .await
         .expect("admin request should succeed");
     assert!(

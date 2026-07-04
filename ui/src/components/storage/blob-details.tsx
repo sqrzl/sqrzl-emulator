@@ -94,7 +94,7 @@ export default function BlobDetails({
   return (
     <Stack gap="4">
       <Inline
-        data-peas-slot="storage-detail-actions"
+        data-sqrzl-slot="storage-detail-actions"
         align="center"
         gap="2"
         wrap
@@ -128,8 +128,8 @@ export default function BlobDetails({
               <Stack gap="3">
                 <Toolbar title={<span id="blob-details-title">Details</span>} />
                 <DataTable
-                  data-peas-slot="storage-table-scroll"
-                  data-peas-table-width="detail"
+                  data-sqrzl-slot="storage-table-scroll"
+                  data-sqrzl-table-width="detail"
                 >
                   <Table>
                     <TableBody>
@@ -187,8 +187,8 @@ export default function BlobDetails({
                   fallback={<p>No custom metadata recorded.</p>}
                 >
                   <DataTable
-                    data-peas-slot="storage-table-scroll"
-                    data-peas-table-width="detail"
+                    data-sqrzl-slot="storage-table-scroll"
+                    data-sqrzl-table-width="detail"
                   >
                     <Table>
                       <TableHead>

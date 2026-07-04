@@ -56,7 +56,7 @@ export default function DataTableSection({
 
   return (
     <section
-      data-peas-slot="storage-data-section"
+      data-sqrzl-slot="storage-data-section"
       aria-labelledby={titleId}
       aria-label={title ?? searchLabel}
     >
@@ -94,8 +94,8 @@ export default function DataTableSection({
         <Show when={!errored && !loading && !empty}>
           <Stack gap="3">
             <DataTable
-              data-peas-slot="storage-table-scroll"
-              data-peas-table-width={tableWidth}
+              data-sqrzl-slot="storage-table-scroll"
+              data-sqrzl-table-width={tableWidth}
             >
               {children}
             </DataTable>

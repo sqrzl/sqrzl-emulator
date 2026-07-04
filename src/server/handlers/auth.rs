@@ -17,7 +17,7 @@ fn default_owner(config: &AuthConfig) -> Owner {
     let owner = config
         .access_key()
         .map(|k| k.to_string())
-        .unwrap_or_else(|| "peas-emulator".to_string());
+        .unwrap_or_else(|| "sqrzl-emulator".to_string());
 
     Owner {
         id: owner.clone(),
@@ -43,7 +43,7 @@ mod tests {
     use std::sync::Arc;
 
     fn temp_storage() -> Arc<dyn Storage> {
-        let dir = std::env::temp_dir().join(format!("peas-policy-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("sqrzl-policy-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
     }
@@ -58,7 +58,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         }
     }
 
@@ -205,7 +205,7 @@ mod tests {
             lifecycle_interval: std::time::Duration::from_secs(3600),
             api_port: 9000,
             ui_port: 9001,
-            max_request_bytes: crate::config::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         };
 
         let allowed_req = parsed_request(
@@ -401,7 +401,7 @@ pub(crate) fn verify_presigned_url(
             let presigned_config = crate::auth::PresignedUrlConfig {
                 access_key: auth_config
                     .access_key()
-                    .unwrap_or("peas-emulator")
+                    .unwrap_or("sqrzl-emulator")
                     .to_string(),
                 secret_key: secret_key.to_string(),
             };
