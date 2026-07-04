@@ -20,34 +20,6 @@ fn build_runtime() -> Runtime {
         .expect("runtime should build")
 }
 
-fn record_status(ctx: &mut StressContext, status: StatusCode, expected: StatusCode) {
-    let completed = u64::from(status == expected);
-    let failures = u64::from(status != expected);
-    let _ = ctx
-        .correctness()
-        .attempted(1)
-        .completed(completed)
-        .failures(failures);
-    assert_eq!(status, expected);
-}
-
-fn record_resumable_status(
-    ctx: &mut StressContext,
-    init_status: StatusCode,
-    upload_status: StatusCode,
-) {
-    let completed =
-        u64::from(init_status == StatusCode::OK) + u64::from(upload_status == StatusCode::OK);
-    let failures = 2 - completed;
-    let _ = ctx
-        .correctness()
-        .attempted(2)
-        .completed(completed)
-        .failures(failures);
-    assert_eq!(init_status, StatusCode::OK);
-    assert_eq!(upload_status, StatusCode::OK);
-}
-
 async fn create_xml_bucket(server: &LiveServer, bucket: &str) {
     let request = Request::builder()
         .method("PUT")
@@ -93,20 +65,27 @@ fn xml_put_object(ctx: &mut StressContext) {
     let object_url = format!("{}/{}/hello.txt", server.base_url, bucket);
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let request = Request::builder()
-        .method("PUT")
-        .uri(&object_url)
-        .header("host", GCS_HOST)
-        .header("content-type", "text/plain")
-        .body(Body::from(payload))
-        .expect("object put request should build");
-    let response = ctx.measure(|| runtime.block_on(server.request(request)));
-    record_status(ctx, response.status(), StatusCode::OK);
-    black_box(response.headers().get("etag").cloned());
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("PUT")
+            .uri(&object_url)
+            .header("host", GCS_HOST)
+            .header("content-type", "text/plain")
+            .body(Body::from(payload.clone()))
+            .expect("object put request should build");
+        let response = runtime.block_on(server.request(request));
+        assert_eq!(response.status(), StatusCode::OK);
+        black_box(response.headers().get("etag").cloned());
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(
     tier = 4,
+    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "gcs",
@@ -134,17 +113,22 @@ fn xml_get_object(ctx: &mut StressContext) {
     });
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let request = Request::builder()
-        .method("GET")
-        .uri(&object_url)
-        .header("host", GCS_HOST)
-        .body(Body::default())
-        .expect("object get request should build");
-    let (status, body) =
-        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
-    record_status(ctx, status, StatusCode::OK);
-    assert_eq!(body.as_slice(), payload.as_ref());
-    black_box(body);
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("GET")
+            .uri(&object_url)
+            .header("host", GCS_HOST)
+            .body(Body::default())
+            .expect("object get request should build");
+        let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_slice(), payload.as_ref());
+        black_box(body);
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(
@@ -181,17 +165,22 @@ fn xml_list_objects(ctx: &mut StressContext) {
 
     let list_url = format!("{}/{}?prefix=item-", server.base_url, bucket);
     ctx.parameter("object_count", 128);
-    let request = Request::builder()
-        .method("GET")
-        .uri(&list_url)
-        .header("host", GCS_HOST)
-        .body(Body::default())
-        .expect("object list request should build");
-    let (status, listing) =
-        ctx.measure(|| runtime.block_on(server.response_text_with_status(request)));
-    record_status(ctx, status, StatusCode::OK);
-    assert!(listing.contains("item-000.txt"));
-    black_box(listing);
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("GET")
+            .uri(&list_url)
+            .header("host", GCS_HOST)
+            .body(Body::default())
+            .expect("object list request should build");
+        let (status, listing) = runtime.block_on(server.response_text_with_status(request));
+        assert_eq!(status, StatusCode::OK);
+        assert!(listing.contains("item-000.txt"));
+        black_box(listing);
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(
@@ -214,7 +203,7 @@ fn json_resumable_upload(ctx: &mut StressContext) {
     );
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let (init_status, upload_status, etag) = ctx.measure(|| {
+    let operations = ctx.measure_workload(|| {
         let init_request = Request::builder()
             .method("POST")
             .uri(&init_url)
@@ -240,14 +229,12 @@ fn json_resumable_upload(ctx: &mut StressContext) {
             .body(Body::from(payload.clone()))
             .expect("resumable upload request should build");
         let upload_response = runtime.block_on(server.request(upload_request));
-        (
-            init_status,
-            upload_response.status(),
-            upload_response.headers().get("etag").cloned(),
-        )
+        assert_eq!(init_status, StatusCode::OK);
+        assert_eq!(upload_response.status(), StatusCode::OK);
+        black_box(upload_response.headers().get("etag").cloned());
     });
-    record_resumable_status(ctx, init_status, upload_status);
-    black_box(etag);
+    let attempted = operations.saturating_mul(2);
+    let _ = ctx.correctness().attempted(attempted).completed(attempted);
 }
 
 stress_main!();

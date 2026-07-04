@@ -4,6 +4,7 @@ use http_body_util::Full;
 type Body = Full<Bytes>;
 
 use hyper::{Request, StatusCode};
+use std::time::Instant;
 use tokio::runtime::{Builder, Runtime};
 
 #[path = "support/mod.rs"]
@@ -137,17 +138,17 @@ fn multipart_stream_upload(ctx: &mut StressContext) {
         })
         .collect();
 
-    let statuses = ctx.measure(|| {
-        requests
-            .into_iter()
-            .map(|request| {
-                let response = runtime.block_on(server.request(request));
-                let etag = response.headers().get("etag").cloned();
-                black_box(etag);
-                response.status()
-            })
-            .collect::<Vec<_>>()
-    });
+    let start = Instant::now();
+    let statuses = requests
+        .into_iter()
+        .map(|request| {
+            let response = runtime.block_on(server.request(request));
+            let etag = response.headers().get("etag").cloned();
+            black_box(etag);
+            response.status()
+        })
+        .collect::<Vec<_>>();
+    ctx.record_external(start.elapsed(), count_as_u64(PART_COUNT));
     let completed = count_as_u64(
         statuses
             .iter()

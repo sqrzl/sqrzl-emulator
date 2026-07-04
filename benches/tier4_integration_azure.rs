@@ -20,17 +20,6 @@ fn build_runtime() -> Runtime {
         .expect("runtime should build")
 }
 
-fn record_status(ctx: &mut StressContext, status: StatusCode, expected: StatusCode) {
-    let completed = u64::from(status == expected);
-    let failures = u64::from(status != expected);
-    let _ = ctx
-        .correctness()
-        .attempted(1)
-        .completed(completed)
-        .failures(failures);
-    assert_eq!(status, expected);
-}
-
 async fn create_container(server: &LiveServer, container: &str) {
     let request = Request::builder()
         .method("PUT")
@@ -47,6 +36,7 @@ async fn create_container(server: &LiveServer, container: &str) {
 
 #[stress_test(
     tier = 4,
+    mode = "fixed_duration",
     metadata(component = "provider_api", provider = "azure", operation = "put_blob")
 )]
 fn put_blob(ctx: &mut StressContext) {
@@ -61,21 +51,28 @@ fn put_blob(ctx: &mut StressContext) {
     );
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let request = Request::builder()
-        .method("PUT")
-        .uri(&blob_url)
-        .header("x-ms-version", AZURE_VERSION)
-        .header("x-ms-blob-type", "BlockBlob")
-        .header("content-type", "text/plain")
-        .body(Body::from(payload))
-        .expect("blob put request should build");
-    let response = ctx.measure(|| runtime.block_on(server.request(request)));
-    record_status(ctx, response.status(), StatusCode::CREATED);
-    black_box(response.headers().get("etag").cloned());
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("PUT")
+            .uri(&blob_url)
+            .header("x-ms-version", AZURE_VERSION)
+            .header("x-ms-blob-type", "BlockBlob")
+            .header("content-type", "text/plain")
+            .body(Body::from(payload.clone()))
+            .expect("blob put request should build");
+        let response = runtime.block_on(server.request(request));
+        assert_eq!(response.status(), StatusCode::CREATED);
+        black_box(response.headers().get("etag").cloned());
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(
     tier = 4,
+    mode = "fixed_duration",
     metadata(component = "provider_api", provider = "azure", operation = "get_blob")
 )]
 fn get_blob(ctx: &mut StressContext) {
@@ -103,21 +100,27 @@ fn get_blob(ctx: &mut StressContext) {
     });
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let request = Request::builder()
-        .method("GET")
-        .uri(&blob_url)
-        .header("x-ms-version", AZURE_VERSION)
-        .body(Body::default())
-        .expect("blob get request should build");
-    let (status, body) =
-        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
-    record_status(ctx, status, StatusCode::OK);
-    assert_eq!(body.as_slice(), payload.as_ref());
-    black_box(body);
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("GET")
+            .uri(&blob_url)
+            .header("x-ms-version", AZURE_VERSION)
+            .body(Body::default())
+            .expect("blob get request should build");
+        let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_slice(), payload.as_ref());
+        black_box(body);
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(
     tier = 4,
+    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "azure",
@@ -150,22 +153,28 @@ fn get_blob_range(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", payload.len());
     ctx.parameter("range_size_bytes", 4 * 1024);
-    let request = Request::builder()
-        .method("GET")
-        .uri(&blob_url)
-        .header("x-ms-version", AZURE_VERSION)
-        .header("x-ms-range", "bytes=0-4095")
-        .body(Body::default())
-        .expect("blob range request should build");
-    let (status, body) =
-        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
-    record_status(ctx, status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(body.len(), 4 * 1024);
-    black_box(body);
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("GET")
+            .uri(&blob_url)
+            .header("x-ms-version", AZURE_VERSION)
+            .header("x-ms-range", "bytes=0-4095")
+            .body(Body::default())
+            .expect("blob range request should build");
+        let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(body.len(), 4 * 1024);
+        black_box(body);
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(
     tier = 4,
+    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "azure",
@@ -202,17 +211,22 @@ fn list_blobs(ctx: &mut StressContext) {
         server.base_url, container
     );
     ctx.parameter("object_count", 128);
-    let request = Request::builder()
-        .method("GET")
-        .uri(&list_url)
-        .header("x-ms-version", AZURE_VERSION)
-        .body(Body::default())
-        .expect("blob list request should build");
-    let (status, listing) =
-        ctx.measure(|| runtime.block_on(server.response_text_with_status(request)));
-    record_status(ctx, status, StatusCode::OK);
-    assert!(listing.contains("item-000.txt"));
-    black_box(listing);
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("GET")
+            .uri(&list_url)
+            .header("x-ms-version", AZURE_VERSION)
+            .body(Body::default())
+            .expect("blob list request should build");
+        let (status, listing) = runtime.block_on(server.response_text_with_status(request));
+        assert_eq!(status, StatusCode::OK);
+        assert!(listing.contains("item-000.txt"));
+        black_box(listing);
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 stress_main!();

@@ -23,17 +23,6 @@ fn build_runtime() -> Runtime {
         .expect("runtime should build")
 }
 
-fn record_status(ctx: &mut StressContext, status: StatusCode, expected: StatusCode) {
-    let completed = u64::from(status == expected);
-    let failures = u64::from(status != expected);
-    let _ = ctx
-        .correctness()
-        .attempted(1)
-        .completed(completed)
-        .failures(failures);
-    assert_eq!(status, expected);
-}
-
 async fn create_bucket(server: &LiveServer, bucket: &str) {
     let request = Request::builder()
         .method("PUT")
@@ -57,6 +46,7 @@ async fn enable_versioning(server: &LiveServer, bucket: &str) {
 
 #[stress_test(
     tier = 4,
+    mode = "fixed_duration",
     metadata(component = "provider_api", provider = "s3", operation = "put_object")
 )]
 fn put_object(ctx: &mut StressContext) {
@@ -65,18 +55,26 @@ fn put_object(ctx: &mut StressContext) {
     let bucket = "tier4-s3-put";
     runtime.block_on(create_bucket(&server, bucket));
     let payload = Bytes::from_static(b"tier4 s3 payload");
-    let object_url = format!("{}/{}/object.txt", server.base_url, bucket);
+    let mut sequence = 0usize;
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let request = Request::builder()
-        .method("PUT")
-        .uri(&object_url)
-        .header("content-type", "text/plain")
-        .body(Body::from(payload))
-        .expect("object put request should build");
-    let response = ctx.measure(|| runtime.block_on(server.request(request)));
-    record_status(ctx, response.status(), StatusCode::OK);
-    black_box(response.headers().get("etag").cloned());
+    let operations = ctx.measure_workload(|| {
+        let object_url = format!("{}/{}/object-{sequence}.txt", server.base_url, bucket);
+        sequence += 1;
+        let request = Request::builder()
+            .method("PUT")
+            .uri(&object_url)
+            .header("content-type", "text/plain")
+            .body(Body::from(payload.clone()))
+            .expect("object put request should build");
+        let response = runtime.block_on(server.request(request));
+        assert_eq!(response.status(), StatusCode::OK);
+        black_box(response.headers().get("etag").cloned());
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(

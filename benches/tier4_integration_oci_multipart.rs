@@ -4,6 +4,7 @@ use http_body_util::Full;
 type Body = Full<Bytes>;
 
 use hyper::{Request, StatusCode};
+use std::time::Instant;
 use tokio::runtime::{Builder, Runtime};
 
 #[path = "support/mod.rs"]
@@ -18,17 +19,6 @@ fn build_runtime() -> Runtime {
         .enable_all()
         .build()
         .expect("runtime should build")
-}
-
-fn record_status(ctx: &mut StressContext, status: StatusCode, expected: StatusCode) {
-    let completed = u64::from(status == expected);
-    let failures = u64::from(status != expected);
-    let _ = ctx
-        .correctness()
-        .attempted(1)
-        .completed(completed)
-        .failures(failures);
-    assert_eq!(status, expected);
 }
 
 async fn create_bucket(server: &LiveServer, bucket: &str) {
@@ -181,20 +171,29 @@ fn multipart_init(ctx: &mut StressContext) {
     let init_url = format!("{}/n/{}/b/{}/u", server.base_url, TENANT, bucket);
 
     let multipart_url = format!("{}/n/{}/b/{}/u/{}", server.base_url, TENANT, bucket, object);
-    let request = multipart_init_request(&init_url, object);
-    let (status, body) =
-        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
-    record_status(ctx, status, StatusCode::OK);
-    let init_json: serde_json::Value =
-        serde_json::from_slice(&body).expect("multipart init body should parse");
-    let upload_id = init_json
-        .get("uploadId")
-        .and_then(|value| value.as_str())
-        .expect("multipart upload id should exist")
-        .to_string();
-    let response = runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    black_box(body);
+    let mut upload_ids = Vec::new();
+    let operations = ctx.measure_workload(|| {
+        let request = multipart_init_request(&init_url, object);
+        let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
+        assert_eq!(status, StatusCode::OK);
+        let init_json: serde_json::Value =
+            serde_json::from_slice(&body).expect("multipart init body should parse");
+        let upload_id = init_json
+            .get("uploadId")
+            .and_then(|value| value.as_str())
+            .expect("multipart upload id should exist")
+            .to_string();
+        upload_ids.push(upload_id);
+        black_box(body.len());
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
+    for upload_id in upload_ids {
+        let response = runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
 }
 
 #[stress_test(
@@ -217,10 +216,16 @@ fn multipart_part_upload(ctx: &mut StressContext) {
     let upload_id = runtime.block_on(create_upload_session(&server, &init_url, object));
 
     ctx.parameter("payload_size_bytes", part.len());
-    let request = multipart_part_request(&multipart_url, &upload_id, 1, &part);
-    let response = ctx.measure(|| runtime.block_on(server.request(request)));
-    record_status(ctx, response.status(), StatusCode::OK);
-    black_box(response.headers().get("etag").cloned());
+    let operations = ctx.measure_workload(|| {
+        let request = multipart_part_request(&multipart_url, &upload_id, 1, &part);
+        let response = runtime.block_on(server.request(request));
+        assert_eq!(response.status(), StatusCode::OK);
+        black_box(response.headers().get("etag").cloned());
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 
     let response = runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
@@ -263,8 +268,11 @@ fn multipart_commit(ctx: &mut StressContext) {
         &state.etag_one,
         &state.etag_two,
     );
-    let response = ctx.measure(|| runtime.block_on(server.request(request)));
-    record_status(ctx, response.status(), StatusCode::OK);
+    let start = Instant::now();
+    let response = runtime.block_on(server.request(request));
+    let elapsed = start.elapsed();
+    assert_eq!(response.status(), StatusCode::OK);
+    ctx.record_external(elapsed, 1);
     black_box(response.headers().get("etag").cloned());
 }
 

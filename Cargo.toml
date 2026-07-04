@@ -13,7 +13,7 @@ repository = "https://github.com/sqrzl/sqrzl-emulator"
 keywords = ["s3", "azure", "gcs", "oci", "storage", "emulator"]
 
 [dependencies]
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -26,8 +26,8 @@ hyper-util = { version = "0.1.20", features = ["client", "client-legacy", "http1
 jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
 md5 = "0.8"
 mime_guess = "2"
-quick-xml = "0.40.1"
-rand = "0.10.1"
+quick-xml = "0.41.0"
+rand = "0.10.2"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -36,7 +36,7 @@ thiserror = "2.0.18"
 getrandom = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.11", features = ["fs"] }
+tower-http = { version = "0.7.0", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 urlencoding = "2"
@@ -44,7 +44,7 @@ uuid = { version = "1.23", features = ["v4", "serde"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
-cntryl-stress = { git = "https://github.com/cntryl/stress", rev = "a5deacc42275f3251455bc2d2ccaf64ec4f8b616", package = "cntryl-stress" }
+cntryl-stress = { git = "https://github.com/cntryl/stress", rev = "ff4b74b3e085fe4dd4dcfc14651273a4262891c0", package = "cntryl-stress" }
 
 [[bench]]
 name = "tier1_hotpath"

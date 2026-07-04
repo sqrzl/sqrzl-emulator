@@ -20,17 +20,6 @@ fn build_runtime() -> Runtime {
         .expect("runtime should build")
 }
 
-fn record_status(ctx: &mut StressContext, status: StatusCode, expected: StatusCode) {
-    let completed = u64::from(status == expected);
-    let failures = u64::from(status != expected);
-    let _ = ctx
-        .correctness()
-        .attempted(1)
-        .completed(completed)
-        .failures(failures);
-    assert_eq!(status, expected);
-}
-
 async fn create_bucket(server: &LiveServer, bucket: &str) {
     let request = Request::builder()
         .method("POST")
@@ -61,15 +50,21 @@ fn put_object(ctx: &mut StressContext) {
     let object_url = format!("{}/n/{}/b/{}/o/hello.txt", server.base_url, TENANT, bucket);
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let request = Request::builder()
-        .method("PUT")
-        .uri(&object_url)
-        .header("content-type", "text/plain")
-        .body(Body::from(payload))
-        .expect("object put request should build");
-    let response = ctx.measure(|| runtime.block_on(server.request(request)));
-    record_status(ctx, response.status(), StatusCode::OK);
-    black_box(response.headers().get("etag").cloned());
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("PUT")
+            .uri(&object_url)
+            .header("content-type", "text/plain")
+            .body(Body::from(payload.clone()))
+            .expect("object put request should build");
+        let response = runtime.block_on(server.request(request));
+        assert_eq!(response.status(), StatusCode::OK);
+        black_box(response.headers().get("etag").cloned());
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 #[stress_test(
@@ -96,16 +91,21 @@ fn get_object(ctx: &mut StressContext) {
     });
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let request = Request::builder()
-        .method("GET")
-        .uri(&object_url)
-        .body(Body::default())
-        .expect("object get request should build");
-    let (status, body) =
-        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
-    record_status(ctx, status, StatusCode::OK);
-    assert_eq!(body.as_slice(), payload.as_ref());
-    black_box(body);
+    let operations = ctx.measure_workload(|| {
+        let request = Request::builder()
+            .method("GET")
+            .uri(&object_url)
+            .body(Body::default())
+            .expect("object get request should build");
+        let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_slice(), payload.as_ref());
+        black_box(body);
+    });
+    let _ = ctx
+        .correctness()
+        .attempted(operations)
+        .completed(operations);
 }
 
 stress_main!();

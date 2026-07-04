@@ -44,13 +44,18 @@ async fn admin_response_len(storage: Arc<dyn Storage>, uri: &str) -> usize {
         .len()
 }
 
-fn measure_admin_response_len(
+fn measure_admin_response_len_workload(
     ctx: &mut StressContext,
     runtime: &Runtime,
     storage: &Arc<dyn Storage>,
     uri: &str,
-) -> usize {
-    ctx.measure(|| runtime.block_on(admin_response_len(storage.clone(), uri)))
+) -> u64 {
+    let completed = ctx.measure_workload(|| {
+        let len = runtime.block_on(admin_response_len(storage.clone(), uri));
+        black_box(len);
+    });
+    let _ = ctx.correctness().attempted(completed).completed(completed);
+    completed
 }
 
 fn put_text(storage: &Arc<dyn Storage>, bucket: &str, key: String, payload: &[u8]) {
@@ -171,8 +176,9 @@ fn admin_list_buckets_page(ctx: &mut StressContext) {
 
     ctx.parameter("bucket_count", 500);
     ctx.parameter("page_size", 50);
-    let len = measure_admin_response_len(ctx, &runtime, &storage, "/admin/v1/buckets?limit=50");
-    black_box(len);
+    let completed =
+        measure_admin_response_len_workload(ctx, &runtime, &storage, "/admin/v1/buckets?limit=50");
+    black_box(completed);
 }
 
 #[stress_test(
@@ -193,17 +199,18 @@ fn admin_list_buckets_search(ctx: &mut StressContext) {
     ctx.parameter("bucket_count", 500);
     ctx.parameter("page_size", 50);
     ctx.parameter("search", "bucket-4");
-    let len = measure_admin_response_len(
+    let completed = measure_admin_response_len_workload(
         ctx,
         &runtime,
         &storage,
         "/admin/v1/buckets?limit=50&search=bucket-4",
     );
-    black_box(len);
+    black_box(completed);
 }
 
 #[stress_test(
     tier = 3,
+    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "list_objects",
@@ -219,17 +226,18 @@ fn admin_list_objects_root_directory(ctx: &mut StressContext) {
 
     ctx.parameter("object_count", 3_001);
     ctx.parameter("page_size", 50);
-    let len = measure_admin_response_len(
+    let completed = measure_admin_response_len_workload(
         ctx,
         &runtime,
         &storage,
         "/admin/v1/buckets/bench-objects/objects?limit=50",
     );
-    black_box(len);
+    black_box(completed);
 }
 
 #[stress_test(
     tier = 3,
+    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "list_objects",
@@ -245,17 +253,18 @@ fn admin_list_objects_nested_directory(ctx: &mut StressContext) {
 
     ctx.parameter("object_count", 10);
     ctx.parameter("page_size", 50);
-    let len = measure_admin_response_len(
+    let completed = measure_admin_response_len_workload(
         ctx,
         &runtime,
         &storage,
         "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=dir-050/",
     );
-    black_box(len);
+    black_box(completed);
 }
 
 #[stress_test(
     tier = 3,
+    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "list_objects",
@@ -271,13 +280,13 @@ fn admin_list_objects_skewed_root_directory(ctx: &mut StressContext) {
 
     ctx.parameter("directory_count", 2);
     ctx.parameter("page_size", 50);
-    let len = measure_admin_response_len(
+    let completed = measure_admin_response_len_workload(
         ctx,
         &runtime,
         &storage,
         "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=skew/",
     );
-    black_box(len);
+    black_box(completed);
 }
 
 #[stress_test(
@@ -298,17 +307,18 @@ fn admin_list_objects_search_flat_objects(ctx: &mut StressContext) {
     ctx.parameter("object_count", 1_000);
     ctx.parameter("page_size", 50);
     ctx.parameter("search", "object-09");
-    let len = measure_admin_response_len(
+    let completed = measure_admin_response_len_workload(
         ctx,
         &runtime,
         &storage,
         "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=flat/&search=object-09",
     );
-    black_box(len);
+    black_box(completed);
 }
 
 #[stress_test(
     tier = 3,
+    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "object_detail",
@@ -323,13 +333,13 @@ fn admin_object_detail_metadata(ctx: &mut StressContext) {
     let storage = object_browsing_storage();
 
     ctx.parameter("object_count", 1);
-    let len = measure_admin_response_len(
+    let completed = measure_admin_response_len_workload(
         ctx,
         &runtime,
         &storage,
         "/admin/v1/buckets/bench-objects/objects/flat%2Fobject-0500.txt",
     );
-    black_box(len);
+    black_box(completed);
 }
 
 #[stress_test(
@@ -349,13 +359,13 @@ fn admin_object_detail_versions(ctx: &mut StressContext) {
 
     ctx.parameter("version_count", 40);
     ctx.parameter("page_size", 25);
-    let len = measure_admin_response_len(
+    let completed = measure_admin_response_len_workload(
         ctx,
         &runtime,
         &storage,
         "/admin/v1/buckets/bench-objects/objects/versioned-target.txt/versions?limit=25",
     );
-    black_box(len);
+    black_box(completed);
 }
 
 stress_main!();

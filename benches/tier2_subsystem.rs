@@ -1,6 +1,7 @@
 use cntryl_stress::prelude::*;
 use sqrzl_emulator::models::Object;
 use sqrzl_emulator::storage::{BucketStore, FilesystemStorage, ObjectListingStore, ObjectStore};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -117,21 +118,30 @@ fn put_object_1k_payload(ctx: &mut StressContext) {
     let storage = put_storage();
     let payload_size = 1024usize;
     let payload = vec![b'a'; payload_size];
-    let sequence = PUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let key = format!("item-{sequence}.txt");
-    let object = Object::new(key.clone(), payload, "text/plain".to_string());
+    let etag = sqrzl_emulator::models::object::compute_etag(&payload);
+    let base_object = Object::new_with_metadata_and_etag(
+        String::new(),
+        payload,
+        "text/plain".to_string(),
+        HashMap::new(),
+        etag,
+    );
 
     ctx.parameter("payload_size_bytes", payload_size);
-    ctx.measure(|| {
+    let completed = ctx.measure_workload(|| {
+        let sequence = PUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let key = format!("item-{sequence}.txt");
+        let mut object = base_object.clone();
+        object.key.clone_from(&key);
         storage
             .put_object("bench", key, object)
             .expect("put should succeed");
     });
+    let _ = ctx.correctness().attempted(completed).completed(completed);
 }
 
 #[stress_test(
     tier = 2,
-    mode = "fixed_duration",
     metadata(
         component = "storage",
         operation = "get_object",
@@ -152,7 +162,6 @@ fn get_object_1k_payload(ctx: &mut StressContext) {
 
 #[stress_test(
     tier = 2,
-    mode = "fixed_duration",
     metadata(
         component = "storage",
         operation = "get_object_range",
@@ -192,7 +201,6 @@ fn seed_flat_objects(storage: &FilesystemStorage, object_count: usize, payload_s
 
 #[stress_test(
     tier = 2,
-    mode = "fixed_duration",
     metadata(
         component = "storage",
         operation = "list_objects",
@@ -230,7 +238,6 @@ fn seed_directory_children(storage: &FilesystemStorage) {
 
 #[stress_test(
     tier = 2,
-    mode = "fixed_duration",
     metadata(
         component = "storage",
         operation = "list_directory_children",
@@ -252,7 +259,6 @@ fn list_directory_root_children(ctx: &mut StressContext) {
 
 #[stress_test(
     tier = 2,
-    mode = "fixed_duration",
     metadata(
         component = "storage",
         operation = "list_directory_children",
@@ -295,7 +301,6 @@ fn seed_skewed_directory_children(storage: &FilesystemStorage) {
 
 #[stress_test(
     tier = 2,
-    mode = "fixed_duration",
     metadata(
         component = "storage",
         operation = "list_skewed_directory_children",
@@ -317,7 +322,6 @@ fn list_skewed_directory_root_children(ctx: &mut StressContext) {
 
 #[stress_test(
     tier = 2,
-    mode = "fixed_duration",
     metadata(
         component = "storage",
         operation = "list_skewed_directory_children",
