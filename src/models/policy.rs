@@ -72,19 +72,22 @@ pub struct Acl {
 
 impl Acl {
     /// Convert a canned ACL to explicit grants
+    #[must_use]
     pub fn to_grants(&self, owner_id: &str) -> Vec<Grant> {
         if !self.grants.is_empty() {
             return self.grants.clone();
         }
 
         match self.canned {
-            CannedAcl::Private => vec![Grant {
-                grantee: Grantee::CanonicalUser {
-                    id: owner_id.to_string(),
-                    display_name: None,
-                },
-                permission: Permission::FullControl,
-            }],
+            CannedAcl::Private | CannedAcl::BucketOwnerRead | CannedAcl::BucketOwnerFullControl => {
+                vec![Grant {
+                    grantee: Grantee::CanonicalUser {
+                        id: owner_id.to_string(),
+                        display_name: None,
+                    },
+                    permission: Permission::FullControl,
+                }]
+            }
             CannedAcl::PublicRead => vec![
                 Grant {
                     grantee: Grantee::CanonicalUser {
@@ -137,13 +140,6 @@ impl Acl {
                     permission: Permission::Read,
                 },
             ],
-            CannedAcl::BucketOwnerRead | CannedAcl::BucketOwnerFullControl => vec![Grant {
-                grantee: Grantee::CanonicalUser {
-                    id: owner_id.to_string(),
-                    display_name: None,
-                },
-                permission: Permission::FullControl,
-            }],
         }
     }
 }
@@ -166,7 +162,7 @@ pub struct AuthContext {
     pub is_authenticated: bool,
     /// The action being performed (e.g., "s3:GetObject", "s3:PutObject")
     pub action: String,
-    /// The resource being accessed (e.g., "arn:aws:s3:::bucket/key")
+    /// The resource being accessed (e.g., "`arn:aws:s3:::bucket/key`")
     pub resource: String,
     /// Bucket owner ID
     pub bucket_owner: Option<String>,
@@ -181,6 +177,7 @@ pub struct AuthContext {
 }
 
 impl AuthContext {
+    #[must_use]
     pub fn anonymous(action: &str, resource: &str) -> Self {
         Self {
             principal: "*".to_string(),
@@ -195,6 +192,7 @@ impl AuthContext {
         }
     }
 
+    #[must_use]
     pub fn authenticated(principal: &str, action: &str, resource: &str) -> Self {
         Self {
             principal: principal.to_string(),
@@ -218,10 +216,11 @@ pub struct Authorizer;
 
 impl Authorizer {
     /// Check if an ACL permits the given action
+    #[must_use]
     pub fn check_acl_permission(acl: &Acl, owner_id: &str, context: &AuthContext) -> bool {
         let grants = acl.to_grants(owner_id);
 
-        for grant in grants {
+        for grant in &grants {
             if Self::grant_matches(grant, context) {
                 return true;
             }
@@ -230,7 +229,7 @@ impl Authorizer {
         false
     }
 
-    fn grant_matches(grant: Grant, context: &AuthContext) -> bool {
+    fn grant_matches(grant: &Grant, context: &AuthContext) -> bool {
         // Check if grantee matches
         let grantee_matches = match &grant.grantee {
             Grantee::CanonicalUser { id, .. } => {
@@ -271,6 +270,7 @@ impl Authorizer {
     }
 
     /// Evaluate a bucket policy document
+    #[must_use]
     pub fn evaluate_policy(policy: &BucketPolicyDocument, context: &AuthContext) -> PolicyEffect {
         let mut has_allow = false;
         let mut has_deny = false;
@@ -460,8 +460,7 @@ impl Authorizer {
             return value
                 .split(',')
                 .next()
-                .map(|value| value.trim().eq_ignore_ascii_case("https"))
-                .unwrap_or(false);
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("https"));
         }
 
         if let Some(value) = context.request_headers.get("x-forwarded-ssl") {
@@ -562,8 +561,7 @@ impl Authorizer {
 
         request_values.iter().any(|request_value| {
             Self::parse_bool(request_value)
-                .map(|request_bool| expected_bools.contains(&request_bool))
-                .unwrap_or(false)
+                .is_some_and(|request_bool| expected_bools.contains(&request_bool))
         })
     }
 
@@ -638,63 +636,61 @@ impl Authorizer {
                 request_value
                     .parse::<f64>()
                     .ok()
-                    .map(|request_number| expected_numbers.contains(&request_number))
-                    .unwrap_or(false)
+                    .is_some_and(|request_number| {
+                        expected_numbers
+                            .iter()
+                            .any(|expected| request_number.total_cmp(expected).is_eq())
+                    })
             }),
             NumericCondition::NotEquals => request_values.iter().all(|request_value| {
                 request_value
                     .parse::<f64>()
                     .ok()
-                    .map(|request_number| {
+                    .is_some_and(|request_number| {
                         expected_numbers
                             .iter()
-                            .all(|expected| request_number != *expected)
+                            .all(|expected| !request_number.total_cmp(expected).is_eq())
                     })
-                    .unwrap_or(false)
             }),
             NumericCondition::LessThan => request_values.iter().any(|request_value| {
                 request_value
                     .parse::<f64>()
                     .ok()
-                    .map(|request_number| {
+                    .is_some_and(|request_number| {
                         expected_numbers
                             .iter()
                             .any(|expected| request_number < *expected)
                     })
-                    .unwrap_or(false)
             }),
             NumericCondition::LessThanEquals => request_values.iter().any(|request_value| {
                 request_value
                     .parse::<f64>()
                     .ok()
-                    .map(|request_number| {
+                    .is_some_and(|request_number| {
                         expected_numbers
                             .iter()
                             .any(|expected| request_number <= *expected)
                     })
-                    .unwrap_or(false)
             }),
             NumericCondition::GreaterThan => request_values.iter().any(|request_value| {
                 request_value
                     .parse::<f64>()
                     .ok()
-                    .map(|request_number| {
+                    .is_some_and(|request_number| {
                         expected_numbers
                             .iter()
                             .any(|expected| request_number > *expected)
                     })
-                    .unwrap_or(false)
             }),
             NumericCondition::GreaterThanEquals => request_values.iter().any(|request_value| {
                 request_value
                     .parse::<f64>()
                     .ok()
-                    .map(|request_number| {
+                    .is_some_and(|request_number| {
                         expected_numbers
                             .iter()
                             .any(|expected| request_number >= *expected)
                     })
-                    .unwrap_or(false)
             }),
         }
     }
@@ -751,7 +747,7 @@ impl Authorizer {
                     principals.contains(&context.principal) || principals.contains(&"*".to_string())
                 }
             },
-            _ => false,
+            Principal::All(_) => false,
         }
     }
 

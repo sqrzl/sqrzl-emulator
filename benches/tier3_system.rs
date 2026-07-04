@@ -94,7 +94,7 @@ fn bench_direct_put_object(c: &mut Criterion) {
                         .expect("direct put should succeed"),
                 );
             });
-        })
+        });
     });
     group.finish();
 
@@ -139,7 +139,7 @@ fn bench_direct_get_object(c: &mut Criterion) {
                         .expect("direct get should succeed"),
                 );
             });
-        })
+        });
     });
     group.finish();
 
@@ -187,7 +187,7 @@ fn bench_direct_list_objects(c: &mut Criterion) {
                         .expect("direct list should succeed"),
                 );
             });
-        })
+        });
     });
     group.finish();
 

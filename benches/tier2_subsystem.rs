@@ -43,7 +43,7 @@ fn bench_put_object(c: &mut Criterion) {
                     .expect("put should succeed");
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 
@@ -78,7 +78,7 @@ fn bench_get_object(c: &mut Criterion) {
                     .get_object("bench", "item.txt")
                     .expect("get should succeed"),
             )
-        })
+        });
     });
     group.finish();
 
@@ -113,7 +113,7 @@ fn bench_get_object_range(c: &mut Criterion) {
                     .get_object_range("bench", "item.txt", 64, Some(128))
                     .expect("range get should succeed"),
             )
-        })
+        });
     });
     group.finish();
 
@@ -152,7 +152,7 @@ fn bench_list_objects(c: &mut Criterion) {
                     .list_objects("bench", Some("item-"), None, None, Some(128))
                     .expect("list should succeed"),
             )
-        })
+        });
     });
     group.finish();
 
@@ -190,7 +190,7 @@ fn bench_list_directory_children(c: &mut Criterion) {
                     .list_objects("bench", Some(""), Some("/"), None, Some(100))
                     .expect("directory list should succeed"),
             )
-        })
+        });
     });
     group.bench_function(BenchmarkId::new("nested_children", 10), |b| {
         b.iter(|| {
@@ -199,7 +199,7 @@ fn bench_list_directory_children(c: &mut Criterion) {
                     .list_objects("bench", Some("dir-050/"), Some("/"), None, Some(10))
                     .expect("nested directory list should succeed"),
             )
-        })
+        });
     });
     group.finish();
 
@@ -242,7 +242,7 @@ fn bench_list_skewed_directory_children(c: &mut Criterion) {
                     .list_objects("bench", Some(""), Some("/"), None, Some(50))
                     .expect("skewed root directory list should succeed"),
             )
-        })
+        });
     });
     group.throughput(Throughput::Elements(50));
     group.bench_function(BenchmarkId::new("large_prefix_page", 50), |b| {
@@ -252,7 +252,7 @@ fn bench_list_skewed_directory_children(c: &mut Criterion) {
                     .list_objects("bench", Some("a/"), Some("/"), None, Some(50))
                     .expect("large prefix directory list should succeed"),
             )
-        })
+        });
     });
     group.finish();
 

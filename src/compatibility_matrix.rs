@@ -98,10 +98,7 @@ mod tests {
                     .expect("status should be a string");
                 assert!(
                     matches!(status, "pass" | "partial" | "missing" | "deferred"),
-                    "unexpected compatibility status '{}' for {}.{}",
-                    status,
-                    provider_name,
-                    operation_name
+                    "unexpected compatibility status '{status}' for {provider_name}.{operation_name}"
                 );
             }
         }
@@ -138,10 +135,7 @@ mod tests {
                         support_tier,
                         "certified" | "partial" | "unsupported" | "deferred"
                     ),
-                    "unexpected support tier '{}' for {}.{}",
-                    support_tier,
-                    provider_name,
-                    operation_name
+                    "unexpected support tier '{support_tier}' for {provider_name}.{operation_name}"
                 );
             }
         }
@@ -184,16 +178,12 @@ mod tests {
                 if support_tier == "certified" {
                     assert!(
                         !sdk_verifiers.is_empty(),
-                        "certified support tier for {}.{} must name at least one SDK verifier",
-                        provider_name,
-                        operation_name
+                        "certified support tier for {provider_name}.{operation_name} must name at least one SDK verifier"
                     );
                 } else {
                     assert!(
                         !limitations.is_empty(),
-                        "non-certified support tier for {}.{} must document limitations",
-                        provider_name,
-                        operation_name
+                        "non-certified support tier for {provider_name}.{operation_name} must document limitations"
                     );
                 }
             }
@@ -233,9 +223,7 @@ mod tests {
                 if status == "pass" {
                     assert!(
                         !verifiers.is_empty(),
-                        "pass status for {}.{} must name at least one verifier",
-                        provider_name,
-                        operation_name
+                        "pass status for {provider_name}.{operation_name} must name at least one verifier"
                     );
                     let auth_only_operation = matches!(
                         operation_name.as_str(),
@@ -254,9 +242,7 @@ mod tests {
                                     verifier.starts_with("interop_")
                                         || verifier.starts_with("server::")
                                 }),
-                            "pass status for {}.{} must include an interop or black-box verifier",
-                            provider_name,
-                            operation_name
+                            "pass status for {provider_name}.{operation_name} must include an interop or black-box verifier"
                         );
                     }
                 }
@@ -297,10 +283,7 @@ mod tests {
                         .expect("verifier entries should be strings");
                     assert!(
                         known_verifiers.contains(verifier),
-                        "unknown verifier '{}' declared for {}.{}",
-                        verifier,
-                        provider_name,
-                        operation_name
+                        "unknown verifier '{verifier}' declared for {provider_name}.{operation_name}"
                     );
                 }
             }
@@ -340,10 +323,7 @@ mod tests {
                         .expect("SDK verifier entries should be strings");
                     assert!(
                         known_sdk_verifiers.contains(verifier),
-                        "unknown SDK verifier '{}' declared for {}.{}",
-                        verifier,
-                        provider_name,
-                        operation_name
+                        "unknown SDK verifier '{verifier}' declared for {provider_name}.{operation_name}"
                     );
                 }
             }

@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 /// In-memory index for fast lookups
 #[derive(Clone)]
 struct ObjectIndex {
-    /// bucket_name -> Set of object keys
+    /// `bucket_name` -> Set of object keys
     buckets: HashMap<String, BTreeSet<String>>,
 }
 
@@ -70,26 +70,22 @@ impl IndexedStorage {
         for bucket in buckets {
             self.update_index_create_bucket(bucket.name.clone());
             let mut marker = None;
-            loop {
-                let Ok(page) = self.inner.list_objects(
-                    &bucket.name,
-                    None,
-                    None,
-                    marker.as_deref(),
-                    Some(1000),
-                ) else {
-                    break;
-                };
+            while let Ok(page) =
+                self.inner
+                    .list_objects(&bucket.name, None, None, marker.as_deref(), Some(1000))
+            {
+                let is_truncated = page.is_truncated;
+                let next_marker = page.next_marker;
 
                 for object in page.objects {
                     self.update_index_put(&bucket.name, object.key);
                 }
 
-                if !page.is_truncated {
+                if !is_truncated {
                     break;
                 }
 
-                let Some(next_marker) = page.next_marker else {
+                let Some(next_marker) = next_marker else {
                     break;
                 };
                 marker = Some(next_marker);
@@ -454,19 +450,19 @@ mod tests {
         Object::new(key.to_string(), data.to_vec(), "text/plain".to_string())
     }
 
-    fn keys(result: crate::models::ListObjectsResult) -> Vec<String> {
+    fn keys(result: &crate::models::ListObjectsResult) -> Vec<String> {
         result
             .objects
-            .into_iter()
-            .map(|object| object.key)
+            .iter()
+            .map(|object| object.key.clone())
             .collect()
     }
 
     fn assert_listing_parity(
-        expected: crate::models::ListObjectsResult,
-        actual: crate::models::ListObjectsResult,
+        expected: &crate::models::ListObjectsResult,
+        actual: &crate::models::ListObjectsResult,
     ) {
-        assert_eq!(keys(actual.clone()), keys(expected.clone()));
+        assert_eq!(keys(actual), keys(expected));
         assert_eq!(actual.common_prefixes, expected.common_prefixes);
         assert_eq!(actual.is_truncated, expected.is_truncated);
         assert_eq!(actual.next_marker, expected.next_marker);
@@ -490,7 +486,7 @@ mod tests {
             .list_objects("bucket", None, None, None, Some(10))
             .unwrap();
 
-        assert_eq!(keys(listed), vec!["same.txt"]);
+        assert_eq!(keys(&listed), vec!["same.txt"]);
         assert_eq!(
             storage.get_object("bucket", "same.txt").unwrap().data,
             b"two"
@@ -519,7 +515,7 @@ mod tests {
             .list_objects("bucket", Some(""), Some("/"), None, Some(10))
             .unwrap();
 
-        assert_listing_parity(expected, actual);
+        assert_listing_parity(&expected, &actual);
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -543,7 +539,7 @@ mod tests {
         let actual_first = storage
             .list_objects("bucket", None, None, None, Some(2))
             .unwrap();
-        assert_listing_parity(expected_first.clone(), actual_first.clone());
+        assert_listing_parity(&expected_first, &actual_first);
 
         let marker = actual_first
             .next_marker
@@ -555,7 +551,7 @@ mod tests {
         let actual_second = storage
             .list_objects("bucket", None, None, Some(marker), Some(2))
             .unwrap();
-        assert_listing_parity(expected_second, actual_second);
+        assert_listing_parity(&expected_second, &actual_second);
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -579,7 +575,7 @@ mod tests {
             .list_objects("bucket", None, None, None, Some(10))
             .unwrap();
 
-        assert_listing_parity(expected, actual);
+        assert_listing_parity(&expected, &actual);
 
         let _ = std::fs::remove_dir_all(&base);
     }

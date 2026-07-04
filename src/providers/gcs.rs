@@ -43,6 +43,7 @@ impl Default for GcsAdapter {
 type MultipartUploadParts = (String, String, HashMap<String, String>, Vec<u8>);
 
 impl GcsAdapter {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             resumable_sessions: Mutex::new(HashMap::new()),
@@ -109,20 +110,17 @@ impl GcsAdapter {
 
     fn error_response(status: StatusCode, code: &str, message: &str) -> Response<Body> {
         let body = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>{}</Code><Message>{}</Message></Error>",
-            code, message
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>{code}</Code><Message>{message}</Message></Error>"
         );
         Self::xml_response(status, body)
     }
 
     fn is_gcs_host(req: &Request) -> bool {
-        req.host()
-            .map(|host| {
-                let host = host.split(':').next().unwrap_or(host);
-                host.eq_ignore_ascii_case("storage.googleapis.com")
-                    || host.eq_ignore_ascii_case("storage.localhost")
-            })
-            .unwrap_or(false)
+        req.host().is_some_and(|host| {
+            let host = host.split(':').next().unwrap_or(host);
+            host.eq_ignore_ascii_case("storage.googleapis.com")
+                || host.eq_ignore_ascii_case("storage.localhost")
+        })
     }
 
     fn parse_path(req: &Request) -> (Option<String>, Option<String>) {
@@ -181,7 +179,7 @@ impl GcsAdapter {
 
     fn decode_object_path(path: &str) -> Result<String, String> {
         urlencoding::decode(path)
-            .map(|decoded| decoded.into_owned())
+            .map(std::borrow::Cow::into_owned)
             .map_err(|err| format!("Invalid encoded GCS object path: {err}"))
     }
 
@@ -190,16 +188,18 @@ impl GcsAdapter {
             .map(Self::generation)
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(0);
-        let timestamp = chrono::Utc::now().timestamp_millis().max(1) as u64;
+        let timestamp = u64::try_from(chrono::Utc::now().timestamp_millis().max(1)).unwrap_or(1);
         std::cmp::max(current.saturating_add(1), timestamp).to_string()
     }
 
     fn metadata_with_gcs_state(
-        metadata: HashMap<String, String>,
+        mut metadata: HashMap<String, String>,
         generation: String,
         metageneration: String,
     ) -> HashMap<String, String> {
-        let mut metadata = Self::public_metadata(&metadata);
+        metadata.retain(|key, _| {
+            key.as_str() != GCS_GENERATION_KEY && key.as_str() != GCS_METAGENERATION_KEY
+        });
         metadata.insert(GCS_GENERATION_KEY.to_string(), generation);
         metadata.insert(GCS_METAGENERATION_KEY.to_string(), metageneration);
         metadata
@@ -314,7 +314,7 @@ impl GcsAdapter {
         if end < start {
             return None;
         }
-        Some((start as usize, end as usize))
+        Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
     }
 
     fn metadata_from_headers(req: &Request) -> HashMap<String, String> {
@@ -341,7 +341,7 @@ impl GcsAdapter {
     ) -> Result<MultipartUploadParts, String> {
         let boundary = Self::multipart_boundary(content_type)
             .ok_or_else(|| "Missing multipart boundary".to_string())?;
-        let marker = format!("--{}", boundary);
+        let marker = format!("--{boundary}");
         let payload = String::from_utf8_lossy(body);
         let mut object_name = None;
         let mut metadata = HashMap::new();
@@ -372,7 +372,7 @@ impl GcsAdapter {
                 object_name = json
                     .get("name")
                     .and_then(|value| value.as_str())
-                    .map(|value| value.to_string());
+                    .map(std::string::ToString::to_string);
                 metadata = json
                     .get("metadata")
                     .and_then(|value| value.as_object())
@@ -414,12 +414,16 @@ impl GcsAdapter {
             .header("x-goog-generation", &generation)
             .header("x-goog-metageneration", &metageneration);
         for (key, value) in Self::public_metadata(&blob.metadata) {
-            builder = builder.header(&format!("x-goog-meta-{}", key), &value);
+            builder = builder.header(&format!("x-goog-meta-{key}"), &value);
         }
         if let Some(content_range) = content_range {
             builder = builder.header("content-range", &content_range);
         }
         builder
+    }
+
+    fn response_body_len(size: u64) -> Result<usize, String> {
+        usize::try_from(size).map_err(|_| "GCS object is too large for this platform".to_string())
     }
 
     fn sign(config: &AuthConfig, payload: &str) -> Result<String, String> {
@@ -432,16 +436,16 @@ impl GcsAdapter {
             .ok()
             .unwrap_or_else(|| secret.as_bytes().to_vec());
         let mut mac =
-            HmacSha1::new_from_slice(&key).map_err(|err| format!("Invalid GCS key: {}", err))?;
+            HmacSha1::new_from_slice(&key).map_err(|err| format!("Invalid GCS key: {err}"))?;
         mac.update(payload.as_bytes());
         Ok(BASE64.encode(mac.finalize().into_bytes()))
     }
 
     fn string_to_sign(req: &Request, bucket: &str, object: Option<&str>, expires: &str) -> String {
         let resource = if let Some(object) = object {
-            format!("/{}/{}", bucket, object)
+            format!("/{bucket}/{object}")
         } else {
-            format!("/{}", bucket)
+            format!("/{bucket}")
         };
 
         format!(
@@ -546,7 +550,7 @@ mod tests {
             enforce_auth: false,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -560,7 +564,7 @@ mod tests {
             enforce_auth: true,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -593,9 +597,9 @@ mod tests {
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/photos",
                     &[("host", "storage.googleapis.com")],
@@ -603,14 +607,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("bucket create should succeed");
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/photos/kitten.txt",
                     &[
@@ -621,14 +624,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("object put should succeed");
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/photos",
                     &[("host", "storage.googleapis.com")],
@@ -636,7 +638,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("list should succeed");
         let body = response
             .into_body()
@@ -650,9 +651,9 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/photos/kitten.txt",
                     &[("host", "storage.googleapis.com")],
@@ -660,7 +661,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("get should succeed");
         let body = response
             .into_body()
@@ -679,9 +679,9 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/upload/storage/v1/b/videos/o?uploadType=resumable&name=movie.txt",
                     &[
@@ -690,9 +690,7 @@ mod tests {
                     ],
                     b"",
                 )
-                .await,
-            )
-            .await
+                .await,)
             .expect("resumable init should succeed");
         let location = response
             .headers()
@@ -703,9 +701,9 @@ mod tests {
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     &location,
                     &[("host", "storage.googleapis.com")],
@@ -713,15 +711,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("resumable commit should succeed");
 
         let expires = "4102444800";
         let request = parsed_request(
             "GET",
             &format!(
-                "http://localhost/videos/movie.txt?GoogleAccessId=test-access&Expires={}",
-                expires
+                "http://localhost/videos/movie.txt?GoogleAccessId=test-access&Expires={expires}"
             ),
             &[("host", "storage.googleapis.com")],
             b"",
@@ -745,8 +741,7 @@ mod tests {
         .await;
 
         let response = adapter
-            .handle_request(storage, gcs_auth(), signed_request)
-            .await
+            .handle_request(&storage, &gcs_auth(), &signed_request)
             .expect("signed get should succeed");
         let body = response
             .into_body()
@@ -765,9 +760,9 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/upload/storage/v1/b/videos/o?uploadType=resumable&name=restart.txt",
                     &[
@@ -776,9 +771,7 @@ mod tests {
                     ],
                     b"",
                 )
-                .await,
-            )
-            .await
+                .await,)
             .expect("resumable init should succeed");
         let location = response
             .headers()
@@ -790,9 +783,9 @@ mod tests {
         let restarted = GcsAdapter::new();
         restarted
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     &location,
                     &[("host", "storage.googleapis.com")],
@@ -800,7 +793,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("resumable commit after restart should succeed");
 
         let stored = storage
@@ -816,9 +808,9 @@ mod tests {
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/docs",
                     &[("host", "storage.googleapis.com")],
@@ -826,14 +818,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("bucket create should succeed");
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/docs/readme.txt",
                     &[
@@ -845,15 +836,14 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("object put should succeed");
         assert!(response.headers().get("x-goog-generation").is_some());
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "HEAD",
                     "http://localhost/docs/readme.txt",
                     &[("host", "storage.googleapis.com")],
@@ -861,7 +851,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("head should succeed");
         assert!(response.headers().get("x-goog-generation").is_some());
         assert_eq!(
@@ -881,9 +870,9 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/docs/readme.txt",
                     &[("host", "storage.googleapis.com"), ("range", "bytes=6-8")],
@@ -891,7 +880,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("range get should succeed");
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(
@@ -922,133 +910,10 @@ mod tests {
         let adapter = GcsAdapter::new();
         let storage = temp_storage();
 
-        let response = adapter
-            .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "POST",
-                    "http://localhost/storage/v1/b?project=test-project",
-                    &[
-                        ("host", "storage.googleapis.com"),
-                        ("content-type", "application/json"),
-                    ],
-                    br#"{"name":"json-bucket"}"#,
-                )
-                .await,
-            )
-            .await
-            .expect("json api create bucket should succeed");
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let response = adapter
-            .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "POST",
-                    "http://localhost/upload/storage/v1/b/json-bucket/o?uploadType=resumable&name=hello.txt",
-                    &[
-                        ("host", "storage.googleapis.com"),
-                        ("x-upload-content-type", "text/plain"),
-                        ("x-goog-meta-owner", "jules"),
-                    ],
-                    b"",
-                )
-                .await,
-            )
-            .await
-            .expect("resumable init should succeed");
-        let location = response
-            .headers()
-            .get("location")
-            .and_then(|value| value.to_str().ok())
-            .expect("location should exist")
-            .to_string();
-
-        adapter
-            .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "PUT",
-                    &location,
-                    &[("host", "storage.googleapis.com")],
-                    b"json api",
-                )
-                .await,
-            )
-            .await
-            .expect("resumable upload should succeed");
-
-        let response = adapter
-            .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "GET",
-                    "http://localhost/storage/v1/b/json-bucket/o/hello.txt",
-                    &[("host", "storage.googleapis.com")],
-                    b"",
-                )
-                .await,
-            )
-            .await
-            .expect("json object metadata should succeed");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        let json = String::from_utf8(body.to_vec()).expect("json");
-        assert!(json.contains("\"name\":\"hello.txt\""));
-        assert!(json.contains("\"owner\":\"jules\""));
-
-        let response = adapter
-            .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "GET",
-                    "http://localhost/download/storage/v1/b/json-bucket/o/hello.txt?alt=media",
-                    &[("host", "storage.googleapis.com")],
-                    b"",
-                )
-                .await,
-            )
-            .await
-            .expect("download should succeed");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        assert_eq!(body.as_ref(), b"json api");
-
-        let response = adapter
-            .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
-                    "GET",
-                    "http://localhost/download/storage/v1/b/json-bucket/o/hello.txt?alt=media",
-                    &[("host", "storage.googleapis.com"), ("range", "bytes=0-3")],
-                    b"",
-                )
-                .await,
-            )
-            .await
-            .expect("range download should succeed");
-        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        assert_eq!(body.as_ref(), b"json");
+        create_gcs_json_bucket(&adapter, &storage).await;
+        upload_gcs_json_object_resumably(&adapter, &storage).await;
+        verify_gcs_json_object_metadata(&adapter, &storage).await;
+        verify_gcs_json_media_downloads(&adapter, &storage).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1065,9 +930,9 @@ mod tests {
         );
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/upload/storage/v1/b/multipart-bucket/o?uploadType=multipart",
                     &[
@@ -1078,15 +943,14 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("multipart upload should succeed");
         assert_eq!(response.status(), StatusCode::OK);
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/storage/v1/b/multipart-bucket/o/multi.txt",
                     &[("host", "storage.googleapis.com")],
@@ -1094,7 +958,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("metadata fetch should succeed");
         let body = response
             .into_body()
@@ -1113,90 +976,182 @@ mod tests {
         let storage = temp_storage();
         storage.create_bucket("gens".to_string()).unwrap();
 
+        let second_generation = verify_gcs_generation_increment(&adapter, &storage).await;
+        verify_gcs_json_generation_metadata(&adapter, &storage, &second_generation).await;
+        verify_gcs_metageneration_patch(&adapter, &storage, &second_generation).await;
+    }
+
+    async fn create_gcs_json_bucket(adapter: &GcsAdapter, storage: &Arc<dyn Storage>) {
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "PUT",
-                    "http://localhost/gens/item.txt",
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    "http://localhost/storage/v1/b?project=test-project",
                     &[
                         ("host", "storage.googleapis.com"),
-                        ("content-type", "text/plain"),
+                        ("content-type", "application/json"),
                     ],
-                    b"v1",
+                    br#"{"name":"json-bucket"}"#,
                 )
                 .await,
             )
-            .await
-            .expect("first put should succeed");
-        let first_generation = response
-            .headers()
-            .get("x-goog-generation")
-            .and_then(|value| value.to_str().ok())
-            .expect("generation should exist")
-            .to_string();
+            .expect("json api create bucket should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 
+    async fn upload_gcs_json_object_resumably(adapter: &GcsAdapter, storage: &Arc<dyn Storage>) {
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "PUT",
-                    "http://localhost/gens/item.txt",
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    "http://localhost/upload/storage/v1/b/json-bucket/o?uploadType=resumable&name=hello.txt",
                     &[
                         ("host", "storage.googleapis.com"),
-                        ("content-type", "text/plain"),
+                        ("x-upload-content-type", "text/plain"),
+                        ("x-goog-meta-owner", "jules"),
                     ],
-                    b"v2",
+                    b"",
                 )
                 .await,
             )
-            .await
-            .expect("second put should succeed");
-        let second_generation = response
-            .headers()
-            .get("x-goog-generation")
-            .and_then(|value| value.to_str().ok())
-            .expect("generation should exist")
+            .expect("resumable init should succeed");
+        let location = header_value(&response, "location")
+            .expect("location should exist")
             .to_string();
-        assert_ne!(first_generation, second_generation);
 
+        adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "PUT",
+                    &location,
+                    &[("host", "storage.googleapis.com")],
+                    b"json api",
+                )
+                .await,
+            )
+            .expect("resumable upload should succeed");
+    }
+
+    async fn verify_gcs_json_object_metadata(adapter: &GcsAdapter, storage: &Arc<dyn Storage>) {
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
-                    "http://localhost/storage/v1/b/gens/o/item.txt",
+                    "http://localhost/storage/v1/b/json-bucket/o/hello.txt",
                     &[("host", "storage.googleapis.com")],
                     b"",
                 )
                 .await,
             )
-            .await
-            .expect("json metadata fetch should succeed");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
+            .expect("json object metadata should succeed");
+        let json = String::from_utf8(read_test_body(response).await).expect("json");
+        assert!(json.contains("\"name\":\"hello.txt\""));
+        assert!(json.contains("\"owner\":\"jules\""));
+    }
+
+    async fn verify_gcs_json_media_downloads(adapter: &GcsAdapter, storage: &Arc<dyn Storage>) {
+        let response = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "GET",
+                    "http://localhost/download/storage/v1/b/json-bucket/o/hello.txt?alt=media",
+                    &[("host", "storage.googleapis.com")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("download should succeed");
+        assert_eq!(read_test_body(response).await.as_slice(), b"json api");
+
+        let response = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "GET",
+                    "http://localhost/download/storage/v1/b/json-bucket/o/hello.txt?alt=media",
+                    &[("host", "storage.googleapis.com"), ("range", "bytes=0-3")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("range download should succeed");
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(read_test_body(response).await.as_slice(), b"json");
+    }
+
+    async fn verify_gcs_generation_increment(
+        adapter: &GcsAdapter,
+        storage: &Arc<dyn Storage>,
+    ) -> String {
+        let first_generation = put_gcs_generation_object(adapter, storage, b"v1").await;
+        let second_generation = put_gcs_generation_object(adapter, storage, b"v2").await;
+        assert_ne!(first_generation, second_generation);
+        second_generation
+    }
+
+    async fn put_gcs_generation_object(
+        adapter: &GcsAdapter,
+        storage: &Arc<dyn Storage>,
+        body: &[u8],
+    ) -> String {
+        let response = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "PUT",
+                    "http://localhost/gens/item.txt",
+                    &[
+                        ("host", "storage.googleapis.com"),
+                        ("content-type", "text/plain"),
+                    ],
+                    body,
+                )
+                .await,
+            )
+            .expect("put should succeed");
+        header_value(&response, "x-goog-generation")
+            .expect("generation should exist")
+            .to_string()
+    }
+
+    async fn verify_gcs_json_generation_metadata(
+        adapter: &GcsAdapter,
+        storage: &Arc<dyn Storage>,
+        generation: &str,
+    ) {
+        let json = fetch_gcs_generation_metadata(adapter, storage).await;
         assert_eq!(
             json.get("generation").and_then(|value| value.as_str()),
-            Some(second_generation.as_str())
+            Some(generation)
         );
         assert_eq!(
             json.get("metageneration").and_then(|value| value.as_str()),
             Some("1")
         );
+    }
 
+    async fn verify_gcs_metageneration_patch(
+        adapter: &GcsAdapter,
+        storage: &Arc<dyn Storage>,
+        generation: &str,
+    ) {
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PATCH",
                     "http://localhost/storage/v1/b/gens/o/item.txt?ifMetagenerationMatch=1",
                     &[
@@ -1207,18 +1162,11 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("patch should succeed");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
+        let json = parse_json_body(response).await;
         assert_eq!(
             json.get("generation").and_then(|value| value.as_str()),
-            Some(second_generation.as_str())
+            Some(generation)
         );
         assert_eq!(
             json.get("metageneration").and_then(|value| value.as_str()),
@@ -1232,6 +1180,47 @@ mod tests {
         );
     }
 
+    async fn fetch_gcs_generation_metadata(
+        adapter: &GcsAdapter,
+        storage: &Arc<dyn Storage>,
+    ) -> serde_json::Value {
+        let response = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "GET",
+                    "http://localhost/storage/v1/b/gens/o/item.txt",
+                    &[("host", "storage.googleapis.com")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("json metadata fetch should succeed");
+        parse_json_body(response).await
+    }
+
+    async fn parse_json_body(response: Response<Body>) -> serde_json::Value {
+        serde_json::from_slice(&read_test_body(response).await).expect("json should parse")
+    }
+
+    async fn read_test_body(response: Response<Body>) -> Vec<u8> {
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should read")
+            .to_bytes()
+            .to_vec()
+    }
+
+    fn header_value<'a>(response: &'a Response<Body>, name: &str) -> Option<&'a str> {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn should_enforce_gcs_generation_and_metageneration_preconditions() {
         let adapter = GcsAdapter::new();
@@ -1240,9 +1229,9 @@ mod tests {
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/conds/check.txt",
                     &[
@@ -1253,14 +1242,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("put should succeed");
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/storage/v1/b/conds/o/check.txt",
                     &[("host", "storage.googleapis.com")],
@@ -1268,7 +1256,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("json fetch should succeed");
         let body = response
             .into_body()
@@ -1285,28 +1272,25 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     &format!(
-                        "http://localhost/storage/v1/b/conds/o/check.txt?ifGenerationMatch={}",
-                        generation
+                        "http://localhost/storage/v1/b/conds/o/check.txt?ifGenerationMatch={generation}"
                     ),
                     &[("host", "storage.googleapis.com")],
                     b"",
                 )
-                .await,
-            )
-            .await
+                .await,)
             .expect("conditional get should complete");
         assert_eq!(response.status(), StatusCode::OK);
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/storage/v1/b/conds/o/check.txt?ifGenerationMatch=999999",
                     &[("host", "storage.googleapis.com")],
@@ -1314,15 +1298,14 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("failed conditional get should complete");
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
                     "PATCH",
                     "http://localhost/storage/v1/b/conds/o/check.txt?ifMetagenerationMatch=999",
                     &[
@@ -1333,7 +1316,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("failed patch should complete");
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
     }
@@ -1348,8 +1330,7 @@ impl ProviderAdapter for GcsAdapter {
         Self::is_gcs_host(req)
             || req
                 .header("authorization")
-                .map(|value| value.starts_with("GOOG1 "))
-                .unwrap_or(false)
+                .is_some_and(|value| value.starts_with("GOOG1 "))
             || req.query_param("GoogleAccessId").is_some()
             || req.path().starts_with("/upload/storage/v1/")
             || req.path().starts_with("/storage/v1/")
@@ -1376,201 +1357,284 @@ impl ProviderAdapter for GcsAdapter {
         auth_config: Arc<AuthConfig>,
         req: Request,
     ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, String>> + Send + 'a>> {
-        Box::pin(async move { self.handle_request(storage, auth_config, req).await })
+        Box::pin(std::future::ready(self.handle_request(
+            &storage,
+            &auth_config,
+            &req,
+        )))
     }
 }
 
 impl GcsAdapter {
-    async fn handle_request(
+    fn handle_request(
         &self,
-        storage: Arc<dyn Storage>,
-        auth_config: Arc<AuthConfig>,
-        req: Request,
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
     ) -> Result<Response<Body>, String> {
         if req.path().starts_with("/storage/v1/") || req.path().starts_with("/download/storage/v1/")
         {
-            return self.handle_json_api(storage, auth_config, req).await;
+            return Self::handle_json_api(storage, auth_config, req);
         }
 
         if req.path().starts_with("/upload/storage/v1/b/")
             || req.path().starts_with("/upload/resumable/")
         {
-            return self.handle_resumable(storage, auth_config, req).await;
+            return self.handle_resumable(storage, auth_config, req);
         }
 
-        let (bucket, object) = Self::parse_path(&req);
+        let (bucket, object) = Self::parse_path(req);
         let Some(bucket) = bucket else {
-            if req.method() == Method::GET {
-                let buckets = storage
-                    .as_ref()
-                    .list_namespaces()
-                    .map_err(|err| err.to_string())?;
-                let mut body = String::with_capacity(128 + buckets.len() * 64);
-                body.push_str(
-                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListAllMyBucketsResult><Buckets>",
-                );
-                for bucket in buckets {
-                    body.push_str("<Bucket><Name>");
-                    push_escaped_xml(&mut body, &bucket.name);
-                    body.push_str("</Name></Bucket>");
-                }
-                body.push_str("</Buckets></ListAllMyBucketsResult>");
-                return Ok(Self::xml_response(StatusCode::OK, body));
-            }
+            return Self::handle_xml_root_request(storage, req);
+        };
 
+        if let Err(response) = Self::authorize(req, auth_config, &bucket, object.as_deref()) {
+            return Ok(response);
+        }
+
+        if let Some(object) = object {
+            Self::handle_xml_object_request(storage, req, &bucket, &object)
+        } else {
+            Self::handle_xml_bucket_request(storage, req, &bucket)
+        }
+    }
+
+    fn handle_xml_root_request(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+    ) -> Result<Response<Body>, String> {
+        if req.method() != Method::GET {
             return Ok(Self::error_response(
                 StatusCode::BAD_REQUEST,
                 "InvalidURI",
                 "Missing bucket",
             ));
-        };
-
-        if let Err(response) = Self::authorize(&req, &auth_config, &bucket, object.as_deref()) {
-            return Ok(response);
         }
 
-        match (req.method(), object) {
-            (&Method::PUT, None) => {
+        let buckets = storage
+            .as_ref()
+            .list_namespaces()
+            .map_err(|err| err.to_string())?;
+        let mut body = String::with_capacity(128 + buckets.len() * 64);
+        body.push_str(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListAllMyBucketsResult><Buckets>",
+        );
+        for bucket in buckets {
+            body.push_str("<Bucket><Name>");
+            push_escaped_xml(&mut body, &bucket.name);
+            body.push_str("</Name></Bucket>");
+        }
+        body.push_str("</Buckets></ListAllMyBucketsResult>");
+        Ok(Self::xml_response(StatusCode::OK, body))
+    }
+
+    fn handle_xml_bucket_request(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        match *req.method() {
+            Method::PUT => {
                 storage
                     .as_ref()
-                    .create_namespace(bucket)
+                    .create_namespace(bucket.to_string())
                     .map_err(|err| err.to_string())?;
                 Ok(Self::empty_response(StatusCode::OK))
             }
-            (&Method::DELETE, None) => {
+            Method::DELETE => {
                 storage
                     .as_ref()
-                    .delete_namespace(&bucket)
+                    .delete_namespace(bucket)
                     .map_err(|err| err.to_string())?;
                 Ok(Self::empty_response(StatusCode::NO_CONTENT))
             }
-            (&Method::GET, None) => {
-                let blobs = storage
-                    .as_ref()
-                    .list_blobs(
-                        &bucket,
-                        req.query_param("prefix"),
-                        req.query_param("delimiter"),
-                        None,
-                        None,
-                    )
-                    .map_err(|err| err.to_string())?;
-                let mut body = String::with_capacity(128 + blobs.len() * 128);
-                body.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>");
-                push_escaped_xml(&mut body, &bucket);
-                body.push_str("</Name>");
-                for blob in blobs {
-                    let generation = blob.version_id.as_deref().map_or_else(
-                        || blob.last_modified.timestamp_millis().max(1).to_string(),
-                        str::to_string,
-                    );
-                    body.push_str("<Contents><Key>");
-                    push_escaped_xml(&mut body, &blob.key);
-                    body.push_str("</Key><Size>");
-                    write!(&mut body, "{}", blob.size).unwrap();
-                    body.push_str("</Size><ETag>");
-                    push_escaped_xml(&mut body, &blob.etag);
-                    body.push_str("</ETag><Generation>");
-                    push_escaped_xml(&mut body, &generation);
-                    body.push_str("</Generation></Contents>");
-                }
-                body.push_str("</ListBucketResult>");
-                Ok(Self::xml_response(StatusCode::OK, body))
-            }
-            (&Method::PUT, Some(object)) => {
-                let stored = Self::put_blob_with_generation(
-                    storage.as_ref(),
-                    bucket,
-                    object,
-                    req.body.to_vec(),
-                    req.header("content-type")
-                        .unwrap_or("application/octet-stream")
-                        .to_string(),
-                    Self::metadata_from_headers(&req),
-                )
-                .map_err(|err| err.to_string())?;
-                Ok(Self::response(StatusCode::OK)
-                    .header("etag", &format!("\"{}\"", stored.etag))
-                    .header(
-                        "x-goog-generation",
-                        &Self::generation_from_metadata(&stored.metadata),
-                    )
-                    .header(
-                        "x-goog-metageneration",
-                        &Self::metageneration_from_metadata(&stored.metadata),
-                    )
-                    .empty())
-            }
-            (&Method::GET, Some(object)) => {
-                if let Some(range_header) = req.header("range") {
-                    let blob = storage
-                        .as_ref()
-                        .get_blob(&bucket, &object)
-                        .map_err(|err| err.to_string())?;
-                    if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-                        let payload = storage
-                            .as_ref()
-                            .get_blob_range(
-                                &bucket,
-                                &object,
-                                BlobRange {
-                                    start: start as u64,
-                                    end: end as u64,
-                                },
-                            )
-                            .map_err(|err| err.to_string())?;
-                        return Ok(Self::object_response(
-                            StatusCode::PARTIAL_CONTENT,
-                            &payload.blob,
-                            payload.data.len(),
-                            Some(format!("bytes {}-{}/{}", start, end, blob.size)),
-                        )
-                        .body(payload.data)
-                        .build());
-                    }
-                    return Ok(Self::error_response(
-                        StatusCode::RANGE_NOT_SATISFIABLE,
-                        "InvalidRange",
-                        "The requested range is not satisfiable",
-                    ));
-                }
-                let blob = storage
-                    .as_ref()
-                    .get_blob(&bucket, &object)
-                    .map_err(|err| err.to_string())?;
-                Ok(
-                    Self::object_response(StatusCode::OK, &blob, blob.size as usize, None)
-                        .body(blob.data)
-                        .build(),
-                )
-            }
-            (&Method::HEAD, Some(object)) => {
-                let blob = storage
-                    .as_ref()
-                    .get_blob(&bucket, &object)
-                    .map_err(|err| err.to_string())?;
-                Ok(Self::object_response(StatusCode::OK, &blob, blob.size as usize, None).empty())
-            }
-            (&Method::DELETE, Some(object)) => {
-                storage
-                    .as_ref()
-                    .delete_blob(&bucket, &object)
-                    .map_err(|err| err.to_string())?;
-                Ok(Self::empty_response(StatusCode::NO_CONTENT))
-            }
-            _ => Ok(Self::error_response(
-                StatusCode::METHOD_NOT_ALLOWED,
-                "UnsupportedHttpVerb",
-                "Unsupported GCS operation",
-            )),
+            Method::GET => Self::list_xml_bucket(storage, req, bucket),
+            _ => Ok(Self::unsupported_xml_operation()),
         }
     }
 
-    async fn handle_resumable(
+    fn list_xml_bucket(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        let blobs = storage
+            .as_ref()
+            .list_blobs(
+                bucket,
+                req.query_param("prefix"),
+                req.query_param("delimiter"),
+                None,
+                None,
+            )
+            .map_err(|err| err.to_string())?;
+        let mut body = String::with_capacity(128 + blobs.len() * 128);
+        body.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?><ListBucketResult><Name>");
+        push_escaped_xml(&mut body, bucket);
+        body.push_str("</Name>");
+        for blob in blobs {
+            Self::append_xml_bucket_item(&mut body, &blob);
+        }
+        body.push_str("</ListBucketResult>");
+        Ok(Self::xml_response(StatusCode::OK, body))
+    }
+
+    fn append_xml_bucket_item(body: &mut String, blob: &crate::blob::BlobRecord) {
+        let generation = blob.version_id.as_deref().map_or_else(
+            || blob.last_modified.timestamp_millis().max(1).to_string(),
+            str::to_string,
+        );
+        body.push_str("<Contents><Key>");
+        push_escaped_xml(body, &blob.key);
+        body.push_str("</Key><Size>");
+        write!(body, "{}", blob.size).unwrap();
+        body.push_str("</Size><ETag>");
+        push_escaped_xml(body, &blob.etag);
+        body.push_str("</ETag><Generation>");
+        push_escaped_xml(body, &generation);
+        body.push_str("</Generation></Contents>");
+    }
+
+    fn handle_xml_object_request(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        match *req.method() {
+            Method::PUT => Self::put_xml_object(storage, req, bucket, object),
+            Method::GET => Self::object_media_response(storage, req, bucket, object),
+            Method::HEAD => Self::object_head_response(storage, bucket, object),
+            Method::DELETE => {
+                storage
+                    .as_ref()
+                    .delete_blob(bucket, object)
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::empty_response(StatusCode::NO_CONTENT))
+            }
+            _ => Ok(Self::unsupported_xml_operation()),
+        }
+    }
+
+    fn put_xml_object(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        let stored = Self::put_blob_with_generation(
+            storage.as_ref(),
+            bucket.to_string(),
+            object.to_string(),
+            req.body.to_vec(),
+            req.header("content-type")
+                .unwrap_or("application/octet-stream")
+                .to_string(),
+            Self::metadata_from_headers(req),
+        )?;
+        Ok(Self::response(StatusCode::OK)
+            .header("etag", &format!("\"{}\"", stored.etag))
+            .header(
+                "x-goog-generation",
+                &Self::generation_from_metadata(&stored.metadata),
+            )
+            .header(
+                "x-goog-metageneration",
+                &Self::metageneration_from_metadata(&stored.metadata),
+            )
+            .empty())
+    }
+
+    fn object_media_response(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        let blob = storage
+            .as_ref()
+            .get_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
+        Self::object_media_response_for_blob(storage, req, bucket, object, blob)
+    }
+
+    fn object_media_response_for_blob(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+        blob: crate::models::Object,
+    ) -> Result<Response<Body>, String> {
+        if let Some(range_header) = req.header("range") {
+            return Self::object_range_response(storage, bucket, object, &blob, range_header);
+        }
+        let body_len = Self::response_body_len(blob.size)?;
+        Ok(Self::object_response(StatusCode::OK, &blob, body_len, None)
+            .body(blob.data)
+            .build())
+    }
+
+    fn object_head_response(
+        storage: &Arc<dyn Storage>,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        let blob = storage
+            .as_ref()
+            .get_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
+        let body_len = Self::response_body_len(blob.size)?;
+        Ok(Self::object_response(StatusCode::OK, &blob, body_len, None).empty())
+    }
+
+    fn object_range_response(
+        storage: &Arc<dyn Storage>,
+        bucket: &str,
+        object: &str,
+        blob: &crate::models::Object,
+        range_header: &str,
+    ) -> Result<Response<Body>, String> {
+        if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
+            let payload = storage
+                .as_ref()
+                .get_blob_range(
+                    bucket,
+                    object,
+                    BlobRange {
+                        start: start as u64,
+                        end: end as u64,
+                    },
+                )
+                .map_err(|err| err.to_string())?;
+            return Ok(Self::object_response(
+                StatusCode::PARTIAL_CONTENT,
+                &payload.blob,
+                payload.data.len(),
+                Some(format!("bytes {start}-{end}/{}", blob.size)),
+            )
+            .body(payload.data)
+            .build());
+        }
+        Ok(Self::error_response(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "InvalidRange",
+            "The requested range is not satisfiable",
+        ))
+    }
+
+    fn unsupported_xml_operation() -> Response<Body> {
+        Self::error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "UnsupportedHttpVerb",
+            "Unsupported GCS operation",
+        )
+    }
+
+    fn handle_resumable(
         &self,
-        storage: Arc<dyn Storage>,
-        auth_config: Arc<AuthConfig>,
-        req: Request,
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
     ) -> Result<Response<Body>, String> {
         let parts: Vec<&str> = req
             .path()
@@ -1580,110 +1644,11 @@ impl GcsAdapter {
             .collect();
 
         if parts.starts_with(&["upload", "storage", "v1", "b"]) && parts.len() >= 6 {
-            let bucket = parts[4].to_string();
-            if let Err(response) = Self::authorize(&req, &auth_config, &bucket, None) {
-                return Ok(response);
-            }
-            if req.query_param("uploadType") == Some("multipart") {
-                let content_type = req.header("content-type").unwrap_or("multipart/related");
-                let (key, object_content_type, metadata, data) =
-                    Self::parse_multipart_upload(content_type, &req.body)?;
-                let stored = storage.as_ref();
-                let stored = Self::put_blob_with_generation(
-                    stored,
-                    bucket,
-                    key,
-                    data,
-                    object_content_type,
-                    metadata,
-                )?;
-                return Ok(Self::json_response(
-                    StatusCode::OK,
-                    &serde_json::json!({
-                        "kind": "storage#object",
-                        "name": stored.key,
-                        "etag": stored.etag,
-                        "generation": stored.metadata.get(GCS_GENERATION_KEY).cloned().unwrap_or_else(|| stored.last_modified.timestamp_millis().max(1).to_string()),
-                        "metageneration": stored.metadata.get(GCS_METAGENERATION_KEY).cloned().unwrap_or_else(|| "1".to_string()),
-                    })
-                    .to_string(),
-                ));
-            }
-            let key = req
-                .query_param("name")
-                .ok_or_else(|| "Missing resumable upload object name".to_string())?
-                .to_string();
-            let session_id = uuid::Uuid::new_v4().to_string();
-            let session = ResumableSession {
-                bucket,
-                key,
-                content_type: req
-                    .header("x-upload-content-type")
-                    .unwrap_or("application/octet-stream")
-                    .to_string(),
-                metadata: Self::metadata_from_headers(&req),
-            };
-            state::save_json(
-                storage.as_ref(),
-                GCS_RESUMABLE_SESSION_STATE,
-                &session_id,
-                &session,
-            )?;
-            self.resumable_sessions
-                .lock()
-                .map_err(|_| "Failed to lock resumable sessions".to_string())?
-                .insert(session_id.clone(), session);
-            let upload_location =
-                format!("{}/upload/resumable/{}", request_origin(&req), session_id);
-            return Ok(Self::response(StatusCode::OK)
-                .header("location", &upload_location)
-                .empty());
+            return self.handle_resumable_start(storage, auth_config, req, parts[4]);
         }
 
-        let parts: Vec<&str> = req
-            .path()
-            .trim_start_matches('/')
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
         if parts.starts_with(&["upload", "resumable"]) && parts.len() == 3 {
-            let session_id = parts[2];
-            let session = {
-                let mut sessions = self
-                    .resumable_sessions
-                    .lock()
-                    .map_err(|_| "Failed to lock resumable sessions".to_string())?;
-                sessions.remove(session_id)
-            }
-            .or(state::load_json(
-                storage.as_ref(),
-                GCS_RESUMABLE_SESSION_STATE,
-                session_id,
-            )?)
-            .ok_or_else(|| "Unknown resumable upload session".to_string())?;
-            let stored = storage.as_ref();
-            let stored = Self::put_blob_with_generation(
-                stored,
-                session.bucket,
-                session.key,
-                req.body.to_vec(),
-                session.content_type,
-                session.metadata,
-            )?;
-            storage
-                .delete_provider_state(GCS_RESUMABLE_SESSION_STATE, session_id)
-                .map_err(|err| err.to_string())?;
-            return Ok(Self::json_response(
-                StatusCode::OK,
-                &serde_json::json!({
-                    "kind": "storage#object",
-                    "name": stored.key,
-                    "etag": stored.etag,
-                    "generation": stored.metadata.get(GCS_GENERATION_KEY).cloned().unwrap_or_else(|| stored.last_modified.timestamp_millis().max(1).to_string()),
-                    "metageneration": stored.metadata.get(GCS_METAGENERATION_KEY).cloned().unwrap_or_else(|| "1".to_string()),
-                })
-                .to_string(),
-            ));
+            return self.complete_resumable_upload(storage, req, parts[2]);
         }
 
         Ok(Self::error_response(
@@ -1693,11 +1658,139 @@ impl GcsAdapter {
         ))
     }
 
-    async fn handle_json_api(
+    fn handle_resumable_start(
         &self,
-        storage: Arc<dyn Storage>,
-        auth_config: Arc<AuthConfig>,
-        req: Request,
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        if let Err(response) = Self::authorize(req, auth_config, bucket, None) {
+            return Ok(response);
+        }
+        if req.query_param("uploadType") == Some("multipart") {
+            return Self::handle_multipart_upload(storage, req, bucket);
+        }
+        self.create_resumable_session(storage, req, bucket)
+    }
+
+    fn handle_multipart_upload(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        let content_type = req.header("content-type").unwrap_or("multipart/related");
+        let (key, object_content_type, metadata, data) =
+            Self::parse_multipart_upload(content_type, &req.body)?;
+        let stored = Self::put_blob_with_generation(
+            storage.as_ref(),
+            bucket.to_string(),
+            key,
+            data,
+            object_content_type,
+            metadata,
+        )?;
+        Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
+    }
+
+    fn create_resumable_session(
+        &self,
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        let key = req
+            .query_param("name")
+            .ok_or_else(|| "Missing resumable upload object name".to_string())?
+            .to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let session = ResumableSession {
+            bucket: bucket.to_string(),
+            key,
+            content_type: req
+                .header("x-upload-content-type")
+                .unwrap_or("application/octet-stream")
+                .to_string(),
+            metadata: Self::metadata_from_headers(req),
+        };
+        state::save_json(
+            storage.as_ref(),
+            GCS_RESUMABLE_SESSION_STATE,
+            &session_id,
+            &session,
+        )?;
+        self.resumable_sessions
+            .lock()
+            .map_err(|_| "Failed to lock resumable sessions".to_string())?
+            .insert(session_id.clone(), session);
+        let upload_location = format!("{}/upload/resumable/{}", request_origin(req), session_id);
+        Ok(Self::response(StatusCode::OK)
+            .header("location", &upload_location)
+            .empty())
+    }
+
+    fn complete_resumable_upload(
+        &self,
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        session_id: &str,
+    ) -> Result<Response<Body>, String> {
+        let session = self.take_resumable_session(storage, session_id)?;
+        let stored = Self::put_blob_with_generation(
+            storage.as_ref(),
+            session.bucket,
+            session.key,
+            req.body.to_vec(),
+            session.content_type,
+            session.metadata,
+        )?;
+        storage
+            .delete_provider_state(GCS_RESUMABLE_SESSION_STATE, session_id)
+            .map_err(|err| err.to_string())?;
+        Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
+    }
+
+    fn take_resumable_session(
+        &self,
+        storage: &Arc<dyn Storage>,
+        session_id: &str,
+    ) -> Result<ResumableSession, String> {
+        {
+            let mut sessions = self
+                .resumable_sessions
+                .lock()
+                .map_err(|_| "Failed to lock resumable sessions".to_string())?;
+            sessions.remove(session_id)
+        }
+        .or(state::load_json(
+            storage.as_ref(),
+            GCS_RESUMABLE_SESSION_STATE,
+            session_id,
+        )?)
+        .ok_or_else(|| "Unknown resumable upload session".to_string())
+    }
+
+    fn gcs_object_json_response(
+        status: StatusCode,
+        stored: &crate::blob::BlobRecord,
+    ) -> Response<Body> {
+        Self::json_response(
+            status,
+            &serde_json::json!({
+                "kind": "storage#object",
+                "name": stored.key,
+                "etag": stored.etag,
+                "generation": Self::generation_from_metadata(&stored.metadata),
+                "metageneration": Self::metageneration_from_metadata(&stored.metadata),
+            })
+            .to_string(),
+        )
+    }
+
+    fn handle_json_api(
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
     ) -> Result<Response<Body>, String> {
         let parts: Vec<&str> = req
             .path()
@@ -1707,318 +1800,11 @@ impl GcsAdapter {
             .collect();
 
         if parts.starts_with(&["storage", "v1", "b"]) {
-            if parts.len() == 3 {
-                return match *req.method() {
-                    Method::GET => {
-                        let buckets = storage
-                            .as_ref()
-                            .list_namespaces()
-                            .map_err(|err| err.to_string())?;
-                        Ok(Self::json_response(
-                            StatusCode::OK,
-                            &serde_json::json!({
-                                "kind": "storage#buckets",
-                                "items": buckets.into_iter().map(|bucket| serde_json::json!({
-                                    "name": bucket.name,
-                                    "timeCreated": bucket.created_at.to_rfc3339(),
-                                })).collect::<Vec<_>>()
-                            })
-                            .to_string(),
-                        ))
-                    }
-                    Method::POST => {
-                        let payload: serde_json::Value =
-                            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
-                        let bucket = payload
-                            .get("name")
-                            .and_then(|value| value.as_str())
-                            .ok_or_else(|| "Missing bucket name".to_string())?;
-                        storage
-                            .as_ref()
-                            .create_namespace(bucket.to_string())
-                            .map_err(|err| err.to_string())?;
-                        let namespace = storage
-                            .as_ref()
-                            .get_namespace(bucket)
-                            .map_err(|err| err.to_string())?;
-                        Ok(Self::json_response(
-                            StatusCode::OK,
-                            &serde_json::json!({
-                                "kind": "storage#bucket",
-                                "name": namespace.name,
-                                "timeCreated": namespace.created_at.to_rfc3339(),
-                            })
-                            .to_string(),
-                        ))
-                    }
-                    _ => Ok(Self::error_response(
-                        StatusCode::METHOD_NOT_ALLOWED,
-                        "UnsupportedHttpVerb",
-                        "Unsupported GCS JSON API bucket collection operation",
-                    )),
-                };
-            }
-
-            let bucket = parts.get(3).copied().unwrap_or_default().to_string();
-            if let Err(response) = Self::authorize(&req, &auth_config, &bucket, None) {
-                return Ok(response);
-            }
-
-            if parts.len() == 4 {
-                return match *req.method() {
-                    Method::GET => {
-                        let namespace = storage
-                            .as_ref()
-                            .get_namespace(&bucket)
-                            .map_err(|err| err.to_string())?;
-                        Ok(Self::json_response(
-                            StatusCode::OK,
-                            &serde_json::json!({
-                                "kind": "storage#bucket",
-                                "name": namespace.name,
-                                "timeCreated": namespace.created_at.to_rfc3339(),
-                            })
-                            .to_string(),
-                        ))
-                    }
-                    Method::DELETE => {
-                        storage
-                            .as_ref()
-                            .delete_namespace(&bucket)
-                            .map_err(|err| err.to_string())?;
-                        Ok(Self::empty_response(StatusCode::NO_CONTENT))
-                    }
-                    _ => Ok(Self::error_response(
-                        StatusCode::METHOD_NOT_ALLOWED,
-                        "UnsupportedHttpVerb",
-                        "Unsupported GCS JSON API bucket operation",
-                    )),
-                };
-            }
-
-            if parts.get(4) == Some(&"o") {
-                if parts.len() == 5 {
-                    let blobs = storage
-                        .as_ref()
-                        .list_blobs(
-                            &bucket,
-                            req.query_param("prefix"),
-                            req.query_param("delimiter"),
-                            None,
-                            None,
-                        )
-                        .map_err(|err| err.to_string())?;
-                    return Ok(Self::json_response(
-                        StatusCode::OK,
-                        &serde_json::json!({
-                            "kind": "storage#objects",
-                            "items": blobs.into_iter().map(|blob| serde_json::json!({
-                                "name": blob.key,
-                                "bucket": bucket,
-                                "size": blob.size.to_string(),
-                                "etag": blob.etag,
-                                "generation": Self::generation_from_metadata(&blob.metadata),
-                                "metageneration": Self::metageneration_from_metadata(&blob.metadata),
-                                "metadata": Self::public_metadata(&blob.metadata),
-                            })).collect::<Vec<_>>()
-                        })
-                        .to_string(),
-                    ));
-                }
-
-                let object = Self::decode_object_path(&parts[5..].join("/"))?;
-                if let Err(response) = Self::authorize(&req, &auth_config, &bucket, Some(&object)) {
-                    return Ok(response);
-                }
-                let alt_media = req.query_param("alt") == Some("media")
-                    || req.path().starts_with("/download/storage/v1/");
-                return match *req.method() {
-                    Method::GET => {
-                        let blob = storage
-                            .as_ref()
-                            .get_blob(&bucket, &object)
-                            .map_err(|err| err.to_string())?;
-                        if let Err(response) = Self::check_gcs_preconditions(&req, &blob) {
-                            return Ok(response);
-                        }
-                        if alt_media {
-                            if let Some(range_header) = req.header("range") {
-                                if let Some((start, end)) =
-                                    Self::parse_range_header(range_header, blob.size)
-                                {
-                                    let payload = storage
-                                        .as_ref()
-                                        .get_blob_range(
-                                            &bucket,
-                                            &object,
-                                            BlobRange {
-                                                start: start as u64,
-                                                end: end as u64,
-                                            },
-                                        )
-                                        .map_err(|err| err.to_string())?;
-                                    return Ok(Self::object_response(
-                                        StatusCode::PARTIAL_CONTENT,
-                                        &payload.blob,
-                                        payload.data.len(),
-                                        Some(format!("bytes {}-{}/{}", start, end, blob.size)),
-                                    )
-                                    .body(payload.data)
-                                    .build());
-                                }
-                                return Ok(Self::error_response(
-                                    StatusCode::RANGE_NOT_SATISFIABLE,
-                                    "InvalidRange",
-                                    "The requested range is not satisfiable",
-                                ));
-                            }
-                            Ok(Self::object_response(
-                                StatusCode::OK,
-                                &blob,
-                                blob.size as usize,
-                                None,
-                            )
-                            .body(blob.data)
-                            .build())
-                        } else {
-                            Ok(Self::json_response(
-                                StatusCode::OK,
-                                &serde_json::json!({
-                                    "kind": "storage#object",
-                                    "name": blob.key,
-                                    "bucket": bucket,
-                                    "size": blob.size.to_string(),
-                                    "etag": blob.etag,
-                                    "generation": Self::generation(&blob),
-                                    "metageneration": Self::metageneration(&blob),
-                                    "metadata": Self::public_metadata(&blob.metadata),
-                                })
-                                .to_string(),
-                            ))
-                        }
-                    }
-                    Method::PATCH => {
-                        let blob = storage
-                            .as_ref()
-                            .get_blob(&bucket, &object)
-                            .map_err(|err| err.to_string())?;
-                        if let Err(response) = Self::check_gcs_preconditions(&req, &blob) {
-                            return Ok(response);
-                        }
-                        let payload: serde_json::Value =
-                            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
-                        let metadata = payload
-                            .get("metadata")
-                            .and_then(|value| value.as_object())
-                            .map(|map| {
-                                map.iter()
-                                    .filter_map(|(key, value)| {
-                                        value.as_str().map(|value| (key.clone(), value.to_string()))
-                                    })
-                                    .collect::<HashMap<_, _>>()
-                            })
-                            .unwrap_or_else(|| Self::public_metadata(&blob.metadata));
-                        let updated = storage
-                            .as_ref()
-                            .update_blob_metadata(UpdateBlobMetadataRequest {
-                                namespace: bucket.clone(),
-                                key: object.clone(),
-                                metadata: Self::metadata_with_gcs_state(
-                                    metadata,
-                                    Self::generation(&blob),
-                                    blob.metadata
-                                        .get(GCS_METAGENERATION_KEY)
-                                        .and_then(|value| value.parse::<u64>().ok())
-                                        .unwrap_or(1)
-                                        .saturating_add(1)
-                                        .to_string(),
-                                ),
-                            })
-                            .map_err(|err| err.to_string())?;
-                        return Ok(Self::json_response(
-                            StatusCode::OK,
-                            &serde_json::json!({
-                                "kind": "storage#object",
-                                "name": updated.key,
-                                "bucket": bucket,
-                                "size": updated.size.to_string(),
-                                "etag": updated.etag,
-                                "generation": Self::generation_from_metadata(&updated.metadata),
-                                "metageneration": Self::metageneration_from_metadata(&updated.metadata),
-                                "metadata": Self::public_metadata(&updated.metadata),
-                            })
-                            .to_string(),
-                        ));
-                    }
-                    Method::DELETE => {
-                        let blob = storage
-                            .as_ref()
-                            .get_blob(&bucket, &object)
-                            .map_err(|err| err.to_string())?;
-                        if let Err(response) = Self::check_gcs_preconditions(&req, &blob) {
-                            return Ok(response);
-                        }
-                        storage
-                            .as_ref()
-                            .delete_blob(&bucket, &object)
-                            .map_err(|err| err.to_string())?;
-                        Ok(Self::empty_response(StatusCode::NO_CONTENT))
-                    }
-                    _ => Ok(Self::error_response(
-                        StatusCode::METHOD_NOT_ALLOWED,
-                        "UnsupportedHttpVerb",
-                        "Unsupported GCS JSON API object operation",
-                    )),
-                };
-            }
+            return Self::handle_json_bucket_api(storage, auth_config, req, &parts);
         }
 
         if parts.starts_with(&["download", "storage", "v1", "b"]) && parts.get(5) == Some(&"o") {
-            let bucket = parts.get(4).copied().unwrap_or_default().to_string();
-            let object = Self::decode_object_path(&parts[6..].join("/"))?;
-            if let Err(response) = Self::authorize(&req, &auth_config, &bucket, Some(&object)) {
-                return Ok(response);
-            }
-            let blob = storage
-                .as_ref()
-                .get_blob(&bucket, &object)
-                .map_err(|err| err.to_string())?;
-            if let Err(response) = Self::check_gcs_preconditions(&req, &blob) {
-                return Ok(response);
-            }
-            if let Some(range_header) = req.header("range") {
-                if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-                    let payload = storage
-                        .as_ref()
-                        .get_blob_range(
-                            &bucket,
-                            &object,
-                            BlobRange {
-                                start: start as u64,
-                                end: end as u64,
-                            },
-                        )
-                        .map_err(|err| err.to_string())?;
-                    return Ok(Self::object_response(
-                        StatusCode::PARTIAL_CONTENT,
-                        &payload.blob,
-                        payload.data.len(),
-                        Some(format!("bytes {}-{}/{}", start, end, blob.size)),
-                    )
-                    .body(payload.data)
-                    .build());
-                }
-                return Ok(Self::error_response(
-                    StatusCode::RANGE_NOT_SATISFIABLE,
-                    "InvalidRange",
-                    "The requested range is not satisfiable",
-                ));
-            }
-            return Ok(
-                Self::object_response(StatusCode::OK, &blob, blob.size as usize, None)
-                    .body(blob.data)
-                    .build(),
-            );
+            return Self::handle_json_download(storage, auth_config, req, &parts);
         }
 
         Ok(Self::error_response(
@@ -2026,5 +1812,350 @@ impl GcsAdapter {
             "InvalidURI",
             "Unsupported GCS JSON API path",
         ))
+    }
+
+    fn handle_json_bucket_api(
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
+        parts: &[&str],
+    ) -> Result<Response<Body>, String> {
+        if parts.len() == 3 {
+            return Self::handle_json_bucket_collection(storage, req);
+        }
+
+        let bucket = parts.get(3).copied().unwrap_or_default();
+        if let Err(response) = Self::authorize(req, auth_config, bucket, None) {
+            return Ok(response);
+        }
+
+        if parts.len() == 4 {
+            return Self::handle_json_bucket_item(storage, req, bucket);
+        }
+        if parts.get(4) == Some(&"o") {
+            return Self::handle_json_object_api(storage, auth_config, req, parts, bucket);
+        }
+        Ok(Self::error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidURI",
+            "Unsupported GCS JSON API path",
+        ))
+    }
+
+    fn handle_json_bucket_collection(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+    ) -> Result<Response<Body>, String> {
+        match *req.method() {
+            Method::GET => Self::list_json_buckets(storage),
+            Method::POST => Self::create_json_bucket(storage, req),
+            _ => Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "UnsupportedHttpVerb",
+                "Unsupported GCS JSON API bucket collection operation",
+            )),
+        }
+    }
+
+    fn list_json_buckets(storage: &Arc<dyn Storage>) -> Result<Response<Body>, String> {
+        let buckets = storage
+            .as_ref()
+            .list_namespaces()
+            .map_err(|err| err.to_string())?;
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &serde_json::json!({
+                "kind": "storage#buckets",
+                "items": buckets.into_iter().map(|bucket| serde_json::json!({
+                    "name": bucket.name,
+                    "timeCreated": bucket.created_at.to_rfc3339(),
+                })).collect::<Vec<_>>()
+            })
+            .to_string(),
+        ))
+    }
+
+    fn create_json_bucket(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+    ) -> Result<Response<Body>, String> {
+        let payload: serde_json::Value =
+            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
+        let bucket = payload
+            .get("name")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Missing bucket name".to_string())?;
+        storage
+            .as_ref()
+            .create_namespace(bucket.to_string())
+            .map_err(|err| err.to_string())?;
+        let namespace = storage
+            .as_ref()
+            .get_namespace(bucket)
+            .map_err(|err| err.to_string())?;
+        Ok(Self::json_bucket_response(StatusCode::OK, &namespace))
+    }
+
+    fn handle_json_bucket_item(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        match *req.method() {
+            Method::GET => {
+                let namespace = storage
+                    .as_ref()
+                    .get_namespace(bucket)
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::json_bucket_response(StatusCode::OK, &namespace))
+            }
+            Method::DELETE => {
+                storage
+                    .as_ref()
+                    .delete_namespace(bucket)
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::empty_response(StatusCode::NO_CONTENT))
+            }
+            _ => Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "UnsupportedHttpVerb",
+                "Unsupported GCS JSON API bucket operation",
+            )),
+        }
+    }
+
+    fn json_bucket_response(
+        status: StatusCode,
+        namespace: &crate::blob::Namespace,
+    ) -> Response<Body> {
+        Self::json_response(
+            status,
+            &serde_json::json!({
+                "kind": "storage#bucket",
+                "name": namespace.name,
+                "timeCreated": namespace.created_at.to_rfc3339(),
+            })
+            .to_string(),
+        )
+    }
+
+    fn handle_json_object_api(
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
+        parts: &[&str],
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        if parts.len() == 5 {
+            return Self::list_json_objects(storage, req, bucket);
+        }
+
+        let object = Self::decode_object_path(&parts[5..].join("/"))?;
+        if let Err(response) = Self::authorize(req, auth_config, bucket, Some(&object)) {
+            return Ok(response);
+        }
+        let alt_media = req.query_param("alt") == Some("media");
+        Self::handle_json_object_item(storage, req, bucket, &object, alt_media)
+    }
+
+    fn list_json_objects(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        let blobs = storage
+            .as_ref()
+            .list_blobs(
+                bucket,
+                req.query_param("prefix"),
+                req.query_param("delimiter"),
+                None,
+                None,
+            )
+            .map_err(|err| err.to_string())?;
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &serde_json::json!({
+                "kind": "storage#objects",
+                "items": blobs.into_iter().map(|blob| {
+                    Self::json_blob_record_metadata(bucket, &blob)
+                }).collect::<Vec<_>>()
+            })
+            .to_string(),
+        ))
+    }
+
+    fn handle_json_object_item(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+        alt_media: bool,
+    ) -> Result<Response<Body>, String> {
+        match *req.method() {
+            Method::GET => Self::get_json_object(storage, req, bucket, object, alt_media),
+            Method::PATCH => Self::patch_json_object(storage, req, bucket, object),
+            Method::DELETE => Self::delete_json_object(storage, req, bucket, object),
+            _ => Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "UnsupportedHttpVerb",
+                "Unsupported GCS JSON API object operation",
+            )),
+        }
+    }
+
+    fn get_json_object(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+        alt_media: bool,
+    ) -> Result<Response<Body>, String> {
+        let blob = match Self::checked_json_blob(storage, req, bucket, object)? {
+            Ok(blob) => blob,
+            Err(response) => return Ok(*response),
+        };
+        if alt_media {
+            return Self::object_media_response_for_blob(storage, req, bucket, object, blob);
+        }
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &Self::json_object_metadata(bucket, &blob).to_string(),
+        ))
+    }
+
+    fn patch_json_object(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        let blob = match Self::checked_json_blob(storage, req, bucket, object)? {
+            Ok(blob) => blob,
+            Err(response) => return Ok(*response),
+        };
+        let payload: serde_json::Value =
+            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
+        let updated = storage
+            .as_ref()
+            .update_blob_metadata(UpdateBlobMetadataRequest {
+                namespace: bucket.to_string(),
+                key: object.to_string(),
+                metadata: Self::metadata_patch_with_gcs_state(&payload, &blob),
+            })
+            .map_err(|err| err.to_string())?;
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &Self::json_blob_record_metadata(bucket, &updated).to_string(),
+        ))
+    }
+
+    fn delete_json_object(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        if let Err(response) = Self::checked_json_blob(storage, req, bucket, object)? {
+            return Ok(*response);
+        }
+        storage
+            .as_ref()
+            .delete_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
+        Ok(Self::empty_response(StatusCode::NO_CONTENT))
+    }
+
+    fn checked_json_blob(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Result<crate::models::Object, Box<Response<Body>>>, String> {
+        let blob = storage
+            .as_ref()
+            .get_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
+        if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
+            return Ok(Err(Box::new(response)));
+        }
+        Ok(Ok(blob))
+    }
+
+    fn metadata_patch_with_gcs_state(
+        payload: &serde_json::Value,
+        blob: &crate::models::Object,
+    ) -> HashMap<String, String> {
+        let metadata = payload
+            .get("metadata")
+            .and_then(|value| value.as_object())
+            .map_or_else(
+                || Self::public_metadata(&blob.metadata),
+                |map| {
+                    map.iter()
+                        .filter_map(|(key, value)| {
+                            value.as_str().map(|value| (key.clone(), value.to_string()))
+                        })
+                        .collect::<HashMap<_, _>>()
+                },
+            );
+        Self::metadata_with_gcs_state(
+            metadata,
+            Self::generation(blob),
+            blob.metadata
+                .get(GCS_METAGENERATION_KEY)
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(1)
+                .saturating_add(1)
+                .to_string(),
+        )
+    }
+
+    fn json_object_metadata(bucket: &str, blob: &crate::models::Object) -> serde_json::Value {
+        serde_json::json!({
+            "name": blob.key,
+            "bucket": bucket,
+            "size": blob.size.to_string(),
+            "etag": blob.etag,
+            "generation": Self::generation(blob),
+            "metageneration": Self::metageneration(blob),
+            "metadata": Self::public_metadata(&blob.metadata),
+        })
+    }
+
+    fn json_blob_record_metadata(
+        bucket: &str,
+        blob: &crate::blob::BlobRecord,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "name": blob.key,
+            "bucket": bucket,
+            "size": blob.size.to_string(),
+            "etag": blob.etag,
+            "generation": Self::generation_from_metadata(&blob.metadata),
+            "metageneration": Self::metageneration_from_metadata(&blob.metadata),
+            "metadata": Self::public_metadata(&blob.metadata),
+        })
+    }
+
+    fn handle_json_download(
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
+        parts: &[&str],
+    ) -> Result<Response<Body>, String> {
+        let bucket = parts.get(4).copied().unwrap_or_default();
+        let object = Self::decode_object_path(&parts[6..].join("/"))?;
+        if let Err(response) = Self::authorize(req, auth_config, bucket, Some(&object)) {
+            return Ok(response);
+        }
+        let blob = storage
+            .as_ref()
+            .get_blob(bucket, &object)
+            .map_err(|err| err.to_string())?;
+        if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
+            return Ok(response);
+        }
+        Self::object_media_response_for_blob(storage, req, bucket, &object, blob)
     }
 }

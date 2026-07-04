@@ -1,7 +1,7 @@
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
-/// Configuration for SigV4 signature verification
+/// Configuration for `SigV4` signature verification
 #[derive(Clone)]
 pub struct SigV4Config {
     pub access_key: String,
@@ -12,7 +12,8 @@ pub struct SigV4Config {
 pub struct SignatureVerifier;
 
 impl SignatureVerifier {
-    /// Verify an AWS SigV4 signature
+    /// Verify an AWS `SigV4` signature
+    #[must_use]
     pub fn verify(
         signature: &str,
         canonical_request: &str,
@@ -22,10 +23,8 @@ impl SignatureVerifier {
     ) -> bool {
         // Compute the string to sign
         let canonical_request_hash = Self::sha256_hex(canonical_request.as_bytes());
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-            amz_date, credential_scope, canonical_request_hash
-        );
+        let string_to_sign =
+            format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{canonical_request_hash}");
 
         // Extract date and region from credential scope (format: YYYYMMDD/region/s3/aws4_request)
         let parts: Vec<&str> = credential_scope.split('/').collect();
@@ -68,9 +67,9 @@ impl SignatureVerifier {
         hex::encode(Self::hmac_sha256(key, data))
     }
 
-    /// Derive the SigV4 signing key
+    /// Derive the `SigV4` signing key
     fn get_signature_key(secret: &str, date_stamp: &str, region: &str, service: &str) -> Vec<u8> {
-        let k_secret = format!("AWS4{}", secret);
+        let k_secret = format!("AWS4{secret}");
         let k_date = Self::hmac_sha256(k_secret.as_bytes(), date_stamp.as_bytes());
         let k_region = Self::hmac_sha256(&k_date, region.as_bytes());
         let k_service = Self::hmac_sha256(&k_region, service.as_bytes());
@@ -112,10 +111,8 @@ mod tests {
 
         // Pre-computed signature for this request
         let expected_hash = sha256_hex(canonical_request.as_bytes());
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-            amz_date, credential_scope, expected_hash
-        );
+        let string_to_sign =
+            format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{expected_hash}");
 
         let signing_key =
             SignatureVerifier::get_signature_key(&config.secret_key, "20240101", "us-east-1", "s3");
@@ -175,10 +172,8 @@ mod tests {
 
         // Compute signature for original request
         let expected_hash = sha256_hex(canonical_request.as_bytes());
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-            amz_date, credential_scope, expected_hash
-        );
+        let string_to_sign =
+            format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{expected_hash}");
 
         let signing_key =
             SignatureVerifier::get_signature_key(&config.secret_key, "20240101", "us-east-1", "s3");

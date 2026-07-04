@@ -15,6 +15,10 @@ use std::sync::Arc;
 use tokio::fs as async_fs;
 
 /// Launches the UI-focused server (port 9001) that exposes the JSON API and optionally serves the web UI.
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub async fn start_ui_server(
     storage: Arc<dyn Storage>,
     config: Arc<crate::Config>,
@@ -80,12 +84,12 @@ async fn handle_ui_request(
     }
 
     if path == crate::auth::admin_session::ADMIN_LOGOUT_PATH {
-        let resp = handle_admin_logout(req);
+        let resp = handle_admin_logout(&req);
         return Ok(resp);
     }
 
     if path == crate::auth::admin_session::ADMIN_SESSION_PATH {
-        let resp = handle_admin_session(config, admin_session, req);
+        let resp = handle_admin_session(config.as_ref(), admin_session.as_ref(), &req);
         return Ok(resp);
     }
 
@@ -115,14 +119,14 @@ async fn handle_ui_request(
         };
 
         return Ok(serve_static_content(Path::new(static_dir), &path).await);
-    } else {
-        let default_content =
-            "<html><body><h1>Sqrzl Emulator</h1><p>Running in headless mode</p></body></html>";
-        Ok(ResponseBuilder::new(StatusCode::OK)
-            .content_type("text/html; charset=utf-8")
-            .body_str(default_content)
-            .build())
     }
+
+    let default_content =
+        "<html><body><h1>Sqrzl Emulator</h1><p>Running in headless mode</p></body></html>";
+    Ok(ResponseBuilder::new(StatusCode::OK)
+        .content_type("text/html; charset=utf-8")
+        .body_str(default_content)
+        .build())
 }
 
 fn request_content_length_exceeds(req: &Request<RequestBody>, max_request_bytes: usize) -> bool {
@@ -130,8 +134,7 @@ fn request_content_length_exceeds(req: &Request<RequestBody>, max_request_bytes:
         .get("content-length")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok())
-        .map(|content_length| content_length > max_request_bytes)
-        .unwrap_or(false)
+        .is_some_and(|content_length| content_length > max_request_bytes)
 }
 
 fn admin_payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
@@ -240,7 +243,7 @@ async fn handle_admin_login(
     }
 }
 
-fn handle_admin_logout(req: Request<RequestBody>) -> Response<Body> {
+fn handle_admin_logout(req: &Request<RequestBody>) -> Response<Body> {
     if req.method() != Method::POST {
         return json_error_response(&Error::MethodNotAllowed(format!(
             "{} {}",
@@ -267,9 +270,9 @@ fn handle_admin_logout(req: Request<RequestBody>) -> Response<Body> {
 }
 
 fn handle_admin_session(
-    config: Arc<crate::Config>,
-    admin_session: Arc<AdminSessionManager>,
-    req: Request<RequestBody>,
+    config: &crate::Config,
+    admin_session: &AdminSessionManager,
+    req: &Request<RequestBody>,
 ) -> Response<Body> {
     if req.method() != Method::GET {
         return json_error_response(&Error::MethodNotAllowed(format!(
@@ -281,7 +284,7 @@ fn handle_admin_session(
 
     let (mode, username) = if !config.admin_auth_enforced() {
         ("open", None)
-    } else if let Some(username) = admin_session.subject_from_request(&req) {
+    } else if let Some(username) = admin_session.subject_from_request(req) {
         ("session", Some(username))
     } else {
         return admin_unauthorized_response();

@@ -30,6 +30,7 @@ impl Default for S3Adapter {
 }
 
 impl S3Adapter {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

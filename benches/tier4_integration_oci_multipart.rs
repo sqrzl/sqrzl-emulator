@@ -193,7 +193,7 @@ fn bench_multipart_init(c: &mut Criterion) {
                 black_box(body);
             }
             total
-        })
+        });
     });
     group.finish();
 }
@@ -221,7 +221,7 @@ fn bench_multipart_part_upload(c: &mut Criterion) {
                 black_box(response.headers().get("etag").cloned());
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
     let response = runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
@@ -271,7 +271,7 @@ fn bench_multipart_commit(c: &mut Criterion) {
                     black_box(response.headers().get("etag").cloned());
                 },
                 BatchSize::SmallInput,
-            )
+            );
         },
     );
     group.finish();

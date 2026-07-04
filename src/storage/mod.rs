@@ -12,11 +12,35 @@ pub use lockfree_index::{DirectoryEntry, DirectoryEntryKind, LockFreeIndex};
 
 /// Bucket metadata and lifecycle-independent bucket operations.
 pub trait BucketStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_bucket(&self, name: String) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_bucket(&self, name: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket(&self, name: &str) -> Result<Bucket>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_buckets(&self) -> Result<Vec<Bucket>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn bucket_exists(&self, name: &str) -> Result<bool>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn update_bucket_metadata(
         &self,
         bucket: &str,
@@ -26,8 +50,20 @@ pub trait BucketStore: Send + Sync {
 
 /// Object read/write operations excluding list semantics.
 pub trait ObjectStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_range(
         &self,
         bucket: &str,
@@ -35,18 +71,34 @@ pub trait ObjectStore: Send + Sync {
         start: u64,
         end: Option<u64>,
     ) -> Result<(Object, Vec<u8>)>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn update_object_storage_class(
         &self,
         bucket: &str,
         key: &str,
         storage_class: &str,
     ) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool>;
 }
 
 /// Object listing semantics, including delimiter and marker pagination behavior.
 pub trait ObjectListingStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_objects(
         &self,
         bucket: &str,
@@ -59,7 +111,15 @@ pub trait ObjectListingStore: Send + Sync {
 
 /// Multipart upload state and part operations.
 pub trait MultipartStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_multipart_upload(&self, bucket: &str, key: String) -> Result<MultipartUpload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_multipart_upload_with_metadata(
         &self,
         bucket: &str,
@@ -68,6 +128,10 @@ pub trait MultipartStore: Send + Sync {
         metadata: std::collections::HashMap<String, String>,
         provider_metadata: std::collections::HashMap<String, String>,
     ) -> Result<MultipartUpload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn upload_part(
         &self,
         bucket: &str,
@@ -75,38 +139,110 @@ pub trait MultipartStore: Send + Sync {
         part_number: u32,
         data: Vec<u8>,
     ) -> Result<String>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_multipart_uploads(&self, bucket: &str) -> Result<Vec<MultipartUpload>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_parts(&self, bucket: &str, upload_id: &str) -> Result<Vec<crate::models::Part>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<MultipartUpload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn complete_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<String>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()>;
 }
 
 /// Bucket versioning and object-version operations.
 pub trait VersionStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn enable_versioning(&self, bucket: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn suspend_versioning(&self, bucket: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<Object>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_object_versions(&self, bucket: &str, prefix: Option<&str>) -> Result<Vec<Object>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_object_versions_for_key(&self, bucket: &str, key: &str) -> Result<Vec<Object>> {
         self.list_object_versions(bucket, Some(key))
     }
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()>;
 }
 
 /// Object tag operations.
 pub trait TagStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_tags(&self, bucket: &str, key: &str) -> Result<HashMap<String, String>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_object_tags(&self, bucket: &str, key: &str, tags: HashMap<String, String>)
         -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_object_tags(&self, bucket: &str, key: &str) -> Result<()>;
 }
 
 /// Bucket and object ACL operations.
 pub trait AclStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket_acl(&self, bucket: &str) -> Result<crate::models::policy::Acl>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_bucket_acl(&self, bucket: &str, acl: crate::models::policy::Acl) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_acl(&self, bucket: &str, key: &str) -> Result<crate::models::policy::Acl>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_object_acl(
         &self,
         bucket: &str,
@@ -117,55 +253,127 @@ pub trait AclStore: Send + Sync {
 
 /// Bucket lifecycle configuration operations.
 pub trait LifecycleStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket_lifecycle(
         &self,
         bucket: &str,
     ) -> Result<crate::models::lifecycle::LifecycleConfiguration>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_bucket_lifecycle(
         &self,
         bucket: &str,
         config: crate::models::lifecycle::LifecycleConfiguration,
     ) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()>;
 }
 
 /// Bucket policy operations.
 pub trait PolicyStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket_policy(
         &self,
         bucket: &str,
     ) -> Result<crate::models::policy::BucketPolicyDocument>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_bucket_policy(
         &self,
         bucket: &str,
         policy: crate::models::policy::BucketPolicyDocument,
     ) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_bucket_policy(&self, bucket: &str) -> Result<()>;
 }
 
 /// Provider session/state sidecars for restart-safe emulator workflows.
 pub trait ProviderStateStore: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_provider_state(&self, provider: &str, key: &str, data: Vec<u8>) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_provider_state(&self, provider: &str, key: &str) -> Result<Vec<u8>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()>;
 }
 
 /// Storage backend aggregate - synchronous operations.
 /// HTTP layers handle async/await by calling these operations on request paths.
 pub trait Storage: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_bucket(&self, name: String) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_bucket(&self, name: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket(&self, name: &str) -> Result<Bucket>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_buckets(&self) -> Result<Vec<Bucket>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn bucket_exists(&self, name: &str) -> Result<bool>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn update_bucket_metadata(
         &self,
         bucket: &str,
         metadata: HashMap<String, String>,
     ) -> Result<Bucket>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_range(
         &self,
         bucket: &str,
@@ -173,14 +381,30 @@ pub trait Storage: Send + Sync {
         start: u64,
         end: Option<u64>,
     ) -> Result<(Object, Vec<u8>)>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn update_object_storage_class(
         &self,
         bucket: &str,
         key: &str,
         storage_class: &str,
     ) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_objects(
         &self,
         bucket: &str,
@@ -190,7 +414,15 @@ pub trait Storage: Send + Sync {
         max_keys: Option<usize>,
     ) -> Result<ListObjectsResult>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_multipart_upload(&self, bucket: &str, key: String) -> Result<MultipartUpload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_multipart_upload_with_metadata(
         &self,
         bucket: &str,
@@ -199,6 +431,10 @@ pub trait Storage: Send + Sync {
         metadata: HashMap<String, String>,
         provider_metadata: HashMap<String, String>,
     ) -> Result<MultipartUpload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn upload_part(
         &self,
         bucket: &str,
@@ -206,27 +442,99 @@ pub trait Storage: Send + Sync {
         part_number: u32,
         data: Vec<u8>,
     ) -> Result<String>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_multipart_uploads(&self, bucket: &str) -> Result<Vec<MultipartUpload>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_parts(&self, bucket: &str, upload_id: &str) -> Result<Vec<crate::models::Part>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<MultipartUpload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn complete_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<String>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn enable_versioning(&self, bucket: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn suspend_versioning(&self, bucket: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<Object>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_object_versions(&self, bucket: &str, prefix: Option<&str>) -> Result<Vec<Object>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_object_versions_for_key(&self, bucket: &str, key: &str) -> Result<Vec<Object>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_tags(&self, bucket: &str, key: &str) -> Result<HashMap<String, String>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_object_tags(&self, bucket: &str, key: &str, tags: HashMap<String, String>)
         -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_object_tags(&self, bucket: &str, key: &str) -> Result<()>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket_acl(&self, bucket: &str) -> Result<crate::models::policy::Acl>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_bucket_acl(&self, bucket: &str, acl: crate::models::policy::Acl) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_object_acl(&self, bucket: &str, key: &str) -> Result<crate::models::policy::Acl>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_object_acl(
         &self,
         bucket: &str,
@@ -234,30 +542,66 @@ pub trait Storage: Send + Sync {
         acl: crate::models::policy::Acl,
     ) -> Result<()>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket_lifecycle(
         &self,
         bucket: &str,
     ) -> Result<crate::models::lifecycle::LifecycleConfiguration>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_bucket_lifecycle(
         &self,
         bucket: &str,
         config: crate::models::lifecycle::LifecycleConfiguration,
     ) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_bucket_policy(
         &self,
         bucket: &str,
     ) -> Result<crate::models::policy::BucketPolicyDocument>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_bucket_policy(
         &self,
         bucket: &str,
         policy: crate::models::policy::BucketPolicyDocument,
     ) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_bucket_policy(&self, bucket: &str) -> Result<()>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_provider_state(&self, provider: &str, key: &str, data: Vec<u8>) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_provider_state(&self, provider: &str, key: &str) -> Result<Vec<u8>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()>;
 }
 

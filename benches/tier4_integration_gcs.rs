@@ -77,7 +77,7 @@ fn bench_xml_put_object(c: &mut Criterion) {
             let response = runtime.block_on(server.request(request));
             assert_eq!(response.status(), StatusCode::OK);
             black_box(response.headers().get("etag").cloned());
-        })
+        });
     });
     group.finish();
 }
@@ -121,7 +121,7 @@ fn bench_xml_get_object(c: &mut Criterion) {
                 black_box(body);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }
@@ -170,7 +170,7 @@ fn bench_xml_list_objects(c: &mut Criterion) {
                 black_box(listing);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }
@@ -218,7 +218,7 @@ fn bench_json_resumable_upload(c: &mut Criterion) {
             let upload_response = runtime.block_on(server.request(upload_request));
             assert_eq!(upload_response.status(), StatusCode::OK);
             black_box(upload_response.headers().get("etag").cloned());
-        })
+        });
     });
     group.finish();
 }

@@ -2,7 +2,7 @@
 //!
 //! This module handles:
 //! - Extracting and validating credentials from requests
-//! - Supporting multiple signature formats (SigV4, v2, presigned URLs)
+//! - Supporting multiple signature formats (`SigV4`, v2, presigned URLs)
 //!
 //! ## Configuration
 //!
@@ -43,6 +43,7 @@ pub struct AuthInfo {
 
 impl AuthInfo {
     /// Create an anonymous/unauthenticated request context.
+    #[must_use]
     pub fn anonymous() -> Self {
         Self {
             principal: "*".to_string(),
@@ -51,6 +52,7 @@ impl AuthInfo {
     }
 
     /// Create an authenticated request context with the given principal.
+    #[must_use]
     pub fn authenticated(principal: String) -> Self {
         Self {
             principal,
@@ -61,7 +63,7 @@ impl AuthInfo {
     /// Extract authentication information from an HTTP request.
     ///
     /// Attempts to extract and validate credentials from:
-    /// 1. Authorization header (SigV4 or v2)
+    /// 1. Authorization header (`SigV4` or v2)
     /// 2. Query parameters (presigned URLs)
     ///
     /// Returns an anonymous context if no valid credentials are found
@@ -115,7 +117,7 @@ impl AuthInfo {
                 // Validate the access key matches configured credentials
                 if let Some(configured_key) = config.access_key() {
                     if access_key == configured_key {
-                        return Some(format!("arn:aws:iam::000000000000:user/{}", access_key));
+                        return Some(format!("arn:aws:iam::000000000000:user/{access_key}"));
                     }
                 }
             }
@@ -133,7 +135,7 @@ impl AuthInfo {
         // Validate the access key matches configured credentials
         if let Some(configured_key) = config.access_key() {
             if access_key == configured_key {
-                return Some(format!("arn:aws:iam::000000000000:user/{}", access_key));
+                return Some(format!("arn:aws:iam::000000000000:user/{access_key}"));
             }
         }
         None
@@ -155,13 +157,13 @@ impl AuthInfo {
                 let access_key = value.split('/').next()?;
                 if let Some(configured_key) = config.access_key() {
                     if access_key == configured_key {
-                        return Some(format!("arn:aws:iam::000000000000:user/{}", access_key));
+                        return Some(format!("arn:aws:iam::000000000000:user/{access_key}"));
                     }
                 }
             } else if key == "AWSAccessKeyId" {
                 if let Some(configured_key) = config.access_key() {
                     if value == configured_key {
-                        return Some(format!("arn:aws:iam::000000000000:user/{}", value));
+                        return Some(format!("arn:aws:iam::000000000000:user/{value}"));
                     }
                 }
             }
@@ -181,12 +183,12 @@ mod tests {
         enforce_auth: bool,
     ) -> Config {
         Config {
-            access_key_id: access_key.map(|k| k.to_string()),
-            secret_access_key: secret_key.map(|k| k.to_string()),
+            access_key_id: access_key.map(std::string::ToString::to_string),
+            secret_access_key: secret_key.map(std::string::ToString::to_string),
             enforce_auth,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: Duration::from_secs(3600),
+            lifecycle_interval: Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,

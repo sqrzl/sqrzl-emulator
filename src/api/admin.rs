@@ -12,9 +12,19 @@ use std::sync::Arc;
 mod dto;
 mod pagination;
 
-use dto::*;
-use pagination::*;
+use dto::{
+    bucket_to_details, bucket_to_info, common_prefix_to_folder_info, object_to_info,
+    object_to_metadata,
+};
+use pagination::{
+    contains_search, decode_component, encode_next, encode_object_next, paginate,
+    parse_object_page_params, parse_page_params, ObjectPageParams, PageTokenKind,
+};
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub async fn handle_request<B>(storage: Arc<dyn Storage>, req: Request<B>) -> Result<Response<Body>>
 where
     B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
@@ -29,7 +39,7 @@ where
 
     if admin_path == "/buckets" {
         return match method {
-            Method::GET => list_buckets(storage, &query),
+            Method::GET => list_buckets(&storage, &query),
             Method::POST => create_bucket(storage, req).await,
             _ => Err(Error::MethodNotAllowed(path)),
         };
@@ -40,42 +50,42 @@ where
 
         return match remainder {
             None => match method {
-                Method::GET => get_bucket(storage, &bucket),
-                Method::DELETE => delete_bucket(storage, &bucket),
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                Method::GET => get_bucket(&storage, &bucket),
+                Method::DELETE => delete_bucket(&storage, &bucket),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
             Some("versioning") => match method {
-                Method::GET => get_bucket_versioning(storage, &bucket),
+                Method::GET => get_bucket_versioning(&storage, &bucket),
                 Method::PUT => set_bucket_versioning(storage, &bucket, req).await,
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
             Some("acl") => match method {
-                Method::GET => get_bucket_acl(storage, &bucket),
+                Method::GET => get_bucket_acl(&storage, &bucket),
                 Method::PUT => set_bucket_acl(storage, &bucket, req).await,
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
             Some("policy") => match method {
-                Method::GET => get_bucket_policy(storage, &bucket),
+                Method::GET => get_bucket_policy(&storage, &bucket),
                 Method::PUT => set_bucket_policy(storage, &bucket, req).await,
-                Method::DELETE => delete_bucket_policy(storage, &bucket),
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                Method::DELETE => delete_bucket_policy(&storage, &bucket),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
             Some("lifecycle") => match method {
-                Method::GET => get_bucket_lifecycle(storage, &bucket),
+                Method::GET => get_bucket_lifecycle(&storage, &bucket),
                 Method::PUT => set_bucket_lifecycle(storage, &bucket, req).await,
-                Method::DELETE => delete_bucket_lifecycle(storage, &bucket),
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                Method::DELETE => delete_bucket_lifecycle(&storage, &bucket),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
             Some("multipart-uploads") => match method {
-                Method::GET => list_multipart_uploads(storage, &bucket, &query),
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                Method::GET => list_multipart_uploads(&storage, &bucket, &query),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
             Some(remainder) if remainder.starts_with("multipart-uploads/") => {
-                handle_multipart_upload_request(storage, &bucket, remainder, req).await
+                handle_multipart_upload_request(&storage, &bucket, remainder, &req)
             }
             Some("objects") => match method {
-                Method::GET => list_objects(storage, &bucket, &query),
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                Method::GET => list_objects(&storage, &bucket, &query),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
             Some(remainder) if remainder.starts_with("objects/") => {
                 handle_object_request(
@@ -94,6 +104,7 @@ where
     Err(Error::RouteNotFound(path))
 }
 
+#[must_use]
 pub fn error_response(err: &Error) -> Response<Body> {
     let details = match err {
         Error::InvalidRequest(details)
@@ -150,7 +161,7 @@ fn parse_bucket_and_remainder(rest: &str) -> Result<(String, Option<&str>)> {
     Ok((bucket, remainder))
 }
 
-fn list_buckets(storage: Arc<dyn Storage>, query: &str) -> Result<Response<Body>> {
+fn list_buckets(storage: &Arc<dyn Storage>, query: &str) -> Result<Response<Body>> {
     let page = parse_page_params(query, PageTokenKind::Buckets)?;
     let mut buckets =
         tokio::task::block_in_place(|| bucket_service::list_buckets(storage.as_ref()))?;
@@ -196,18 +207,18 @@ where
     ))
 }
 
-fn get_bucket(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn get_bucket(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     let bucket =
         tokio::task::block_in_place(|| bucket_service::get_bucket(storage.as_ref(), bucket))?;
     Ok(json_response(StatusCode::OK, &bucket_to_details(bucket)))
 }
 
-fn delete_bucket(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn delete_bucket(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     tokio::task::block_in_place(|| bucket_service::delete_bucket(storage.as_ref(), bucket))?;
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 
-fn get_bucket_versioning(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn get_bucket_versioning(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     let bucket =
         tokio::task::block_in_place(|| bucket_service::get_bucket(storage.as_ref(), bucket))?;
     Ok(json_response(
@@ -245,7 +256,7 @@ where
     ))
 }
 
-fn get_bucket_acl(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn get_bucket_acl(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     let acl =
         tokio::task::block_in_place(|| bucket_service::get_bucket_acl(storage.as_ref(), bucket))?;
     Ok(json_response(StatusCode::OK, &acl))
@@ -267,7 +278,7 @@ where
     Ok(json_response(StatusCode::OK, &acl))
 }
 
-fn get_bucket_policy(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn get_bucket_policy(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     let policy = tokio::task::block_in_place(|| {
         bucket_service::get_bucket_policy(storage.as_ref(), bucket)
     })?;
@@ -290,12 +301,12 @@ where
     Ok(json_response(StatusCode::OK, &policy))
 }
 
-fn delete_bucket_policy(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn delete_bucket_policy(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     tokio::task::block_in_place(|| bucket_service::delete_bucket_policy(storage.as_ref(), bucket))?;
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 
-fn get_bucket_lifecycle(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn get_bucket_lifecycle(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     let lifecycle = tokio::task::block_in_place(|| {
         bucket_service::get_bucket_lifecycle(storage.as_ref(), bucket)
     })?;
@@ -318,17 +329,17 @@ where
     Ok(json_response(StatusCode::OK, &lifecycle))
 }
 
-fn delete_bucket_lifecycle(storage: Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+fn delete_bucket_lifecycle(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
     tokio::task::block_in_place(|| {
         bucket_service::delete_bucket_lifecycle(storage.as_ref(), bucket)
     })?;
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 
-fn list_objects(storage: Arc<dyn Storage>, bucket: &str, query: &str) -> Result<Response<Body>> {
+fn list_objects(storage: &Arc<dyn Storage>, bucket: &str, query: &str) -> Result<Response<Body>> {
     let page = parse_object_page_params(query)?;
     if page.search.is_some() {
-        let (items, next) = list_matching_objects(&storage, bucket, &page)?;
+        let (items, next) = list_matching_objects(storage, bucket, &page)?;
         return Ok(json_response(
             StatusCode::OK,
             &crate::api::models::ListObjectsResponse {
@@ -358,7 +369,7 @@ fn list_objects(storage: Arc<dyn Storage>, bucket: &str, query: &str) -> Result<
             )
         })?;
 
-        marker = result.next_marker.clone();
+        marker.clone_from(&result.next_marker);
         let result_has_more = result.is_truncated;
 
         for common_prefix in result.common_prefixes {
@@ -384,7 +395,7 @@ fn list_objects(storage: Arc<dyn Storage>, bucket: &str, query: &str) -> Result<
 
         if folders.len() + items.len() >= page.limit || !result_has_more {
             if folders.len() + items.len() >= page.limit && result_has_more {
-                next_marker = marker.clone();
+                next_marker.clone_from(&marker);
             } else {
                 next_marker = None;
             }
@@ -395,7 +406,7 @@ fn list_objects(storage: Arc<dyn Storage>, bucket: &str, query: &str) -> Result<
             break;
         }
 
-        next_marker = marker.clone();
+        next_marker.clone_from(&marker);
     }
 
     let next = if folders.len() + items.len() >= page.limit {
@@ -435,7 +446,7 @@ fn list_matching_objects(
             )
         })?;
 
-        marker = result.next_marker.clone();
+        marker.clone_from(&result.next_marker);
 
         for object in result.objects {
             if !contains_search(&object.key, page.search.as_deref()) {
@@ -459,7 +470,7 @@ fn list_matching_objects(
 }
 
 fn list_multipart_uploads(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     query: &str,
 ) -> Result<Response<Body>> {
@@ -486,11 +497,11 @@ fn list_multipart_uploads(
     ))
 }
 
-async fn handle_multipart_upload_request<B>(
-    storage: Arc<dyn Storage>,
+fn handle_multipart_upload_request<B>(
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     remainder: &str,
-    req: Request<B>,
+    req: &Request<B>,
 ) -> Result<Response<Body>>
 where
     B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
@@ -509,12 +520,12 @@ where
     match method {
         Method::GET => get_multipart_upload(storage, bucket, &upload_id),
         Method::DELETE => abort_multipart_upload(storage, bucket, &upload_id),
-        _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+        _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
     }
 }
 
 fn get_multipart_upload(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     upload_id: &str,
 ) -> Result<Response<Body>> {
@@ -525,7 +536,7 @@ fn get_multipart_upload(
 }
 
 fn abort_multipart_upload(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     upload_id: &str,
 ) -> Result<Response<Body>> {
@@ -556,17 +567,17 @@ where
     if let Some(key) = object_rest.strip_suffix("/content") {
         let key = decode_component(key);
         return match method {
-            Method::GET => download_object_content(storage, bucket, &key),
+            Method::GET => download_object_content(&storage, bucket, &key),
             Method::PUT => put_object_content(storage, bucket, &key, req).await,
-            _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
         };
     }
 
     if let Some(key) = object_rest.strip_suffix("/versions") {
         let key = decode_component(key);
         return match method {
-            Method::GET => list_object_versions(storage, bucket, &key, query),
-            _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+            Method::GET => list_object_versions(&storage, bucket, &key, query),
+            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
         };
     }
 
@@ -575,8 +586,8 @@ where
         let version_id = decode_component(version_id);
         if !key.is_empty() && !version_id.is_empty() {
             return match method {
-                Method::DELETE => delete_object_version(storage, bucket, &key, &version_id),
-                _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+                Method::DELETE => delete_object_version(&storage, bucket, &key, &version_id),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             };
         }
     }
@@ -584,31 +595,31 @@ where
     if let Some(key) = object_rest.strip_suffix("/tags") {
         let key = decode_component(key);
         return match method {
-            Method::GET => get_object_tags(storage, bucket, &key),
+            Method::GET => get_object_tags(&storage, bucket, &key),
             Method::PUT => put_object_tags(storage, bucket, &key, req).await,
-            _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
         };
     }
 
     if let Some(key) = object_rest.strip_suffix("/acl") {
         let key = decode_component(key);
         return match method {
-            Method::GET => get_object_acl(storage, bucket, &key),
+            Method::GET => get_object_acl(&storage, bucket, &key),
             Method::PUT => set_object_acl(storage, bucket, &key, req).await,
-            _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
         };
     }
 
     let key = decode_component(object_rest);
     match method {
-        Method::GET => get_object_metadata(storage, bucket, &key),
-        Method::DELETE => delete_object(storage, bucket, &key),
-        _ => Err(Error::MethodNotAllowed(format!("{} {}", method, path))),
+        Method::GET => get_object_metadata(&storage, bucket, &key),
+        Method::DELETE => delete_object(&storage, bucket, &key),
+        _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
     }
 }
 
 fn get_object_metadata(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     key: &str,
 ) -> Result<Response<Body>> {
@@ -617,13 +628,13 @@ fn get_object_metadata(
     Ok(json_response(StatusCode::OK, &object_to_metadata(object)))
 }
 
-fn delete_object(storage: Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
+fn delete_object(storage: &Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
     tokio::task::block_in_place(|| object_service::delete_object(storage.as_ref(), bucket, key))?;
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 
 fn download_object_content(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     key: &str,
 ) -> Result<Response<Body>> {
@@ -667,7 +678,7 @@ where
         .to_string();
 
     let mut metadata = HashMap::new();
-    for (name, value) in headers.iter() {
+    for (name, value) in &headers {
         if let Some(stripped) = name.as_str().strip_prefix("x-amz-meta-") {
             if let Ok(value) = value.to_str() {
                 metadata.insert(stripped.to_string(), value.to_string());
@@ -695,7 +706,7 @@ where
 }
 
 fn list_object_versions(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     key: &str,
     query: &str,
@@ -716,8 +727,7 @@ fn list_object_versions(
                 || object
                     .version_id
                     .as_deref()
-                    .map(|version_id| contains_search(version_id, page.search.as_deref()))
-                    .unwrap_or(false)
+                    .is_some_and(|version_id| contains_search(version_id, page.search.as_deref()))
         })
         .map(|object| {
             let version_id = object.version_id.clone().unwrap_or_default();
@@ -742,7 +752,7 @@ fn list_object_versions(
     ))
 }
 
-fn get_object_tags(storage: Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
+fn get_object_tags(storage: &Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
     let tags = tokio::task::block_in_place(|| {
         object_service::get_object_tags(storage.as_ref(), bucket, key)
     })?;
@@ -752,7 +762,7 @@ fn get_object_tags(storage: Arc<dyn Storage>, bucket: &str, key: &str) -> Result
     ))
 }
 
-fn get_object_acl(storage: Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
+fn get_object_acl(storage: &Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
     let acl = tokio::task::block_in_place(|| {
         object_service::get_object_acl(storage.as_ref(), bucket, key)
     })?;
@@ -780,7 +790,7 @@ where
 }
 
 fn delete_object_version(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     key: &str,
     version_id: &str,
@@ -1249,8 +1259,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::DELETE)
             .uri(format!(
-                "/admin/v1/buckets/demo/objects/versioned.txt/versions/{}",
-                stale_version
+                "/admin/v1/buckets/demo/objects/versioned.txt/versions/{stale_version}"
             ))
             .body(Body::default())
             .unwrap();
@@ -1277,7 +1286,7 @@ mod tests {
                 .method(Method::POST)
                 .uri("/admin/v1/buckets")
                 .header("content-type", "application/json")
-                .body(Body::from(format!("{{\"name\":\"{}\"}}", bucket)))
+                .body(Body::from(format!("{{\"name\":\"{bucket}\"}}")))
                 .unwrap();
             let resp = call(req, storage.clone()).await;
             assert_eq!(resp.status(), StatusCode::CREATED);
@@ -1317,7 +1326,7 @@ mod tests {
         for key in ["alpha.txt", "beta.txt", "gamma.bin"] {
             let req = Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/admin/v1/buckets/demo/objects/{}/content", key))
+                .uri(format!("/admin/v1/buckets/demo/objects/{key}/content"))
                 .header("content-type", "text/plain")
                 .body(Body::from(key.to_string()))
                 .unwrap();
@@ -1359,8 +1368,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri(format!(
-                "/admin/v1/buckets/demo/objects?limit=1&search=.txt&next={}",
-                next
+                "/admin/v1/buckets/demo/objects?limit=1&search=.txt&next={next}"
             ))
             .body(Body::default())
             .unwrap();
@@ -1406,7 +1414,7 @@ mod tests {
         ] {
             let req = Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/admin/v1/buckets/demo/objects/{}/content", key))
+                .uri(format!("/admin/v1/buckets/demo/objects/{key}/content"))
                 .header("content-type", "text/plain")
                 .body(Body::from(key.to_string()))
                 .unwrap();
@@ -1440,8 +1448,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri(format!(
-                "/admin/v1/buckets/demo/objects?limit=2&prefix=docs/&next={}",
-                next
+                "/admin/v1/buckets/demo/objects?limit=2&prefix=docs/&next={next}"
             ))
             .body(Body::default())
             .unwrap();
@@ -1474,8 +1481,7 @@ mod tests {
         let req = Request::builder()
             .method(Method::GET)
             .uri(format!(
-                "/admin/v1/buckets/demo/objects?limit=1&prefix=docs/&search=.txt&next={}",
-                next
+                "/admin/v1/buckets/demo/objects?limit=1&prefix=docs/&search=.txt&next={next}"
             ))
             .body(Body::default())
             .unwrap();
@@ -1510,7 +1516,7 @@ mod tests {
         ] {
             let req = Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/admin/v1/buckets/demo/objects/{}/content", key))
+                .uri(format!("/admin/v1/buckets/demo/objects/{key}/content"))
                 .header("content-type", "text/plain")
                 .body(Body::from(key.to_string()))
                 .unwrap();
@@ -1554,7 +1560,7 @@ mod tests {
             let key = format!("a/blob-{index:03}.txt");
             let req = Request::builder()
                 .method(Method::PUT)
-                .uri(format!("/admin/v1/buckets/demo/objects/{}/content", key))
+                .uri(format!("/admin/v1/buckets/demo/objects/{key}/content"))
                 .header("content-type", "text/plain")
                 .body(Body::from(key))
                 .unwrap();

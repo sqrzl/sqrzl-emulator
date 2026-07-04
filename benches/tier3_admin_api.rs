@@ -157,7 +157,7 @@ fn bench_admin_list_buckets(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets?limit=50",
             )))
-        })
+        });
     });
     group.bench_function(BenchmarkId::new("search", 50), |b| {
         b.iter(|| {
@@ -165,7 +165,7 @@ fn bench_admin_list_buckets(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets?limit=50&search=bucket-4",
             )))
-        })
+        });
     });
     group.finish();
 
@@ -188,7 +188,7 @@ fn bench_admin_list_objects(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets/bench-objects/objects?limit=50",
             )))
-        })
+        });
     });
     group.bench_function(BenchmarkId::new("nested_directory", 10), |b| {
         b.iter(|| {
@@ -196,7 +196,7 @@ fn bench_admin_list_objects(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=dir-050/",
             )))
-        })
+        });
     });
     group.bench_function(BenchmarkId::new("skewed_root_directory", 2), |b| {
         b.iter(|| {
@@ -204,7 +204,7 @@ fn bench_admin_list_objects(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=skew/",
             )))
-        })
+        });
     });
     group.bench_function(BenchmarkId::new("search_flat_objects", 50), |b| {
         b.iter(|| {
@@ -212,7 +212,7 @@ fn bench_admin_list_objects(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=flat/&search=object-09",
             )))
-        })
+        });
     });
     group.finish();
 
@@ -235,7 +235,7 @@ fn bench_admin_object_detail(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets/bench-objects/objects/flat%2Fobject-0500.txt",
             )))
-        })
+        });
     });
     group.bench_function(BenchmarkId::new("versions", 25), |b| {
         b.iter(|| {
@@ -243,7 +243,7 @@ fn bench_admin_object_detail(c: &mut Criterion) {
                 storage.clone(),
                 "/admin/v1/buckets/bench-objects/objects/versioned-target.txt/versions?limit=25",
             )))
-        })
+        });
     });
     group.finish();
 

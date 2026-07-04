@@ -4,6 +4,10 @@
 /// - Can contain lowercase letters, numbers, and hyphens
 /// - Cannot start or end with a hyphen
 /// - Cannot contain consecutive hyphens
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn validate_bucket_name(name: &str) -> Result<(), String> {
     if name.len() < 3 {
         return Err("Bucket name must be at least 3 characters long".to_string());
@@ -37,6 +41,10 @@ pub fn validate_bucket_name(name: &str) -> Result<(), String> {
 /// - Can contain slash-separated path segments
 /// - Path segments may contain ASCII letters, numbers, dots, underscores, and hyphens
 /// - Path segments cannot be empty or dot segments
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn validate_blob_key(key: &str) -> Result<(), String> {
     let byte_len = key.len();
 
@@ -46,8 +54,7 @@ pub fn validate_blob_key(key: &str) -> Result<(), String> {
 
     if byte_len > 1024 {
         return Err(format!(
-            "Blob key cannot exceed 1024 bytes (got {})",
-            byte_len
+            "Blob key cannot exceed 1024 bytes (got {byte_len})"
         ));
     }
 
@@ -74,12 +81,20 @@ pub fn validate_blob_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn validate_object_key(key: &str) -> Result<(), String> {
     validate_blob_key(key)
 }
 
 /// Validates a multipart part number
 /// - Must be between 1 and 10000 inclusive
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn validate_part_number(part_num: u32) -> Result<(), String> {
     if part_num < 1 {
         return Err("Part number must be at least 1".to_string());
@@ -93,14 +108,17 @@ pub fn validate_part_number(part_num: u32) -> Result<(), String> {
 /// Validates Content-Length header
 /// - Must be non-negative
 /// - Must not exceed reasonable limits (e.g., 5GB per S3 spec)
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn validate_content_length(content_length: u64) -> Result<(), String> {
     // S3 allows objects up to 5TB, but we'll be more conservative (5GB)
     let max_size = 5 * 1024 * 1024 * 1024u64;
 
     if content_length > max_size {
         return Err(format!(
-            "Content-Length ({} bytes) exceeds maximum allowed size",
-            content_length
+            "Content-Length ({content_length} bytes) exceeds maximum allowed size"
         ));
     }
 
@@ -109,6 +127,10 @@ pub fn validate_content_length(content_length: u64) -> Result<(), String> {
 
 /// Validates multipart upload ID format
 /// - Should be a non-empty string (typically alphanumeric)
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn validate_upload_id(upload_id: &str) -> Result<(), String> {
     if upload_id.is_empty() {
         return Err("Upload ID cannot be empty".to_string());
@@ -123,6 +145,10 @@ pub fn validate_upload_id(upload_id: &str) -> Result<(), String> {
 
 /// Validates that a part number is in expected sequence
 /// Expects parts to be provided in ascending order
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn validate_part_sequence(part_numbers: &[u32]) -> Result<(), String> {
     for (i, &part_num) in part_numbers.iter().enumerate() {
         validate_part_number(part_num)?;

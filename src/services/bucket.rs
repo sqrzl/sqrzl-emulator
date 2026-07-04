@@ -3,35 +3,64 @@ use crate::models::Bucket;
 use crate::models::{LifecycleConfiguration, MultipartUpload};
 use crate::storage::Storage;
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_buckets(storage: &dyn Storage) -> Result<Vec<Bucket>> {
     storage.list_buckets()
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn create_bucket(storage: &dyn Storage, name: String) -> Result<()> {
     storage.create_bucket(name)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_bucket(storage: &dyn Storage, name: &str) -> Result<Bucket> {
     storage.get_bucket(name)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn delete_bucket(storage: &dyn Storage, name: &str) -> Result<()> {
     storage.delete_bucket(name)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn bucket_exists(storage: &dyn Storage, name: &str) -> Result<bool> {
     storage.bucket_exists(name)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn update_bucket_metadata(
     storage: &dyn Storage,
     bucket: &str,
-    metadata: HashMap<String, String>,
+    metadata: HashMap<String, String, impl BuildHasher>,
 ) -> Result<Bucket> {
-    storage.update_bucket_metadata(bucket, metadata)
+    storage.update_bucket_metadata(bucket, metadata.into_iter().collect())
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn set_versioning(storage: &dyn Storage, bucket: &str, enabled: bool) -> Result<()> {
     if enabled {
         storage.enable_versioning(bucket)
@@ -40,22 +69,39 @@ pub fn set_versioning(storage: &dyn Storage, bucket: &str, enabled: bool) -> Res
     }
 }
 
+#[must_use]
 pub fn versioning_enabled(bucket: &Bucket) -> bool {
     bucket.versioning_enabled
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn delete_bucket_lifecycle(storage: &dyn Storage, bucket: &str) -> Result<()> {
     storage.delete_bucket_lifecycle(bucket)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn delete_bucket_policy(storage: &dyn Storage, bucket: &str) -> Result<()> {
     storage.delete_bucket_policy(bucket)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_bucket_lifecycle(storage: &dyn Storage, bucket: &str) -> Result<LifecycleConfiguration> {
     storage.get_bucket_lifecycle(bucket)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn put_bucket_lifecycle(
     storage: &dyn Storage,
     bucket: &str,
@@ -64,6 +110,10 @@ pub fn put_bucket_lifecycle(
     storage.put_bucket_lifecycle(bucket, config)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_bucket_policy(
     storage: &dyn Storage,
     bucket: &str,
@@ -71,6 +121,10 @@ pub fn get_bucket_policy(
     storage.get_bucket_policy(bucket)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn put_bucket_policy(
     storage: &dyn Storage,
     bucket: &str,
@@ -79,10 +133,18 @@ pub fn put_bucket_policy(
     storage.put_bucket_policy(bucket, policy)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_bucket_acl(storage: &dyn Storage, bucket: &str) -> Result<crate::models::policy::Acl> {
     storage.get_bucket_acl(bucket)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn put_bucket_acl(
     storage: &dyn Storage,
     bucket: &str,
@@ -91,6 +153,10 @@ pub fn put_bucket_acl(
     storage.put_bucket_acl(bucket, acl)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_multipart_uploads(storage: &dyn Storage, bucket: &str) -> Result<Vec<MultipartUpload>> {
     storage.list_multipart_uploads(bucket)
 }

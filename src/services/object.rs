@@ -2,7 +2,12 @@ use crate::error::Result;
 use crate::models::{ListObjectsResult, MultipartUpload, Object, Part};
 use crate::storage::Storage;
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_objects(
     storage: &dyn Storage,
     bucket: &str,
@@ -14,10 +19,18 @@ pub fn list_objects(
     storage.list_objects(bucket, prefix, delimiter, marker, max_keys)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_object(storage: &dyn Storage, bucket: &str, key: &str) -> Result<Object> {
     storage.get_object(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_object_version(
     storage: &dyn Storage,
     bucket: &str,
@@ -27,6 +40,10 @@ pub fn get_object_version(
     storage.get_object_version(bucket, key, version_id)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_object_range(
     storage: &dyn Storage,
     bucket: &str,
@@ -37,18 +54,34 @@ pub fn get_object_range(
     storage.get_object_range(bucket, key, start, end)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn object_exists(storage: &dyn Storage, bucket: &str, key: &str) -> Result<bool> {
     storage.object_exists(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn put_object(storage: &dyn Storage, bucket: &str, key: String, object: Object) -> Result<()> {
     storage.put_object(bucket, key, object)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn delete_object(storage: &dyn Storage, bucket: &str, key: &str) -> Result<()> {
     storage.delete_object(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn delete_object_version(
     storage: &dyn Storage,
     bucket: &str,
@@ -58,6 +91,10 @@ pub fn delete_object_version(
     storage.delete_object_version(bucket, key, version_id)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_object_versions(
     storage: &dyn Storage,
     bucket: &str,
@@ -66,6 +103,10 @@ pub fn list_object_versions(
     storage.list_object_versions(bucket, prefix)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_object_versions_for_key(
     storage: &dyn Storage,
     bucket: &str,
@@ -74,6 +115,10 @@ pub fn list_object_versions_for_key(
     storage.list_object_versions_for_key(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_object_tags(
     storage: &dyn Storage,
     bucket: &str,
@@ -82,19 +127,31 @@ pub fn get_object_tags(
     storage.get_object_tags(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn put_object_tags(
     storage: &dyn Storage,
     bucket: &str,
     key: &str,
-    tags: HashMap<String, String>,
+    tags: HashMap<String, String, impl BuildHasher>,
 ) -> Result<()> {
-    storage.put_object_tags(bucket, key, tags)
+    storage.put_object_tags(bucket, key, tags.into_iter().collect())
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn delete_object_tags(storage: &dyn Storage, bucket: &str, key: &str) -> Result<()> {
     storage.delete_object_tags(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_object_acl(
     storage: &dyn Storage,
     bucket: &str,
@@ -103,6 +160,10 @@ pub fn get_object_acl(
     storage.get_object_acl(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn put_object_acl(
     storage: &dyn Storage,
     bucket: &str,
@@ -112,10 +173,18 @@ pub fn put_object_acl(
     storage.put_object_acl(bucket, key, acl)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_parts(storage: &dyn Storage, bucket: &str, upload_id: &str) -> Result<Vec<Part>> {
     storage.list_parts(bucket, upload_id)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn get_multipart_upload(
     storage: &dyn Storage,
     bucket: &str,
@@ -124,6 +193,10 @@ pub fn get_multipart_upload(
     storage.get_multipart_upload(bucket, upload_id)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn upload_part(
     storage: &dyn Storage,
     bucket: &str,
@@ -134,10 +207,18 @@ pub fn upload_part(
     storage.upload_part(bucket, upload_id, part_number, data)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_multipart_uploads(storage: &dyn Storage, bucket: &str) -> Result<Vec<MultipartUpload>> {
     storage.list_multipart_uploads(bucket)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn create_multipart_upload(
     storage: &dyn Storage,
     bucket: &str,
@@ -146,6 +227,10 @@ pub fn create_multipart_upload(
     storage.create_multipart_upload(bucket, key)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn complete_multipart_upload(
     storage: &dyn Storage,
     bucket: &str,
@@ -154,6 +239,10 @@ pub fn complete_multipart_upload(
     storage.complete_multipart_upload(bucket, upload_id)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn abort_multipart_upload(storage: &dyn Storage, bucket: &str, upload_id: &str) -> Result<()> {
     storage.abort_multipart_upload(bucket, upload_id)
 }

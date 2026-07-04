@@ -72,6 +72,7 @@ pub enum StorageClass {
 }
 
 impl Filter {
+    #[must_use]
     pub fn matches(&self, key: &str, tags: &std::collections::HashMap<String, String>) -> bool {
         // Check prefix match
         if let Some(prefix) = &self.prefix {
@@ -83,7 +84,7 @@ impl Filter {
         // Check tag matches (all tags must match)
         for tag in &self.tags {
             match tags.get(&tag.key) {
-                Some(value) if value == &tag.value => continue,
+                Some(value) if value == &tag.value => {}
                 _ => return false,
             }
         }

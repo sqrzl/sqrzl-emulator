@@ -3,10 +3,10 @@ use crate::models::Owner;
 use std::collections::HashMap;
 
 pub(super) fn default_owner(config: &AuthConfig) -> Owner {
-    let owner = config
-        .access_key()
-        .map(|key| key.to_string())
-        .unwrap_or_else(|| "sqrzl-emulator".to_string());
+    let owner = config.access_key().map_or_else(
+        || "sqrzl-emulator".to_string(),
+        std::string::ToString::to_string,
+    );
 
     Owner {
         id: owner.clone(),

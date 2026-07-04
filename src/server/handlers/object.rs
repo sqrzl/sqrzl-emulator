@@ -11,11 +11,17 @@ use crate::storage::Storage;
 use crate::utils::{headers as header_utils, validation, xml as xml_utils};
 use http::StatusCode;
 use hyper::Response;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 mod helpers;
 
-use self::helpers::*;
+use self::helpers::{
+    add_version_header, apply_s3_request_contracts, check_copy_conditionals,
+    check_object_conditionals, check_put_conditionals, copy_source_range_data,
+    locked_object_response, object_is_locked, object_response_headers, parse_range,
+    parse_tagging_header, upload_key_mismatch_response, validate_get_sse_headers,
+};
 
 pub async fn object_get(
     storage: Arc<dyn Storage>,
@@ -299,374 +305,441 @@ pub async fn object_put(
     }
 
     if req.has_query_param("tagging") {
-        let body = String::from_utf8(req.body.to_vec())
-            .map_err(|e| format!("Invalid UTF-8 body: {}", e))?;
-        let tags = match xml_utils::parse_tagging_xml(&body) {
-            Ok(t) => t,
-            Err(msg) => {
-                return Ok(xml_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "MalformedXML",
-                    &msg,
-                    &req_id,
-                ));
-            }
-        };
-        match tokio::task::block_in_place(|| {
-            object_service::put_object_tags(storage.as_ref(), bucket, key, tags)
-        }) {
-            Ok(_) => {
-                let builder = ResponseBuilder::new(StatusCode::OK)
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id());
-                return Ok(cors::apply_actual_request_headers(
-                    storage.as_ref(),
-                    bucket,
-                    req,
-                    builder,
-                )
-                .empty());
-            }
-            Err(crate::error::Error::KeyNotFound) => {
-                return Ok(xml_error_response(
-                    StatusCode::NOT_FOUND,
-                    "NoSuchKey",
-                    "Key not found",
-                    &req_id,
-                ));
-            }
-            Err(e) => {
-                return Ok(xml_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "InternalError",
-                    &e.to_string(),
-                    &req_id,
-                ));
-            }
-        }
+        return put_object_tagging(&storage, bucket, key, req, &req_id);
     }
 
     if req.has_query_param("acl") {
-        let acl = match if req.body.is_empty() {
-            acl::acl_from_headers(req).map_err(|message| ("InvalidArgument", message))
-        } else {
-            acl::acl_from_xml_body(&req.body).map_err(|message| ("MalformedXML", message))
-        } {
-            Ok(acl) => acl,
-            Err((code, message)) => {
-                return Ok(xml_error_response(
-                    StatusCode::BAD_REQUEST,
-                    code,
-                    &message,
-                    &req_id,
-                ))
-            }
-        };
-        match tokio::task::block_in_place(|| {
-            object_service::put_object_acl(storage.as_ref(), bucket, key, acl)
-        }) {
-            Ok(_) => {
-                let builder = ResponseBuilder::new(StatusCode::OK)
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id());
-                return Ok(cors::apply_actual_request_headers(
-                    storage.as_ref(),
-                    bucket,
-                    req,
-                    builder,
-                )
-                .empty());
-            }
-            Err(crate::error::Error::KeyNotFound) => {
-                return Ok(xml_error_response(
-                    StatusCode::NOT_FOUND,
-                    "NoSuchKey",
-                    "Key not found",
-                    &req_id,
-                ));
-            }
-            Err(e) => {
-                return Ok(xml_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "InternalError",
-                    &e.to_string(),
-                    &req_id,
-                ));
-            }
-        }
+        return Ok(put_object_acl(&storage, bucket, key, req, &req_id));
     }
 
     if req.has_query_param("uploadId") && req.query_param("partNumber").is_some() {
-        let upload_id = req.query_param("uploadId").unwrap_or("");
-        let part_number: u32 = match req.query_param("partNumber") {
-            Some(pn) => pn.parse().unwrap_or(0),
-            None => 0,
-        };
-        match tokio::task::block_in_place(|| {
-            object_service::upload_part(
-                storage.as_ref(),
-                bucket,
-                upload_id,
-                part_number,
-                req.body.to_vec(),
-            )
-        }) {
-            Ok(etag) => {
-                let builder = ResponseBuilder::new(StatusCode::OK)
-                    .header("ETag", &etag)
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id());
-                return Ok(cors::apply_actual_request_headers(
-                    storage.as_ref(),
-                    bucket,
-                    req,
-                    builder,
-                )
-                .empty());
-            }
-            Err(e) => {
-                return Ok(storage_error_response(&e, &req_id));
-            }
-        }
+        return Ok(upload_multipart_part(&storage, bucket, req, &req_id));
     }
 
-    if req.header("x-amz-copy-source").is_some() {
-        let copy_source = req.header("x-amz-copy-source").unwrap_or("");
-        let (source_bucket, source_key) = match copy_source.split_once('/') {
-            Some((b, k)) => (b, k),
-            None => {
-                return Ok(xml_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "InvalidArgument",
-                    "Invalid copy source format",
-                    &req_id,
-                ));
-            }
+    if let Some(copy_source) = req.header("x-amz-copy-source") {
+        return copy_object(&storage, bucket, key, copy_source, req, &req_id);
+    }
+
+    Ok(put_object_body(
+        &storage,
+        bucket,
+        key,
+        req,
+        &req_id,
+        existing.as_ref(),
+    ))
+}
+
+fn put_object_tagging(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Result<Response<Body>, String> {
+    let body =
+        String::from_utf8(req.body.to_vec()).map_err(|e| format!("Invalid UTF-8 body: {e}"))?;
+    let tags = match xml_utils::parse_tagging_xml(&body) {
+        Ok(tags) => tags,
+        Err(message) => {
+            return Ok(xml_error_response(
+                StatusCode::BAD_REQUEST,
+                "MalformedXML",
+                &message,
+                req_id,
+            ));
+        }
+    };
+
+    match tokio::task::block_in_place(|| {
+        object_service::put_object_tags(storage.as_ref(), bucket, key, tags)
+    }) {
+        Ok(()) => Ok(ok_empty_object_response(
+            storage.as_ref(),
+            bucket,
+            req,
+            req_id,
+        )),
+        Err(crate::error::Error::KeyNotFound) => Ok(xml_error_response(
+            StatusCode::NOT_FOUND,
+            "NoSuchKey",
+            "Key not found",
+            req_id,
+        )),
+        Err(err) => Ok(internal_error_response(&err, req_id)),
+    }
+}
+
+fn put_object_acl(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let acl = match if req.body.is_empty() {
+        acl::acl_from_headers(req).map_err(|message| ("InvalidArgument", message))
+    } else {
+        acl::acl_from_xml_body(&req.body).map_err(|message| ("MalformedXML", message))
+    } {
+        Ok(acl) => acl,
+        Err((code, message)) => {
+            return xml_error_response(StatusCode::BAD_REQUEST, code, &message, req_id);
+        }
+    };
+
+    match tokio::task::block_in_place(|| {
+        object_service::put_object_acl(storage.as_ref(), bucket, key, acl)
+    }) {
+        Ok(()) => ok_empty_object_response(storage.as_ref(), bucket, req, req_id),
+        Err(crate::error::Error::KeyNotFound) => {
+            xml_error_response(StatusCode::NOT_FOUND, "NoSuchKey", "Key not found", req_id)
+        }
+        Err(err) => internal_error_response(&err, req_id),
+    }
+}
+
+fn upload_multipart_part(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let upload_id = req.query_param("uploadId").unwrap_or("");
+    let part_number = req
+        .query_param("partNumber")
+        .and_then(|part| part.parse::<u32>().ok())
+        .unwrap_or(0);
+
+    match tokio::task::block_in_place(|| {
+        object_service::upload_part(
+            storage.as_ref(),
+            bucket,
+            upload_id,
+            part_number,
+            req.body.to_vec(),
+        )
+    }) {
+        Ok(etag) => {
+            let builder = ResponseBuilder::new(StatusCode::OK)
+                .header("ETag", &etag)
+                .header("x-amz-request-id", req_id)
+                .header("x-amz-id-2", &header_utils::generate_request_id());
+            cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty()
+        }
+        Err(err) => storage_error_response(&err, req_id),
+    }
+}
+
+fn copy_object(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    copy_source: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Result<Response<Body>, String> {
+    let Some((source_bucket, source_key)) = copy_source.split_once('/') else {
+        return Ok(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidArgument",
+            "Invalid copy source format",
+            req_id,
+        ));
+    };
+
+    match tokio::task::block_in_place(|| {
+        object_service::get_object(storage.as_ref(), source_bucket, source_key)
+    }) {
+        Ok(src_obj) => copy_loaded_object(storage, bucket, key, req, req_id, &src_obj),
+        Err(crate::error::Error::KeyNotFound) => Ok(xml_error_response(
+            StatusCode::NOT_FOUND,
+            "NoSuchKey",
+            "Copy source not found",
+            req_id,
+        )),
+        Err(err) => Ok(internal_error_response(&err, req_id)),
+    }
+}
+
+fn copy_loaded_object(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+    src_obj: &crate::models::Object,
+) -> Result<Response<Body>, String> {
+    if let Some(response) = check_copy_conditionals(req, src_obj, req_id) {
+        return Ok(response);
+    }
+
+    let copy_data = match copy_object_data(req, src_obj) {
+        Ok(data) => data,
+        Err(message) => {
+            return Ok(xml_error_response(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "InvalidRange",
+                &message,
+                req_id,
+            ));
+        }
+    };
+    let metadata = copy_object_metadata(req, src_obj);
+    let tags = copy_object_tags(req, src_obj)?;
+    let mut dest_obj = crate::models::Object::new_with_metadata(
+        key.to_string(),
+        copy_data,
+        src_obj.content_type.clone(),
+        metadata,
+    );
+    dest_obj
+        .provider_metadata
+        .clone_from(&src_obj.provider_metadata);
+    if let Err(response) = apply_s3_request_contracts(req, &mut dest_obj, req_id) {
+        return Ok(response);
+    }
+    if let Some(tags) = tags {
+        dest_obj.tags = tags;
+    } else {
+        dest_obj.tags.clone_from(&src_obj.tags);
+    }
+
+    Ok(store_copied_object(
+        storage, bucket, key, req, req_id, dest_obj,
+    ))
+}
+
+fn copy_object_data(
+    req: &crate::server::http::Request,
+    src_obj: &crate::models::Object,
+) -> Result<Vec<u8>, String> {
+    let Some(range_header) = req.header("x-amz-copy-source-range") else {
+        return Ok(src_obj.data.clone());
+    };
+
+    copy_source_range_data(src_obj, range_header)
+}
+
+fn copy_object_metadata(
+    req: &crate::server::http::Request,
+    src_obj: &crate::models::Object,
+) -> HashMap<String, String> {
+    if req
+        .header("x-amz-metadata-directive")
+        .unwrap_or("COPY")
+        .eq_ignore_ascii_case("REPLACE")
+    {
+        header_utils::extract_metadata_from_http_headers(req)
+    } else {
+        src_obj.metadata.clone()
+    }
+}
+
+fn copy_object_tags(
+    req: &crate::server::http::Request,
+    src_obj: &crate::models::Object,
+) -> Result<Option<HashMap<String, String>>, String> {
+    let tagging_directive = req.header("x-amz-tagging-directive").unwrap_or("COPY");
+    if let Some(tagging_header) = req.header("x-amz-tagging") {
+        return if tagging_directive.eq_ignore_ascii_case("REPLACE")
+            || tagging_directive.eq_ignore_ascii_case("COPY")
+        {
+            parse_tagging_header(tagging_header)
+                .map(Some)
+                .map_err(|err| format!("Invalid tags: {err}"))
+        } else {
+            Ok(None)
         };
+    }
 
-        let metadata_directive = req
-            .header("x-amz-metadata-directive")
-            .unwrap_or("COPY")
-            .to_uppercase();
-        let tagging_directive = req
-            .header("x-amz-tagging-directive")
-            .unwrap_or("COPY")
-            .to_uppercase();
-        let tagging_header = req.header("x-amz-tagging");
+    if tagging_directive.eq_ignore_ascii_case("COPY") {
+        Ok(Some(src_obj.tags.clone()))
+    } else {
+        Ok(None)
+    }
+}
 
-        match tokio::task::block_in_place(|| {
-            object_service::get_object(storage.as_ref(), source_bucket, source_key)
-        }) {
-            Ok(src_obj) => {
-                // Check copy conditionals before proceeding
-                if let Some(response) = check_copy_conditionals(req, &src_obj, &req_id) {
-                    return Ok(response);
-                }
+fn store_copied_object(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+    dest_obj: crate::models::Object,
+) -> Response<Body> {
+    let dest_key = dest_obj.key.clone();
+    let etag = dest_obj.etag.clone();
+    let dest_last_modified = dest_obj.last_modified;
 
-                let copy_data = if let Some(range_header) = req.header("x-amz-copy-source-range") {
-                    match copy_source_range_data(&src_obj, range_header) {
-                        Ok(data) => data,
-                        Err(msg) => {
-                            return Ok(xml_error_response(
-                                StatusCode::RANGE_NOT_SATISFIABLE,
-                                "InvalidRange",
-                                &msg,
-                                &req_id,
-                            ));
-                        }
-                    }
-                } else {
-                    src_obj.data.clone()
-                };
+    match tokio::task::block_in_place(|| {
+        object_service::put_object(storage.as_ref(), bucket, dest_key, dest_obj)
+    }) {
+        Ok(()) => {
+            copy_object_response(storage, bucket, key, req, req_id, &etag, dest_last_modified)
+        }
+        Err(err) => internal_error_response(&err, req_id),
+    }
+}
 
-                let metadata = if metadata_directive == "REPLACE" {
-                    header_utils::extract_metadata_from_http_headers(req)
-                } else {
-                    src_obj.metadata.clone()
-                };
-
-                let tags = if let Some(tag_str) = tagging_header {
-                    if tagging_directive == "REPLACE" || tagging_directive == "COPY" {
-                        Some(
-                            parse_tagging_header(tag_str)
-                                .map_err(|e| format!("Invalid tags: {}", e))?,
-                        )
-                    } else {
-                        None
-                    }
-                } else if tagging_directive == "COPY" {
-                    Some(src_obj.tags.clone())
-                } else {
-                    None
-                };
-
-                let mut dest_obj = crate::models::Object::new_with_metadata(
-                    key.to_string(),
-                    copy_data,
-                    src_obj.content_type.clone(),
-                    metadata,
-                );
-                dest_obj.provider_metadata = src_obj.provider_metadata.clone();
-                if let Err(response) = apply_s3_request_contracts(req, &mut dest_obj, &req_id) {
-                    return Ok(response);
-                }
-                if let Some(t) = tags.clone() {
-                    dest_obj.tags = t;
-                } else {
-                    dest_obj.tags = src_obj.tags.clone();
-                }
-
-                let dest_key = dest_obj.key.clone();
-                let etag = dest_obj.etag.clone();
-                let dest_last_modified = dest_obj.last_modified;
-
-                match tokio::task::block_in_place(|| {
-                    object_service::put_object(storage.as_ref(), bucket, dest_key, dest_obj)
-                }) {
-                    Ok(_) => {
-                        let stored_version_id = tokio::task::block_in_place(|| {
-                            object_service::get_object(storage.as_ref(), bucket, key)
-                        })
-                        .ok()
-                        .and_then(|obj| obj.version_id);
-
-                        let xml = format!(
-                            r#"<?xml version="1.0" encoding="UTF-8"?>
+fn copy_object_response(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+    etag: &str,
+    last_modified: chrono::DateTime<chrono::Utc>,
+) -> Response<Body> {
+    let stored_version_id =
+        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
+            .ok()
+            .and_then(|obj| obj.version_id);
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
     <ETag>{}</ETag>
     <LastModified>{}</LastModified>
 </CopyObjectResult>"#,
-                            etag,
-                            header_utils::format_last_modified_at(&dest_last_modified)
-                        );
-                        let mut builder = ResponseBuilder::new(StatusCode::OK)
-                            .content_type("application/xml; charset=utf-8")
-                            .header("x-amz-request-id", &req_id);
-                        builder = add_version_header(builder, stored_version_id.as_deref());
-                        return Ok(cors::apply_actual_request_headers(
-                            storage.as_ref(),
-                            bucket,
-                            req,
-                            builder,
-                        )
-                        .body(xml.into_bytes())
-                        .build());
-                    }
-                    Err(e) => {
-                        return Ok(xml_error_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "InternalError",
-                            &e.to_string(),
-                            &req_id,
-                        ));
-                    }
-                }
-            }
-            Err(crate::error::Error::KeyNotFound) => {
-                return Ok(xml_error_response(
-                    StatusCode::NOT_FOUND,
-                    "NoSuchKey",
-                    "Copy source not found",
-                    &req_id,
-                ));
-            }
-            Err(e) => {
-                return Ok(xml_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "InternalError",
-                    &e.to_string(),
-                    &req_id,
-                ));
-            }
+        etag,
+        header_utils::format_last_modified_at(&last_modified)
+    );
+    let builder = add_version_header(
+        ResponseBuilder::new(StatusCode::OK)
+            .content_type("application/xml; charset=utf-8")
+            .header("x-amz-request-id", req_id),
+        stored_version_id.as_deref(),
+    );
+    cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder)
+        .body(xml.into_bytes())
+        .build()
+}
+
+fn put_object_body(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+    existing: Option<&crate::models::Object>,
+) -> Response<Body> {
+    if let Some(response) = validate_put_target(bucket, key, req_id) {
+        return response;
+    }
+    let tags = match parse_optional_tagging_header(req, req_id) {
+        Ok(tags) => tags,
+        Err(message) => {
+            return xml_error_response(StatusCode::BAD_REQUEST, "InvalidTag", &message, req_id);
         }
-    }
-
-    if let Err(e) = validation::validate_bucket_name(bucket) {
-        return Ok(xml_error_response(
-            StatusCode::BAD_REQUEST,
-            "InvalidBucketName",
-            &e,
-            &req_id,
-        ));
-    }
-
-    if let Err(e) = validation::validate_blob_key(key) {
-        return Ok(xml_error_response(
-            StatusCode::BAD_REQUEST,
-            "InvalidKey",
-            &e,
-            &req_id,
-        ));
-    }
-
+    };
     let content_type = req
         .header("content-type")
-        .unwrap_or("application/octet-stream")
-        .to_string();
-
-    let tagging_header = req.header("x-amz-tagging");
-    let tags = if let Some(tag_str) = tagging_header {
-        match parse_tagging_header(tag_str) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                return Ok(xml_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "InvalidTag",
-                    &e,
-                    &req_id,
-                ));
-            }
-        }
-    } else {
-        None
-    };
-
+        .unwrap_or("application/octet-stream");
     let metadata = header_utils::extract_metadata_from_http_headers(req);
     let mut obj = crate::models::Object::new_with_metadata(
         key.to_string(),
         req.body.to_vec(),
-        content_type,
+        content_type.to_string(),
         metadata,
     );
-    if let Some(existing) = existing.as_ref() {
-        obj.provider_metadata = existing.provider_metadata.clone();
+    if let Some(existing) = existing {
+        obj.provider_metadata
+            .clone_from(&existing.provider_metadata);
     }
-    if let Err(response) = apply_s3_request_contracts(req, &mut obj, &req_id) {
-        return Ok(response);
+    if let Err(response) = apply_s3_request_contracts(req, &mut obj, req_id) {
+        return response;
     }
-    if let Some(t) = tags.clone() {
-        obj.tags = t;
+    if let Some(tags) = tags {
+        obj.tags = tags;
     }
+    store_put_object(storage, bucket, key, req, req_id, obj)
+}
+
+fn validate_put_target(bucket: &str, key: &str, req_id: &str) -> Option<Response<Body>> {
+    if let Err(err) = validation::validate_bucket_name(bucket) {
+        return Some(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidBucketName",
+            &err,
+            req_id,
+        ));
+    }
+
+    validation::validate_blob_key(key)
+        .err()
+        .map(|err| xml_error_response(StatusCode::BAD_REQUEST, "InvalidKey", &err, req_id))
+}
+
+fn parse_optional_tagging_header(
+    req: &crate::server::http::Request,
+    _req_id: &str,
+) -> Result<Option<HashMap<String, String>>, String> {
+    let Some(tagging_header) = req.header("x-amz-tagging") else {
+        return Ok(None);
+    };
+    parse_tagging_header(tagging_header).map(Some)
+}
+
+fn store_put_object(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+    obj: crate::models::Object,
+) -> Response<Body> {
     let obj_key = obj.key.clone();
     let etag = obj.etag.clone();
-
     match tokio::task::block_in_place(|| {
         object_service::put_object(storage.as_ref(), bucket, obj_key, obj)
     }) {
-        Ok(_) => {
-            let stored_version_id = tokio::task::block_in_place(|| {
-                object_service::get_object(storage.as_ref(), bucket, key)
-            })
+        Ok(()) => put_object_response(storage, bucket, key, req, req_id, &etag),
+        Err(err) => internal_error_response(&err, req_id),
+    }
+}
+
+fn put_object_response(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+    etag: &str,
+) -> Response<Body> {
+    let stored_version_id =
+        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
             .ok()
             .and_then(|obj| obj.version_id);
+    let builder = add_version_header(
+        ResponseBuilder::new(StatusCode::OK)
+            .header("Content-Length", "0")
+            .header("ETag", etag)
+            .header("x-amz-request-id", req_id)
+            .header("x-amz-id-2", &header_utils::generate_request_id()),
+        stored_version_id.as_deref(),
+    );
+    cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty()
+}
 
-            let mut builder = ResponseBuilder::new(StatusCode::OK)
-                .header("Content-Length", "0")
-                .header("ETag", &etag.to_string())
-                .header("x-amz-request-id", &req_id)
-                .header("x-amz-id-2", &header_utils::generate_request_id());
+fn ok_empty_object_response(
+    storage: &dyn Storage,
+    bucket: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let builder = ResponseBuilder::new(StatusCode::OK)
+        .header("x-amz-request-id", req_id)
+        .header("x-amz-id-2", &header_utils::generate_request_id());
+    cors::apply_actual_request_headers(storage, bucket, req, builder).empty()
+}
 
-            builder = add_version_header(builder, stored_version_id.as_deref());
-
-            Ok(cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty())
-        }
-        Err(e) => Ok(xml_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "InternalError",
-            &e.to_string(),
-            &req_id,
-        )),
-    }
+fn internal_error_response(err: &crate::error::Error, req_id: &str) -> Response<Body> {
+    xml_error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "InternalError",
+        &err.to_string(),
+        req_id,
+    )
 }
 
 #[cfg(test)]
@@ -701,7 +774,7 @@ mod tests {
             enforce_auth: false,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: Duration::from_secs(3600),
+            lifecycle_interval: Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -1035,57 +1108,14 @@ pub async fn object_delete(
     req_id: String,
 ) -> Result<Response<Body>, String> {
     if req.has_query_param("uploadId") {
-        let upload_id = req.query_param("uploadId").unwrap_or("");
-        let upload = match tokio::task::block_in_place(|| {
-            object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
-        }) {
-            Ok(upload) => upload,
-            Err(crate::error::Error::NoSuchUpload) => {
-                return Ok(ResponseBuilder::new(StatusCode::NO_CONTENT)
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id())
-                    .empty())
-            }
-            Err(e) => return Ok(storage_error_response(&e, &req_id)),
-        };
-
-        if upload.key != key {
-            return Ok(upload_key_mismatch_response(&req_id));
-        }
-
-        if let Err(response) = check_authorization(
-            req,
-            &auth_config,
+        return Ok(delete_multipart_upload(
             &storage,
+            &auth_config,
             bucket,
-            Some(upload.key.as_str()),
-            "s3:DeleteObject",
-        ) {
-            return Ok(response);
-        }
-
-        if let Err(response) = verify_presigned_url(req, bucket, upload.key.as_str(), &auth_config)
-        {
-            return Ok(response);
-        }
-
-        match tokio::task::block_in_place(|| {
-            object_service::abort_multipart_upload(storage.as_ref(), bucket, upload_id)
-        }) {
-            Ok(_) | Err(crate::error::Error::NoSuchUpload) => {
-                let builder = ResponseBuilder::new(StatusCode::NO_CONTENT)
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id());
-                return Ok(cors::apply_actual_request_headers(
-                    storage.as_ref(),
-                    bucket,
-                    req,
-                    builder,
-                )
-                .empty());
-            }
-            Err(e) => return Ok(storage_error_response(&e, &req_id)),
-        }
+            key,
+            req,
+            &req_id,
+        ));
     }
 
     if let Err(response) = check_authorization(
@@ -1105,68 +1135,120 @@ pub async fn object_delete(
     }
 
     if req.has_query_param("versionId") {
-        let version_id = req.query_param("versionId").unwrap_or("");
-        match tokio::task::block_in_place(|| {
-            object_service::delete_object_version(storage.as_ref(), bucket, key, version_id)
-        }) {
-            Ok(_) | Err(crate::error::Error::KeyNotFound) => {
-                let builder = ResponseBuilder::new(StatusCode::NO_CONTENT)
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id())
-                    .header("x-amz-version-id", version_id);
-                return Ok(cors::apply_actual_request_headers(
-                    storage.as_ref(),
-                    bucket,
-                    req,
-                    builder,
-                )
-                .empty());
-            }
-            Err(e) => {
-                return Ok(xml_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "InternalError",
-                    &e.to_string(),
-                    &req_id,
-                ));
-            }
-        }
+        return Ok(delete_object_version_request(
+            &storage, bucket, key, req, &req_id,
+        ));
     }
 
     if req.has_query_param("tagging") {
-        if let Ok(existing) = tokio::task::block_in_place(|| {
-            object_service::get_object(storage.as_ref(), bucket, key)
-        }) {
-            if object_is_locked(&existing) {
-                return Ok(locked_object_response(&req_id));
-            }
+        return Ok(delete_object_tagging(&storage, bucket, key, req, &req_id));
+    }
+
+    Ok(delete_current_object(&storage, bucket, key, req, &req_id))
+}
+
+fn delete_multipart_upload(
+    storage: &Arc<dyn Storage>,
+    auth_config: &Arc<AuthConfig>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let upload_id = req.query_param("uploadId").unwrap_or("");
+    let upload = match tokio::task::block_in_place(|| {
+        object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
+    }) {
+        Ok(upload) => upload,
+        Err(crate::error::Error::NoSuchUpload) => {
+            return bare_no_content_response(req_id);
         }
-        match tokio::task::block_in_place(|| {
-            object_service::delete_object_tags(storage.as_ref(), bucket, key)
-        }) {
-            Ok(_) | Err(crate::error::Error::KeyNotFound) => {
-                let builder = ResponseBuilder::new(StatusCode::NO_CONTENT)
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id());
-                return Ok(cors::apply_actual_request_headers(
-                    storage.as_ref(),
-                    bucket,
-                    req,
-                    builder,
-                )
-                .empty());
-            }
-            Err(e) => {
-                let xml = xml_utils::error_xml("InternalError", &e.to_string(), &req_id);
-                return Ok(ResponseBuilder::new(StatusCode::INTERNAL_SERVER_ERROR)
-                    .content_type("application/xml; charset=utf-8")
-                    .header("x-amz-request-id", &req_id)
-                    .body(xml.into_bytes())
-                    .build());
-            }
+        Err(err) => return storage_error_response(&err, req_id),
+    };
+
+    if upload.key != key {
+        return upload_key_mismatch_response(req_id);
+    }
+
+    if let Err(response) = check_authorization(
+        req,
+        auth_config,
+        storage,
+        bucket,
+        Some(upload.key.as_str()),
+        "s3:DeleteObject",
+    ) {
+        return response;
+    }
+
+    if let Err(response) = verify_presigned_url(req, bucket, upload.key.as_str(), auth_config) {
+        return response;
+    }
+
+    match tokio::task::block_in_place(|| {
+        object_service::abort_multipart_upload(storage.as_ref(), bucket, upload_id)
+    }) {
+        Ok(()) | Err(crate::error::Error::NoSuchUpload) => {
+            no_content_object_response(storage.as_ref(), bucket, req, req_id)
+        }
+        Err(err) => storage_error_response(&err, req_id),
+    }
+}
+
+fn delete_object_version_request(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let version_id = req.query_param("versionId").unwrap_or("");
+    match tokio::task::block_in_place(|| {
+        object_service::delete_object_version(storage.as_ref(), bucket, key, version_id)
+    }) {
+        Ok(()) | Err(crate::error::Error::KeyNotFound) => {
+            let builder = ResponseBuilder::new(StatusCode::NO_CONTENT)
+                .header("x-amz-request-id", req_id)
+                .header("x-amz-id-2", &header_utils::generate_request_id())
+                .header("x-amz-version-id", version_id);
+            cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty()
+        }
+        Err(err) => internal_error_response(&err, req_id),
+    }
+}
+
+fn delete_object_tagging(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    if let Ok(existing) =
+        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
+    {
+        if object_is_locked(&existing) {
+            return locked_object_response(req_id);
         }
     }
 
+    match tokio::task::block_in_place(|| {
+        object_service::delete_object_tags(storage.as_ref(), bucket, key)
+    }) {
+        Ok(()) | Err(crate::error::Error::KeyNotFound) => {
+            no_content_object_response(storage.as_ref(), bucket, req, req_id)
+        }
+        Err(err) => internal_error_response(&err, req_id),
+    }
+}
+
+fn delete_current_object(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
     match tokio::task::block_in_place(|| {
         if let Ok(existing) = object_service::get_object(storage.as_ref(), bucket, key) {
             if object_is_locked(&existing) {
@@ -1175,24 +1257,31 @@ pub async fn object_delete(
         }
         object_service::delete_object(storage.as_ref(), bucket, key)
     }) {
-        Ok(_) | Err(crate::error::Error::KeyNotFound) => {
-            let builder = ResponseBuilder::new(StatusCode::NO_CONTENT)
-                .header("x-amz-request-id", &req_id)
-                .header("x-amz-id-2", &header_utils::generate_request_id());
-            Ok(cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty())
+        Ok(()) | Err(crate::error::Error::KeyNotFound) => {
+            no_content_object_response(storage.as_ref(), bucket, req, req_id)
         }
-        Err(e) => {
-            if matches!(e, crate::error::Error::AccessDenied) {
-                return Ok(locked_object_response(&req_id));
-            }
-            let xml = xml_utils::error_xml("InternalError", &e.to_string(), &req_id);
-            Ok(ResponseBuilder::new(StatusCode::INTERNAL_SERVER_ERROR)
-                .content_type("application/xml; charset=utf-8")
-                .header("x-amz-request-id", &req_id)
-                .body(xml.into_bytes())
-                .build())
-        }
+        Err(crate::error::Error::AccessDenied) => locked_object_response(req_id),
+        Err(err) => internal_error_response(&err, req_id),
     }
+}
+
+fn bare_no_content_response(req_id: &str) -> Response<Body> {
+    ResponseBuilder::new(StatusCode::NO_CONTENT)
+        .header("x-amz-request-id", req_id)
+        .header("x-amz-id-2", &header_utils::generate_request_id())
+        .empty()
+}
+
+fn no_content_object_response(
+    storage: &dyn Storage,
+    bucket: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let builder = ResponseBuilder::new(StatusCode::NO_CONTENT)
+        .header("x-amz-request-id", req_id)
+        .header("x-amz-id-2", &header_utils::generate_request_id());
+    cors::apply_actual_request_headers(storage, bucket, req, builder).empty()
 }
 
 pub async fn object_head(
@@ -1301,71 +1390,14 @@ pub async fn object_post(
     req_id: String,
 ) -> Result<Response<Body>, String> {
     if req.has_query_param("uploadId") {
-        let upload_id = req.query_param("uploadId").unwrap_or("");
-        let upload = match tokio::task::block_in_place(|| {
-            object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
-        }) {
-            Ok(upload) => upload,
-            Err(crate::error::Error::NoSuchUpload) => {
-                return Ok(xml_error_response(
-                    StatusCode::NOT_FOUND,
-                    "NoSuchUpload",
-                    "Upload not found",
-                    &req_id,
-                ))
-            }
-            Err(e) => return Ok(storage_error_response(&e, &req_id)),
-        };
-
-        if upload.key != key {
-            return Ok(upload_key_mismatch_response(&req_id));
-        }
-
-        if let Err(response) = check_authorization(
-            req,
-            &auth_config,
+        return Ok(complete_multipart_upload_request(
             &storage,
+            &auth_config,
             bucket,
-            Some(upload.key.as_str()),
-            "s3:PutObject",
-        ) {
-            return Ok(response);
-        }
-
-        if let Err(response) = verify_presigned_url(req, bucket, upload.key.as_str(), &auth_config)
-        {
-            return Ok(response);
-        }
-
-        match tokio::task::block_in_place(|| {
-            object_service::complete_multipart_upload(storage.as_ref(), bucket, upload_id)
-        }) {
-            Ok(etag) => {
-                let xml = xml_utils::complete_multipart_upload_xml(bucket, key, &etag);
-                let stored_version_id = tokio::task::block_in_place(|| {
-                    object_service::get_object(storage.as_ref(), bucket, key)
-                })
-                .ok()
-                .and_then(|obj| obj.version_id);
-
-                let mut builder = ResponseBuilder::new(StatusCode::OK)
-                    .content_type("application/xml; charset=utf-8")
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id());
-
-                builder = add_version_header(builder, stored_version_id.as_deref());
-
-                return Ok(cors::apply_actual_request_headers(
-                    storage.as_ref(),
-                    bucket,
-                    req,
-                    builder,
-                )
-                .body(xml.into_bytes())
-                .build());
-            }
-            Err(e) => return Ok(storage_error_response(&e, &req_id)),
-        }
+            key,
+            req,
+            &req_id,
+        ));
     }
 
     if let Err(response) = check_authorization(
@@ -1385,43 +1417,124 @@ pub async fn object_post(
 
     // Handle initiate multipart upload
     if req.has_query_param("uploads") {
-        match tokio::task::block_in_place(|| {
-            object_service::create_multipart_upload(storage.as_ref(), bucket, key.to_string())
-        }) {
-            Ok(upload) => {
-                let xml = format!(
-                    r#"<?xml version="1.0" encoding="UTF-8"?>
+        return Ok(initiate_multipart_upload_request(
+            &storage, bucket, key, req, &req_id,
+        ));
+    }
+
+    Ok(xml_error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "NotImplemented",
+        "Object POST operations not yet implemented",
+        &req_id,
+    ))
+}
+
+fn complete_multipart_upload_request(
+    storage: &Arc<dyn Storage>,
+    auth_config: &Arc<AuthConfig>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let upload_id = req.query_param("uploadId").unwrap_or("");
+    let upload = match tokio::task::block_in_place(|| {
+        object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
+    }) {
+        Ok(upload) => upload,
+        Err(crate::error::Error::NoSuchUpload) => {
+            return xml_error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchUpload",
+                "Upload not found",
+                req_id,
+            );
+        }
+        Err(err) => return storage_error_response(&err, req_id),
+    };
+
+    if upload.key != key {
+        return upload_key_mismatch_response(req_id);
+    }
+
+    if let Err(response) = check_authorization(
+        req,
+        auth_config,
+        storage,
+        bucket,
+        Some(upload.key.as_str()),
+        "s3:PutObject",
+    ) {
+        return response;
+    }
+
+    if let Err(response) = verify_presigned_url(req, bucket, upload.key.as_str(), auth_config) {
+        return response;
+    }
+
+    match tokio::task::block_in_place(|| {
+        object_service::complete_multipart_upload(storage.as_ref(), bucket, upload_id)
+    }) {
+        Ok(etag) => complete_multipart_upload_response(storage, bucket, key, req, req_id, &etag),
+        Err(err) => storage_error_response(&err, req_id),
+    }
+}
+
+fn complete_multipart_upload_response(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+    etag: &str,
+) -> Response<Body> {
+    let xml = xml_utils::complete_multipart_upload_xml(bucket, key, etag);
+    let stored_version_id =
+        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
+            .ok()
+            .and_then(|obj| obj.version_id);
+    let builder = add_version_header(
+        ResponseBuilder::new(StatusCode::OK)
+            .content_type("application/xml; charset=utf-8")
+            .header("x-amz-request-id", req_id)
+            .header("x-amz-id-2", &header_utils::generate_request_id()),
+        stored_version_id.as_deref(),
+    );
+    cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder)
+        .body(xml.into_bytes())
+        .build()
+}
+
+fn initiate_multipart_upload_request(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    match tokio::task::block_in_place(|| {
+        object_service::create_multipart_upload(storage.as_ref(), bucket, key.to_string())
+    }) {
+        Ok(upload) => {
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-    <Bucket>{}</Bucket>
+    <Bucket>{bucket}</Bucket>
     <Key>{}</Key>
     <UploadId>{}</UploadId>
 </InitiateMultipartUploadResult>"#,
-                    bucket, upload.key, upload.upload_id
-                );
-                let builder = ResponseBuilder::new(StatusCode::OK)
-                    .content_type("application/xml; charset=utf-8")
-                    .header("x-amz-request-id", &req_id)
-                    .header("x-amz-id-2", &header_utils::generate_request_id());
-                Ok(
-                    cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder)
-                        .body(xml.into_bytes())
-                        .build(),
-                )
-            }
-            Err(e) => Ok(xml_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "InternalError",
-                &e.to_string(),
-                &req_id,
-            )),
+                upload.key, upload.upload_id
+            );
+            let builder = ResponseBuilder::new(StatusCode::OK)
+                .content_type("application/xml; charset=utf-8")
+                .header("x-amz-request-id", req_id)
+                .header("x-amz-id-2", &header_utils::generate_request_id());
+            cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder)
+                .body(xml.into_bytes())
+                .build()
         }
-    } else {
-        Ok(xml_error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "NotImplemented",
-            "Object POST operations not yet implemented",
-            &req_id,
-        ))
+        Err(err) => internal_error_response(&err, req_id),
     }
 }
 
@@ -1454,7 +1567,7 @@ mod s3_contract_tests {
             enforce_auth: false,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: Duration::from_secs(3600),
+            lifecycle_interval: Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -1468,7 +1581,7 @@ mod s3_contract_tests {
             enforce_auth: true,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: Duration::from_secs(3600),
+            lifecycle_interval: Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,

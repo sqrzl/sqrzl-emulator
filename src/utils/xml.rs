@@ -2,6 +2,7 @@
 use crate::models::{Acl, Bucket, CannedAcl, MultipartUpload, Object, Owner, Part};
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::hash::BuildHasher;
 
 mod parse;
 
@@ -10,11 +11,13 @@ pub use self::parse::{
 };
 
 /// Wrap content in XML declaration
+#[must_use]
 pub fn xml_declaration() -> String {
     r#"<?xml version="1.0" encoding="UTF-8"?>"#.to_string()
 }
 
-/// ListBuckets response
+/// `ListBuckets` response
+#[must_use]
 pub fn list_buckets_xml(buckets: &[Bucket]) -> String {
     let mut xml = format!(
         r#"{}
@@ -29,28 +32,30 @@ pub fn list_buckets_xml(buckets: &[Bucket]) -> String {
 
     for bucket in buckets {
         let created = bucket.created_at.to_rfc3339();
-        xml.push_str(&format!(
-            r#"
+        let _ = write!(
+            xml,
+            r"
         <Bucket>
             <Name>{}</Name>
             <CreationDate>{}</CreationDate>
-        </Bucket>"#,
+        </Bucket>",
             escape_xml(&bucket.name),
             created
-        ));
+        );
     }
 
     xml.push_str(
-        r#"
+        r"
     </Buckets>
-</ListAllMyBucketsResult>"#,
+</ListAllMyBucketsResult>",
     );
 
     xml
 }
 
 /// Build Tagging XML response from key/value pairs
-pub fn tagging_xml(tags: &HashMap<String, String>) -> String {
+#[must_use]
+pub fn tagging_xml(tags: &HashMap<String, String, impl BuildHasher>) -> String {
     let mut xml = format!(
         "{}\n<Tagging xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n  <TagSet>",
         xml_declaration()
@@ -60,19 +65,21 @@ pub fn tagging_xml(tags: &HashMap<String, String>) -> String {
     entries.sort_unstable_by_key(|(left_key, _)| *left_key);
 
     for (k, v) in entries {
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "\n    <Tag><Key>{}</Key><Value>{}</Value></Tag>",
             escape_xml(k),
             escape_xml(v)
-        ));
+        );
     }
 
     xml.push_str("\n  </TagSet>\n</Tagging>");
     xml
 }
 
-/// ListBucketResult response (list objects)
+/// `ListBucketResult` response (list objects)
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn list_objects_xml(
     objects: &[Object],
     common_prefixes: &[String],
@@ -95,22 +102,24 @@ pub fn list_objects_xml(
     );
 
     if let Some(delim) = delimiter {
-        xml.push_str(&format!("\n  <Delimiter>{}</Delimiter>", escape_xml(delim)));
+        let _ = write!(xml, "\n  <Delimiter>{}</Delimiter>", escape_xml(delim));
     }
 
     if let Some(m) = marker {
-        xml.push_str(&format!("\n  <Marker>{}</Marker>", escape_xml(m)));
+        let _ = write!(xml, "\n  <Marker>{}</Marker>", escape_xml(m));
     }
 
-    xml.push_str(&format!("\n  <MaxKeys>{}</MaxKeys>", max_keys));
-    xml.push_str(&format!(
+    let _ = write!(xml, "\n  <MaxKeys>{max_keys}</MaxKeys>");
+    let _ = write!(
+        xml,
         "\n  <IsTruncated>{}</IsTruncated>",
         if truncated { "true" } else { "false" }
-    ));
+    );
 
     for obj in objects {
         let modified = obj.last_modified.to_rfc3339();
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             r#"
   <Contents>
     <Key>{}</Key>
@@ -123,22 +132,23 @@ pub fn list_objects_xml(
             modified,
             escape_xml(&obj.etag),
             obj.size
-        ));
+        );
     }
 
     for common_prefix in common_prefixes {
-        xml.push_str(&format!(
-            r#"
+        let _ = write!(
+            xml,
+            r"
   <CommonPrefixes>
     <Prefix>{}</Prefix>
-  </CommonPrefixes>"#,
+  </CommonPrefixes>",
             escape_xml(common_prefix)
-        ));
+        );
     }
 
     if truncated {
         if let Some(nm) = next_marker {
-            xml.push_str(&format!("\n  <NextMarker>{}</NextMarker>", escape_xml(nm)));
+            let _ = write!(xml, "\n  <NextMarker>{}</NextMarker>", escape_xml(nm));
         }
     }
 
@@ -155,6 +165,7 @@ pub enum ListObjectsV2Entry {
 }
 
 impl ListObjectsV2Entry {
+    #[must_use]
     pub fn token(&self) -> &str {
         match self {
             ListObjectsV2Entry::Object(obj) => &obj.key,
@@ -173,8 +184,9 @@ fn render_v2_value(value: &str, encoding_type: Option<&str>) -> String {
     escape_xml(&value)
 }
 
-/// ListBucketResult response (ListObjectsV2)
+/// `ListBucketResult` response (`ListObjectsV2`)
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn list_objects_v2_xml(
     entries: &[ListObjectsV2Entry],
     bucket: &str,
@@ -195,39 +207,44 @@ pub fn list_objects_v2_xml(
         xml_declaration()
     );
 
-    xml.push_str(&format!("\n  <Name>{}</Name>", escape_xml(bucket)));
-    xml.push_str(&format!(
+    let _ = write!(xml, "\n  <Name>{}</Name>", escape_xml(bucket));
+    let _ = write!(
+        xml,
         "\n  <Prefix>{}</Prefix>",
         render_v2_value(prefix, encoding_type)
-    ));
+    );
 
     if let Some(delim) = delimiter {
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "\n  <Delimiter>{}</Delimiter>",
             render_v2_value(delim, encoding_type)
-        ));
+        );
     }
 
     if let Some(token) = continuation_token {
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "\n  <ContinuationToken>{}</ContinuationToken>",
             render_v2_value(token, encoding_type)
-        ));
+        );
     }
 
     if let Some(start_after_value) = start_after {
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "\n  <StartAfter>{}</StartAfter>",
             render_v2_value(start_after_value, encoding_type)
-        ));
+        );
     }
 
-    xml.push_str(&format!("\n  <MaxKeys>{}</MaxKeys>", max_keys));
-    xml.push_str(&format!("\n  <KeyCount>{}</KeyCount>", key_count));
-    xml.push_str(&format!(
+    let _ = write!(xml, "\n  <MaxKeys>{max_keys}</MaxKeys>");
+    let _ = write!(xml, "\n  <KeyCount>{key_count}</KeyCount>");
+    let _ = write!(
+        xml,
         "\n  <IsTruncated>{}</IsTruncated>",
         if truncated { "true" } else { "false" }
-    ));
+    );
 
     if matches!(encoding_type, Some(encoding) if encoding.eq_ignore_ascii_case("url")) {
         xml.push_str("\n  <EncodingType>url</EncodingType>");
@@ -237,7 +254,8 @@ pub fn list_objects_v2_xml(
         match entry {
             ListObjectsV2Entry::Object(obj) => {
                 let modified = obj.last_modified.to_rfc3339();
-                xml.push_str(&format!(
+                let _ = write!(
+                    xml,
                     r#"
   <Contents>
     <Key>{}</Key>
@@ -256,25 +274,27 @@ pub fn list_objects_v2_xml(
                         ""
                     },
                     escape_xml(&obj.storage_class)
-                ));
+                );
             }
             ListObjectsV2Entry::CommonPrefix(prefix_value) => {
-                xml.push_str(&format!(
-                    r#"
+                let _ = write!(
+                    xml,
+                    r"
   <CommonPrefixes>
     <Prefix>{}</Prefix>
-  </CommonPrefixes>"#,
+  </CommonPrefixes>",
                     render_v2_value(prefix_value, encoding_type)
-                ));
+                );
             }
         }
     }
 
     if let Some(next_token) = next_continuation_token {
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "\n  <NextContinuationToken>{}</NextContinuationToken>",
             render_v2_value(next_token, encoding_type)
-        ));
+        );
     }
 
     xml.push_str("\n</ListBucketResult>");
@@ -282,14 +302,15 @@ pub fn list_objects_v2_xml(
 }
 
 /// Error response
+#[must_use]
 pub fn error_xml(code: &str, message: &str, request_id: &str) -> String {
     format!(
-        r#"{}
+        r"{}
 <Error>
   <Code>{}</Code>
   <Message>{}</Message>
   <RequestId>{}</RequestId>
-</Error>"#,
+</Error>",
         xml_declaration(),
         escape_xml(code),
         escape_xml(message),
@@ -298,6 +319,7 @@ pub fn error_xml(code: &str, message: &str, request_id: &str) -> String {
 }
 
 /// Versioning configuration response
+#[must_use]
 pub fn versioning_status_xml(status: Option<&str>) -> String {
     let status_str = status.unwrap_or("Suspended");
     format!(
@@ -312,6 +334,7 @@ pub fn versioning_status_xml(status: Option<&str>) -> String {
 
 /// List object versions response
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn list_versions_xml(
     bucket: &str,
     versions: &[crate::models::Object],
@@ -329,8 +352,9 @@ pub fn list_versions_xml(
         let version_id = obj.version_id.as_deref().unwrap_or("null");
         let last_modified = obj.last_modified.format("%Y-%m-%dT%H:%M:%S%.3fZ");
         let is_latest = seen_keys.insert(obj.key.as_str());
-        versions_xml.push_str(&format!(
-            r#"
+        let _ = write!(
+            versions_xml,
+            r"
   <Version>
     <Key>{}</Key>
     <VersionId>{}</VersionId>
@@ -343,7 +367,7 @@ pub fn list_versions_xml(
       <DisplayName>Sqrzl Emulator</DisplayName>
     </Owner>
     <StorageClass>{}</StorageClass>
-  </Version>"#,
+  </Version>",
             escape_xml(&obj.key),
             escape_xml(version_id),
             if is_latest { "true" } else { "false" },
@@ -351,7 +375,7 @@ pub fn list_versions_xml(
             escape_xml(&obj.etag),
             obj.size,
             escape_xml(&obj.storage_class)
-        ));
+        );
     }
 
     let mut result = format!(
@@ -397,6 +421,7 @@ pub fn list_versions_xml(
 }
 
 /// Location constraint response
+#[must_use]
 pub fn location_xml(region: &str) -> String {
     if region == "us-east-1" {
         // AWS returns empty LocationConstraint for us-east-1
@@ -419,6 +444,7 @@ pub fn location_xml(region: &str) -> String {
 }
 
 /// Initiate multipart upload response
+#[must_use]
 pub fn initiate_multipart_xml(bucket: &str, key: &str, upload_id: &str) -> String {
     format!(
         r#"{}
@@ -435,6 +461,7 @@ pub fn initiate_multipart_xml(bucket: &str, key: &str, upload_id: &str) -> Strin
 }
 
 /// List multipart uploads response
+#[must_use]
 pub fn list_multipart_uploads_xml(uploads: &[MultipartUpload], bucket: &str) -> String {
     let mut xml = format!(
         r#"{}
@@ -447,125 +474,39 @@ pub fn list_multipart_uploads_xml(uploads: &[MultipartUpload], bucket: &str) -> 
 
     for upload in uploads {
         let initiated = upload.initiated.to_rfc3339();
-        xml.push_str(&format!(
-            r#"
+        let _ = write!(
+            xml,
+            r"
     <Upload>
       <Key>{}</Key>
       <UploadId>{}</UploadId>
       <Initiated>{}</Initiated>
       <StorageClass>STANDARD</StorageClass>
-    </Upload>"#,
+    </Upload>",
             escape_xml(&upload.key),
             escape_xml(&upload.upload_id),
             initiated
-        ));
+        );
     }
 
     xml.push_str(
-        r#"
+        r"
   </Uploads>
   <IsTruncated>false</IsTruncated>
-</ListMultipartUploadsResult>"#,
+</ListMultipartUploadsResult>",
     );
 
     xml
 }
 
 /// ACL response
+#[must_use]
 pub fn acl_xml(owner: &Owner, acl: &Acl) -> String {
-    let mut grants = String::new();
-
-    if !acl.grants.is_empty() {
-        for grant in &acl.grants {
-            let grantee_xml = match &grant.grantee {
-                crate::models::policy::Grantee::CanonicalUser { id, display_name } => format!(
-                    r#"<Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>{}</ID>{}</Grantee>"#,
-                    escape_xml(id),
-                    display_name
-                        .as_ref()
-                        .map(|name| format!("<DisplayName>{}</DisplayName>", escape_xml(name)))
-                        .unwrap_or_default(),
-                ),
-                crate::models::policy::Grantee::Group { uri } => format!(
-                    r#"<Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>{}</URI></Grantee>"#,
-                    escape_xml(uri),
-                ),
-            };
-            let permission = match grant.permission {
-                crate::models::policy::Permission::Read => "READ",
-                crate::models::policy::Permission::Write => "WRITE",
-                crate::models::policy::Permission::ReadAcp => "READ_ACP",
-                crate::models::policy::Permission::WriteAcp => "WRITE_ACP",
-                crate::models::policy::Permission::FullControl => "FULL_CONTROL",
-            };
-            grants.push_str(&format!(
-                r#"
-        <Grant>
-            {}
-            <Permission>{}</Permission>
-        </Grant>"#,
-                grantee_xml, permission
-            ));
-        }
+    let grants = if acl.grants.is_empty() {
+        default_acl_grants(owner, &acl.canned)
     } else {
-        grants.push_str(&format!(
-            r#"
-        <Grant>
-            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser">
-                <ID>{}</ID>
-                <DisplayName>{}</DisplayName>
-            </Grantee>
-            <Permission>FULL_CONTROL</Permission>
-        </Grant>"#,
-            escape_xml(&owner.id),
-            escape_xml(&owner.display_name)
-        ));
-
-        match acl.canned {
-            CannedAcl::Private => {}
-            CannedAcl::PublicRead => {
-                grants.push_str(
-                    r#"
-        <Grant>
-            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
-                <URI>http://acs.amazonaws.com/groups/global/AllUsers</URI>
-            </Grantee>
-            <Permission>READ</Permission>
-        </Grant>"#,
-                );
-            }
-            CannedAcl::PublicReadWrite => {
-                grants.push_str(
-                    r#"
-        <Grant>
-            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
-                <URI>http://acs.amazonaws.com/groups/global/AllUsers</URI>
-            </Grantee>
-            <Permission>READ</Permission>
-        </Grant>
-        <Grant>
-            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
-                <URI>http://acs.amazonaws.com/groups/global/AllUsers</URI>
-            </Grantee>
-            <Permission>WRITE</Permission>
-        </Grant>"#,
-                );
-            }
-            CannedAcl::AuthenticatedRead => {
-                grants.push_str(
-                    r#"
-        <Grant>
-            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
-                <URI>http://acs.amazonaws.com/groups/global/AuthenticatedUsers</URI>
-            </Grantee>
-            <Permission>READ</Permission>
-        </Grant>"#,
-                );
-            }
-            CannedAcl::BucketOwnerRead => {}
-            CannedAcl::BucketOwnerFullControl => {}
-        }
-    }
+        explicit_acl_grants(acl)
+    };
 
     format!(
         r#"{}
@@ -584,7 +525,108 @@ pub fn acl_xml(owner: &Owner, acl: &Acl) -> String {
     )
 }
 
+fn default_acl_grants(owner: &Owner, canned: &CannedAcl) -> String {
+    let mut grants = String::new();
+    let _ = write!(
+        grants,
+        r#"
+        <Grant>
+            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser">
+                <ID>{}</ID>
+                <DisplayName>{}</DisplayName>
+            </Grantee>
+            <Permission>FULL_CONTROL</Permission>
+        </Grant>"#,
+        escape_xml(&owner.id),
+        escape_xml(&owner.display_name)
+    );
+
+    match canned {
+        CannedAcl::Private | CannedAcl::BucketOwnerRead | CannedAcl::BucketOwnerFullControl => {}
+        CannedAcl::PublicRead => grants.push_str(ALL_USERS_READ_GRANT),
+        CannedAcl::PublicReadWrite => grants.push_str(ALL_USERS_READ_WRITE_GRANTS),
+        CannedAcl::AuthenticatedRead => grants.push_str(AUTHENTICATED_USERS_READ_GRANT),
+    }
+
+    grants
+}
+
+fn explicit_acl_grants(acl: &Acl) -> String {
+    let mut grants = String::new();
+    for grant in &acl.grants {
+        let grantee_xml = grantee_xml(&grant.grantee);
+        let permission = permission_xml_value(&grant.permission);
+        let _ = write!(
+            grants,
+            r"
+        <Grant>
+            {grantee_xml}
+            <Permission>{permission}</Permission>
+        </Grant>"
+        );
+    }
+    grants
+}
+
+fn grantee_xml(grantee: &crate::models::policy::Grantee) -> String {
+    match grantee {
+        crate::models::policy::Grantee::CanonicalUser { id, display_name } => format!(
+            r#"<Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>{}</ID>{}</Grantee>"#,
+            escape_xml(id),
+            display_name
+                .as_ref()
+                .map(|name| format!("<DisplayName>{}</DisplayName>", escape_xml(name)))
+                .unwrap_or_default(),
+        ),
+        crate::models::policy::Grantee::Group { uri } => format!(
+            r#"<Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>{}</URI></Grantee>"#,
+            escape_xml(uri),
+        ),
+    }
+}
+
+fn permission_xml_value(permission: &crate::models::policy::Permission) -> &'static str {
+    match permission {
+        crate::models::policy::Permission::Read => "READ",
+        crate::models::policy::Permission::Write => "WRITE",
+        crate::models::policy::Permission::ReadAcp => "READ_ACP",
+        crate::models::policy::Permission::WriteAcp => "WRITE_ACP",
+        crate::models::policy::Permission::FullControl => "FULL_CONTROL",
+    }
+}
+
+const ALL_USERS_READ_GRANT: &str = r#"
+        <Grant>
+            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
+                <URI>http://acs.amazonaws.com/groups/global/AllUsers</URI>
+            </Grantee>
+            <Permission>READ</Permission>
+        </Grant>"#;
+
+const ALL_USERS_READ_WRITE_GRANTS: &str = r#"
+        <Grant>
+            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
+                <URI>http://acs.amazonaws.com/groups/global/AllUsers</URI>
+            </Grantee>
+            <Permission>READ</Permission>
+        </Grant>
+        <Grant>
+            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
+                <URI>http://acs.amazonaws.com/groups/global/AllUsers</URI>
+            </Grantee>
+            <Permission>WRITE</Permission>
+        </Grant>"#;
+
+const AUTHENTICATED_USERS_READ_GRANT: &str = r#"
+        <Grant>
+            <Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">
+                <URI>http://acs.amazonaws.com/groups/global/AuthenticatedUsers</URI>
+            </Grantee>
+            <Permission>READ</Permission>
+        </Grant>"#;
+
 /// List parts response
+#[must_use]
 pub fn list_parts_xml(bucket: &str, key: &str, upload_id: &str, parts: &[Part]) -> String {
     let mut xml = format!(
         r#"{}
@@ -601,7 +643,8 @@ pub fn list_parts_xml(bucket: &str, key: &str, upload_id: &str, parts: &[Part]) 
 
     for part in parts {
         let modified = part.last_modified.to_rfc3339();
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             r#"
     <Part>
       <PartNumber>{}</PartNumber>
@@ -613,20 +656,21 @@ pub fn list_parts_xml(bucket: &str, key: &str, upload_id: &str, parts: &[Part]) 
             modified,
             escape_xml(&part.etag),
             part.size
-        ));
+        );
     }
 
     xml.push_str(
-        r#"
+        r"
   </Parts>
   <IsTruncated>false</IsTruncated>
-</ListPartsResult>"#,
+</ListPartsResult>",
     );
 
     xml
 }
 
 /// Complete multipart upload response
+#[must_use]
 pub fn complete_multipart_upload_xml(bucket: &str, key: &str, etag: &str) -> String {
     format!(
         r#"{}
@@ -646,8 +690,9 @@ pub fn complete_multipart_upload_xml(bucket: &str, key: &str, etag: &str) -> Str
 }
 
 /// Generate lifecycle configuration XML response
+#[must_use]
 pub fn lifecycle_xml(config: &crate::models::lifecycle::LifecycleConfiguration) -> String {
-    use crate::models::lifecycle::*;
+    use crate::models::lifecycle::{Status, StorageClass};
 
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     xml.push_str("<LifecycleConfiguration>\n");
@@ -656,30 +701,28 @@ pub fn lifecycle_xml(config: &crate::models::lifecycle::LifecycleConfiguration) 
         xml.push_str("  <Rule>\n");
 
         if let Some(id) = &rule.id {
-            xml.push_str(&format!("    <ID>{}</ID>\n", escape_xml(id)));
+            let _ = writeln!(xml, "    <ID>{}</ID>", escape_xml(id));
         }
 
-        xml.push_str(&format!(
-            "    <Status>{}</Status>\n",
+        let _ = writeln!(
+            xml,
+            "    <Status>{}</Status>",
             if rule.status == Status::Enabled {
                 "Enabled"
             } else {
                 "Disabled"
             }
-        ));
+        );
 
         if let Some(filter) = &rule.filter {
             xml.push_str("    <Filter>\n");
             if let Some(prefix) = &filter.prefix {
-                xml.push_str(&format!("      <Prefix>{}</Prefix>\n", escape_xml(prefix)));
+                let _ = writeln!(xml, "      <Prefix>{}</Prefix>", escape_xml(prefix));
             }
             for tag in &filter.tags {
                 xml.push_str("      <Tag>\n");
-                xml.push_str(&format!("        <Key>{}</Key>\n", escape_xml(&tag.key)));
-                xml.push_str(&format!(
-                    "        <Value>{}</Value>\n",
-                    escape_xml(&tag.value)
-                ));
+                let _ = writeln!(xml, "        <Key>{}</Key>", escape_xml(&tag.key));
+                let _ = writeln!(xml, "        <Value>{}</Value>", escape_xml(&tag.value));
                 xml.push_str("      </Tag>\n");
             }
             xml.push_str("    </Filter>\n");
@@ -688,46 +731,44 @@ pub fn lifecycle_xml(config: &crate::models::lifecycle::LifecycleConfiguration) 
         if let Some(expiration) = &rule.expiration {
             xml.push_str("    <Expiration>\n");
             if let Some(days) = expiration.days {
-                xml.push_str(&format!("      <Days>{}</Days>\n", days));
+                let _ = writeln!(xml, "      <Days>{days}</Days>");
             }
             if let Some(date) = &expiration.date {
-                xml.push_str(&format!("      <Date>{}</Date>\n", escape_xml(date)));
+                let _ = writeln!(xml, "      <Date>{}</Date>", escape_xml(date));
             }
             if let Some(marker) = expiration.expired_object_delete_marker {
-                xml.push_str(&format!(
-                    "      <ExpiredObjectDeleteMarker>{}</ExpiredObjectDeleteMarker>\n",
-                    marker
-                ));
+                let _ = writeln!(
+                    xml,
+                    "      <ExpiredObjectDeleteMarker>{marker}</ExpiredObjectDeleteMarker>"
+                );
             }
             xml.push_str("    </Expiration>\n");
         }
 
         if let Some(noncurrent_expiration) = &rule.noncurrent_version_expiration {
             xml.push_str("    <NoncurrentVersionExpiration>\n");
-            xml.push_str(&format!(
-                "      <NoncurrentDays>{}</NoncurrentDays>\n",
+            let _ = writeln!(
+                xml,
+                "      <NoncurrentDays>{}</NoncurrentDays>",
                 noncurrent_expiration.noncurrent_days
-            ));
+            );
             xml.push_str("    </NoncurrentVersionExpiration>\n");
         }
 
         for transition in &rule.transitions {
             xml.push_str("    <Transition>\n");
             if let Some(days) = transition.days {
-                xml.push_str(&format!("      <Days>{}</Days>\n", days));
+                let _ = writeln!(xml, "      <Days>{days}</Days>");
             }
             if let Some(date) = &transition.date {
-                xml.push_str(&format!("      <Date>{}</Date>\n", escape_xml(date)));
+                let _ = writeln!(xml, "      <Date>{}</Date>", escape_xml(date));
             }
             let storage_class = match transition.storage_class {
                 StorageClass::Standard => "STANDARD",
                 StorageClass::Glacier => "GLACIER",
                 StorageClass::DeepArchive => "DEEP_ARCHIVE",
             };
-            xml.push_str(&format!(
-                "      <StorageClass>{}</StorageClass>\n",
-                storage_class
-            ));
+            let _ = writeln!(xml, "      <StorageClass>{storage_class}</StorageClass>");
             xml.push_str("    </Transition>\n");
         }
 
@@ -999,7 +1040,7 @@ mod tests {
         // Arrange
         let mut body = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Tagging><TagSet>");
         for i in 0..11 {
-            body.push_str(&format!("<Tag><Key>k{i}</Key><Value>v{i}</Value></Tag>"));
+            let _ = write!(body, "<Tag><Key>k{i}</Key><Value>v{i}</Value></Tag>");
         }
         body.push_str("</TagSet></Tagging>");
 

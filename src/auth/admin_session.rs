@@ -13,7 +13,7 @@ pub const ADMIN_SESSION_PATH: &str = "/admin/v1/auth/session";
 pub const ADMIN_SESSION_COOKIE_NAME: &str = "sqrzl_admin_session";
 
 const ADMIN_ISSUER: &str = "sqrzl-emulator";
-const ADMIN_SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
+const ADMIN_SESSION_TTL: Duration = Duration::from_hours(8);
 
 #[derive(Debug, Deserialize)]
 pub struct AdminLoginRequest {
@@ -36,6 +36,10 @@ struct AdminSessionClaims {
 }
 
 impl AdminSessionManager {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub fn new() -> Result<Self> {
         let mut signing_secret = [0_u8; 32];
         fill(&mut signing_secret).map_err(|e| Error::InternalError(e.to_string()))?;
@@ -46,6 +50,10 @@ impl AdminSessionManager {
         })
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub fn issue_session_cookie(&self, username: &str) -> Result<String> {
         let token = self.issue_token(username)?;
         Ok(format!(
@@ -56,11 +64,9 @@ impl AdminSessionManager {
         ))
     }
 
+    #[must_use]
     pub fn clear_session_cookie() -> String {
-        format!(
-            "{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-            name = ADMIN_SESSION_COOKIE_NAME
-        )
+        format!("{ADMIN_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
     }
 
     pub fn has_valid_session(&self, req: &Request<RequestBody>) -> bool {
@@ -74,6 +80,7 @@ impl AdminSessionManager {
             .and_then(|cookie_header| self.subject_from_cookie_header(cookie_header))
     }
 
+    #[must_use]
     pub fn subject_from_cookie_header(&self, cookie_header: &str) -> Option<String> {
         let token = extract_cookie_value(cookie_header, ADMIN_SESSION_COOKIE_NAME)?;
         self.subject_from_token(token)
@@ -81,11 +88,12 @@ impl AdminSessionManager {
 
     fn issue_token(&self, username: &str) -> Result<String> {
         let now = Utc::now().timestamp();
+        let ttl_seconds = i64::try_from(self.session_ttl.as_secs()).unwrap_or(i64::MAX);
         let claims = AdminSessionClaims {
             sub: username.to_string(),
             iss: ADMIN_ISSUER.to_string(),
             iat: now,
-            exp: now + self.session_ttl.as_secs() as i64,
+            exp: now.saturating_add(ttl_seconds),
         };
 
         let encoding_key = EncodingKey::from_secret(&self.signing_secret);

@@ -18,7 +18,7 @@ fn bench_compute_etag(c: &mut Criterion) {
         let payload = vec![b'a'; size];
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_function(BenchmarkId::new("compute_etag", size), |b| {
-            b.iter(|| black_box(compute_etag(black_box(&payload))))
+            b.iter(|| black_box(compute_etag(black_box(&payload))));
         });
     }
 
@@ -40,7 +40,7 @@ fn bench_render_tagging_xml(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(tag_count as u64));
         group.bench_function(BenchmarkId::new("render_tagging_xml", tag_count), |b| {
-            b.iter(|| black_box(tagging_xml(black_box(&tags))))
+            b.iter(|| black_box(tagging_xml(black_box(&tags))));
         });
     }
 
@@ -68,7 +68,7 @@ fn bench_parse_acl_xml(c: &mut Criterion) {
     group.sampling_mode(SamplingMode::Flat);
     group.throughput(Throughput::Elements(1));
     group.bench_function("parse_acl_xml", |b| {
-        b.iter(|| black_box(parse_acl_xml(black_box(acl_xml)).expect("acl xml should parse")))
+        b.iter(|| black_box(parse_acl_xml(black_box(acl_xml)).expect("acl xml should parse")));
     });
     group.finish();
 }

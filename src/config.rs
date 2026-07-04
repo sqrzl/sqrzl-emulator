@@ -79,8 +79,7 @@ impl Config {
             .unwrap_or(DEFAULT_SQRZL_UI_PORT);
         let admin_auth_disabled = lookup(ENV_SQRZL_ADMIN_AUTH_DISABLED)
             .as_deref()
-            .map(parse_bool_env)
-            .unwrap_or(false);
+            .is_some_and(parse_bool_env);
         let max_request_bytes = lookup(ENV_SQRZL_MAX_REQUEST_BYTES)
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|value| *value > 0)
@@ -113,6 +112,7 @@ impl Config {
     /// - `SQRZL_ADMIN_AUTH_DISABLED`: Disable `/admin/v1` session auth even when provider auth is enabled
     /// - `SQRZL_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
     /// - `SQRZL_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)
+    #[must_use]
     pub fn from_env() -> Self {
         Self::from_env_with(|name| env::var(name).ok())
     }
@@ -120,6 +120,7 @@ impl Config {
     /// Load comma-delimited startup bucket names from the environment.
     ///
     /// Empty segments are ignored, and names are trimmed of surrounding whitespace.
+    #[must_use]
     pub fn startup_bucket_names_from_env() -> Vec<String> {
         Self::startup_bucket_names_from_env_with(|name| env::var(name).ok())
     }
@@ -127,6 +128,7 @@ impl Config {
     /// Load the configured logging format from the environment.
     ///
     /// Unknown values fall back to human-readable text logs.
+    #[must_use]
     pub fn log_format_from_env() -> LogFormat {
         Self::log_format_from_env_with(|name| env::var(name).ok())
     }
@@ -154,7 +156,7 @@ impl Config {
         match lookup(ENV_SQRZL_LOG_FORMAT)
             .as_deref()
             .map(str::trim)
-            .map(|value| value.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             .as_deref()
         {
             Some("json") => LogFormat::Json,
@@ -163,11 +165,13 @@ impl Config {
     }
 
     /// Get the access key ID if authentication is enabled.
+    #[must_use]
     pub fn access_key(&self) -> Option<&str> {
         self.access_key_id.as_deref()
     }
 
     /// Get the secret access key if authentication is enabled.
+    #[must_use]
     pub fn secret_key(&self) -> Option<&str> {
         self.secret_access_key.as_deref()
     }
@@ -175,6 +179,7 @@ impl Config {
     /// Validate that provided credentials match configured credentials.
     ///
     /// If authentication is not enforced, this always returns `true`.
+    #[must_use]
     pub fn validate_credentials(&self, provided_key: &str, provided_secret: &str) -> bool {
         if !self.enforce_auth {
             return true;
@@ -188,6 +193,7 @@ impl Config {
     }
 
     /// Whether the admin API should enforce session auth.
+    #[must_use]
     pub fn admin_auth_enforced(&self) -> bool {
         self.enforce_auth && !self.admin_auth_disabled
     }
@@ -248,7 +254,7 @@ mod tests {
         assert!(config.enforce_auth);
         assert!(!config.admin_auth_disabled);
         assert_eq!(config.blobs_path, "/tmp/sqrzl-blobs");
-        assert_eq!(config.lifecycle_interval, Duration::from_secs(7200));
+        assert_eq!(config.lifecycle_interval, Duration::from_hours(2));
         assert_eq!(config.api_port, 9100);
         assert_eq!(config.ui_port, 9101);
         assert_eq!(config.max_request_bytes, 1024);

@@ -30,12 +30,13 @@ impl BucketIndex {
 }
 
 /// Lock-free concurrent index for object keys and directory children by bucket.
-/// Uses crossbeam's SkipMap for atomic, wait-free reads.
+/// Uses crossbeam's `SkipMap` for atomic, wait-free reads.
 pub struct LockFreeIndex {
     buckets: SkipMap<String, BucketIndex>,
 }
 
 impl LockFreeIndex {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             buckets: SkipMap::new(),
@@ -43,12 +44,12 @@ impl LockFreeIndex {
     }
 
     /// Insert an object key into a bucket's index
-    pub fn insert(&self, bucket: String, key: String) {
-        self.get_or_create_bucket(bucket.clone());
-        if let Some(entry) = self.buckets.get(&bucket) {
+    pub fn insert(&self, bucket: &str, key: &str) {
+        self.get_or_create_bucket(bucket.to_string());
+        if let Some(entry) = self.buckets.get(bucket) {
             let bucket_index = entry.value();
-            bucket_index.objects.insert(key.clone(), ());
-            Self::insert_directory_children(bucket_index, &key);
+            bucket_index.objects.insert(key.to_string(), ());
+            Self::insert_directory_children(bucket_index, key);
         }
     }
 
@@ -312,9 +313,9 @@ mod tests {
     fn should_use_start_bounds_when_listing_with_prefix_and_marker() {
         // Arrange
         let index = LockFreeIndex::new();
-        index.insert("bucket".to_string(), "apple".to_string());
-        index.insert("bucket".to_string(), "banana".to_string());
-        index.insert("bucket".to_string(), "cherry".to_string());
+        index.insert("bucket", "apple");
+        index.insert("bucket", "banana");
+        index.insert("bucket", "cherry");
 
         // Act
         let result_from_marker = index.list_prefix_marker("bucket", None, Some("banana"), Some(10));
@@ -341,10 +342,10 @@ mod tests {
     fn should_limit_list_results_to_matching_prefix_range() {
         // Arrange
         let index = LockFreeIndex::new();
-        index.insert("bucket".to_string(), "alpha".to_string());
-        index.insert("bucket".to_string(), "beta".to_string());
-        index.insert("bucket".to_string(), "beta2".to_string());
-        index.insert("bucket".to_string(), "gamma".to_string());
+        index.insert("bucket", "alpha");
+        index.insert("bucket", "beta");
+        index.insert("bucket", "beta2");
+        index.insert("bucket", "gamma");
 
         // Act
         let result = index.list("bucket", Some("beta"));
@@ -357,9 +358,9 @@ mod tests {
     fn should_index_immediate_directory_children() {
         // Arrange
         let index = LockFreeIndex::new();
-        index.insert("bucket".to_string(), "docs/readme.txt".to_string());
-        index.insert("bucket".to_string(), "docs/api/openapi.json".to_string());
-        index.insert("bucket".to_string(), "image.png".to_string());
+        index.insert("bucket", "docs/readme.txt");
+        index.insert("bucket", "docs/api/openapi.json");
+        index.insert("bucket", "image.png");
 
         // Act
         let root = index.list_child_entries("bucket", "", None, Some(10));
@@ -382,8 +383,8 @@ mod tests {
     fn should_prune_empty_directory_children_after_delete() {
         // Arrange
         let index = LockFreeIndex::new();
-        index.insert("bucket".to_string(), "docs/api/openapi.json".to_string());
-        index.insert("bucket".to_string(), "docs/readme.txt".to_string());
+        index.insert("bucket", "docs/api/openapi.json");
+        index.insert("bucket", "docs/readme.txt");
 
         // Act
         assert!(index.remove("bucket", "docs/api/openapi.json"));

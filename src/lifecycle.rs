@@ -12,6 +12,10 @@ use tracing::{debug, error, info};
 
 /// Check if an object should be deleted due to lifecycle rules
 /// This is called eagerly when accessing objects to enforce expiration immediately
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn check_object_expiration(
     storage: &Arc<dyn Storage>,
     bucket: &str,
@@ -75,8 +79,7 @@ fn rule_matches_filter(
 ) -> bool {
     rule.filter
         .as_ref()
-        .map(|filter| filter.matches(key, tags))
-        .unwrap_or(true)
+        .is_none_or(|filter| filter.matches(key, tags))
 }
 
 fn should_expire(
@@ -89,7 +92,7 @@ fn should_expire(
     // Check days-based expiration
     if let Some(days) = expiration.days {
         let age_days = (now - object_date).num_days();
-        if age_days >= days as i64 {
+        if age_days >= i64::from(days) {
             return true;
         }
     }
@@ -115,7 +118,7 @@ fn should_expire_noncurrent_version(
     noncurrent_days: u32,
     now: DateTime<Utc>,
 ) -> bool {
-    (now - last_modified).num_days() >= noncurrent_days as i64
+    (now - last_modified).num_days() >= i64::from(noncurrent_days)
 }
 
 fn should_transition(
@@ -124,7 +127,7 @@ fn should_transition(
     now: DateTime<Utc>,
 ) -> bool {
     if let Some(days) = transition.days {
-        if (now - last_modified).num_days() >= days as i64 {
+        if (now - last_modified).num_days() >= i64::from(days) {
             return true;
         }
     }
@@ -171,6 +174,7 @@ impl LifecycleExecutor {
     }
 
     /// Start the lifecycle executor as a background task
+    #[must_use]
     pub fn start(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             info!(
@@ -181,14 +185,14 @@ impl LifecycleExecutor {
             loop {
                 tokio::time::sleep(self.interval).await;
 
-                if let Err(e) = self.execute_lifecycle_rules().await {
+                if let Err(e) = self.execute_lifecycle_rules() {
                     error!("Failed to execute lifecycle rules: {}", e);
                 }
             }
         })
     }
 
-    async fn execute_lifecycle_rules(&self) -> Result<(), Error> {
+    fn execute_lifecycle_rules(&self) -> Result<(), Error> {
         debug!("Executing lifecycle rules...");
         let now = Utc::now();
 
@@ -211,15 +215,14 @@ impl LifecycleExecutor {
                 }
             };
 
-            self.apply_lifecycle_rules(&bucket.name, &config, now)
-                .await?;
+            self.apply_lifecycle_rules(&bucket.name, &config, now)?;
         }
 
         debug!("Lifecycle rules execution completed");
         Ok(())
     }
 
-    async fn apply_lifecycle_rules(
+    fn apply_lifecycle_rules(
         &self,
         bucket_name: &str,
         config: &LifecycleConfiguration,
@@ -512,12 +515,11 @@ mod tests {
             }],
         };
 
-        let executor = LifecycleExecutor::new(storage.clone(), Duration::from_secs(3600));
+        let executor = LifecycleExecutor::new(storage.clone(), Duration::from_hours(1));
 
         // Act
         executor
             .apply_lifecycle_rules("bucket", &config, now)
-            .await
             .expect("lifecycle rules should apply");
 
         // Assert
@@ -573,12 +575,11 @@ mod tests {
             }],
         };
 
-        let executor = LifecycleExecutor::new(storage.clone(), Duration::from_secs(3600));
+        let executor = LifecycleExecutor::new(storage.clone(), Duration::from_hours(1));
 
         // Act
         executor
             .apply_lifecycle_rules("bucket", &config, now)
-            .await
             .expect("lifecycle rules should apply");
 
         // Assert

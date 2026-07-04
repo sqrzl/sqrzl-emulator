@@ -41,7 +41,7 @@ pub fn auth_disabled() -> Config {
         enforce_auth: false,
         admin_auth_disabled: false,
         blobs_path: "./blobs".to_string(),
-        lifecycle_interval: Duration::from_secs(3600),
+        lifecycle_interval: Duration::from_hours(1),
         api_port: 9000,
         ui_port: 9001,
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -87,9 +87,10 @@ impl LiveServer {
     async fn wait_until_ready_path(&self, path: &str) {
         let deadline = Instant::now() + Duration::from_secs(6);
         while Instant::now() < deadline {
-            if self.task.is_finished() {
-                panic!("server task exited before becoming ready");
-            }
+            assert!(
+                !self.task.is_finished(),
+                "server task exited before becoming ready"
+            );
 
             let request = Request::builder()
                 .method("GET")

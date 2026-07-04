@@ -4,6 +4,8 @@ use common::interop::{
     auth_disabled, body_bytes, body_text, call, request, temp_storage, AZURE_VERSION,
 };
 use hyper::StatusCode;
+use sqrzl_emulator::storage::Storage;
+use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations() {
@@ -16,8 +18,7 @@ async fn should_round_trip_block_blob_given_container_exists_when_using_basic_bl
             "http://localhost/devstoreaccount1/interop-azure?restype=container",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     let response = call(
@@ -32,8 +33,7 @@ async fn should_round_trip_block_blob_given_container_exists_when_using_basic_bl
                 ("content-type", "text/plain"),
             ],
             b"azure smoke",
-        )
-        .await,
+        ),
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -47,8 +47,7 @@ async fn should_round_trip_block_blob_given_container_exists_when_using_basic_bl
                 "http://localhost/devstoreaccount1/interop-azure/hello.txt",
                 &[("x-ms-version", AZURE_VERSION)],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -67,8 +66,7 @@ async fn should_return_custom_metadata_given_blob_metadata_headers_when_requesti
             "http://localhost/devstoreaccount1/interop-azure?restype=container",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -83,8 +81,7 @@ async fn should_return_custom_metadata_given_blob_metadata_headers_when_requesti
                 ("x-ms-meta-owner", "sdk"),
             ],
             b"azure smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let response = call(
@@ -95,8 +92,7 @@ async fn should_return_custom_metadata_given_blob_metadata_headers_when_requesti
             "http://localhost/devstoreaccount1/interop-azure/hello.txt",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     assert_eq!(
@@ -119,8 +115,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_blob_cont
             "http://localhost/devstoreaccount1/interop-azure?restype=container",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -134,8 +129,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_blob_cont
                 ("x-ms-blob-type", "BlockBlob"),
             ],
             b"azure smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let body = body_bytes(
@@ -147,8 +141,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_blob_cont
                 "http://localhost/devstoreaccount1/interop-azure/hello.txt",
                 &[("x-ms-version", AZURE_VERSION), ("x-ms-range", "bytes=0-4")],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -167,8 +160,7 @@ async fn should_list_containers_and_blobs_given_stored_objects_when_querying_azu
             "http://localhost/devstoreaccount1/interop-azure?restype=container",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -182,8 +174,7 @@ async fn should_list_containers_and_blobs_given_stored_objects_when_querying_azu
                 ("x-ms-blob-type", "BlockBlob"),
             ],
             b"azure smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let containers = body_text(
@@ -199,8 +190,7 @@ async fn should_list_containers_and_blobs_given_stored_objects_when_querying_azu
                     ("x-ms-version", AZURE_VERSION),
                 ],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -219,8 +209,7 @@ async fn should_list_containers_and_blobs_given_stored_objects_when_querying_azu
                 "http://localhost/devstoreaccount1/interop-azure?restype=container&comp=list&prefix=hell",
                 &[("x-ms-version", AZURE_VERSION)],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -240,8 +229,7 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
             "http://localhost/devstoreaccount1/state?restype=container",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -255,8 +243,7 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
                 ("x-ms-blob-type", "AppendBlob"),
             ],
             b"hello",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -267,8 +254,7 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
             "http://localhost/devstoreaccount1/state/events.log?comp=appendblock",
             &[("x-ms-version", AZURE_VERSION)],
             b" azure",
-        )
-        .await,
+        ),
     )
     .await;
     let append = body_bytes(
@@ -280,8 +266,7 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
                 "http://localhost/devstoreaccount1/state/events.log",
                 &[("x-ms-version", AZURE_VERSION)],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -300,8 +285,7 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
                 ("x-ms-blob-content-length", "512"),
             ],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -315,8 +299,7 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
                 ("x-ms-range", "bytes=0-511"),
             ],
             &vec![b'b'; 512],
-        )
-        .await,
+        ),
     )
     .await;
     let page = body_bytes(
@@ -328,8 +311,7 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
                 "http://localhost/devstoreaccount1/state/page.bin",
                 &[("x-ms-version", AZURE_VERSION), ("x-ms-range", "bytes=0-7")],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -341,6 +323,29 @@ async fn should_persist_append_and_page_blob_writes_given_specialized_blob_types
 async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob(
 ) {
     let storage = temp_storage();
+    create_state_container_and_blob(storage.clone()).await;
+    acquire_release_and_verify_lease(storage.clone()).await;
+    create_and_verify_snapshot(storage.clone()).await;
+    enable_immutability_and_legal_hold(storage.clone()).await;
+
+    assert_eq!(
+        call(
+            storage,
+            auth_disabled(),
+            request(
+                "DELETE",
+                "http://localhost/devstoreaccount1/state/lease.txt",
+                &[("x-ms-version", AZURE_VERSION)],
+                b"",
+            ),
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+async fn create_state_container_and_blob(storage: Arc<dyn Storage>) {
     call(
         storage.clone(),
         auth_disabled(),
@@ -349,23 +354,23 @@ async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_ope
             "http://localhost/devstoreaccount1/state?restype=container",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
-        storage.clone(),
+        storage,
         auth_disabled(),
         request(
             "PUT",
             "http://localhost/devstoreaccount1/state/lease.txt",
             &[("x-ms-version", AZURE_VERSION)],
             b"initial",
-        )
-        .await,
+        ),
     )
     .await;
+}
 
+async fn acquire_release_and_verify_lease(storage: Arc<dyn Storage>) {
     let lease = call(
         storage.clone(),
         auth_disabled(),
@@ -378,8 +383,7 @@ async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_ope
                 ("x-ms-lease-duration", "-1"),
             ],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     let lease_id = lease
@@ -398,8 +402,7 @@ async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_ope
                 "http://localhost/devstoreaccount1/state/lease.txt",
                 &[("x-ms-version", AZURE_VERSION)],
                 b"",
-            )
-            .await,
+            ),
         )
         .await
         .status(),
@@ -418,12 +421,13 @@ async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_ope
                 ("x-ms-lease-id", &lease_id),
             ],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     assert_eq!(release.status(), StatusCode::OK);
+}
 
+async fn create_and_verify_snapshot(storage: Arc<dyn Storage>) {
     let snapshot = call(
         storage.clone(),
         auth_disabled(),
@@ -432,8 +436,7 @@ async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_ope
             "http://localhost/devstoreaccount1/state/lease.txt?comp=snapshot",
             &[("x-ms-version", AZURE_VERSION)],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     let snapshot_time = snapshot
@@ -454,14 +457,15 @@ async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_ope
                 ),
                 &[("x-ms-version", AZURE_VERSION)],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
     .await;
     assert_eq!(snap_body, b"initial");
+}
 
+async fn enable_immutability_and_legal_hold(storage: Arc<dyn Storage>) {
     call(
         storage.clone(),
         auth_disabled(),
@@ -477,36 +481,18 @@ async fn should_enforce_leases_and_retention_given_snapshot_and_immutability_ope
                 ("x-ms-immutability-policy-mode", "Unlocked"),
             ],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
-        storage.clone(),
+        storage,
         auth_disabled(),
         request(
             "PUT",
             "http://localhost/devstoreaccount1/state/lease.txt?comp=legalhold",
             &[("x-ms-version", AZURE_VERSION), ("x-ms-legal-hold", "true")],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
-    assert_eq!(
-        call(
-            storage,
-            auth_disabled(),
-            request(
-                "DELETE",
-                "http://localhost/devstoreaccount1/state/lease.txt",
-                &[("x-ms-version", AZURE_VERSION)],
-                b"",
-            )
-            .await,
-        )
-        .await
-        .status(),
-        StatusCode::CONFLICT
-    );
 }

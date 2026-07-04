@@ -104,14 +104,18 @@ fn bench_multipart_stream_upload(c: &mut Criterion) {
     let init_url = format!("{}/n/{}/b/{}/u", server.base_url, TENANT, bucket);
     let multipart_url = format!("{}/n/{}/b/{}/u/{}", server.base_url, TENANT, bucket, object);
     let parts: Vec<Bytes> = (0..PART_COUNT)
-        .map(|part_index| Bytes::from(vec![b'a' + (part_index as u8 % 26); PART_SIZE]))
+        .map(|part_index| {
+            let byte_offset =
+                u8::try_from(part_index % 26).expect("part byte offset should fit in u8");
+            Bytes::from(vec![b'a' + byte_offset; PART_SIZE])
+        })
         .collect();
 
     let mut group = c.benchmark_group("tier4_integration_oci_multipart_stream");
     group.sampling_mode(criterion::SamplingMode::Flat);
     group.throughput(Throughput::Bytes((PART_COUNT * PART_SIZE) as u64));
     group.bench_function(
-        BenchmarkId::new("upload_stream", format!("{}x{}", PART_COUNT, PART_SIZE)),
+        BenchmarkId::new("upload_stream", format!("{PART_COUNT}x{PART_SIZE}")),
         |b| {
             b.iter_custom(|iters| {
                 let mut total = Duration::ZERO;
@@ -125,7 +129,7 @@ fn bench_multipart_stream_upload(c: &mut Criterion) {
                             multipart_part_request(
                                 &multipart_url,
                                 &upload_id,
-                                (index + 1) as u32,
+                                u32::try_from(index + 1).expect("part number should fit in u32"),
                                 part,
                             )
                         })
@@ -144,7 +148,7 @@ fn bench_multipart_stream_upload(c: &mut Criterion) {
                     assert_eq!(response.status(), StatusCode::NO_CONTENT);
                 }
                 total
-            })
+            });
         },
     );
     group.finish();

@@ -12,13 +12,17 @@ use crate::storage::Storage;
 use crate::utils::{headers as header_utils, validation, xml as xml_utils};
 use http::StatusCode;
 use hyper::Response;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 mod get;
 mod helpers;
 mod put;
 
-use self::helpers::*;
+use self::helpers::{
+    apply_bucket_cors_headers, bucket_cors_snapshot, escape_xml_str, parse_delete_keys,
+    parse_multipart_form_upload, with_bucket_metadata, S3_CORS_XML_KEY, S3_WEBSITE_XML_KEY,
+};
 pub use get::bucket_get_or_list_objects;
 pub use put::bucket_put;
 
@@ -210,7 +214,7 @@ pub async fn bucket_post(
     req_id: String,
 ) -> Result<Response<Body>, String> {
     if req.has_query_param("delete") {
-        return bucket_post_multi_object_delete(storage, auth_config, bucket, req, &req_id);
+        return bucket_post_multi_object_delete(&storage, &auth_config, bucket, req, &req_id);
     }
 
     if let Some(content_type) = req
@@ -218,8 +222,8 @@ pub async fn bucket_post(
         .filter(|content_type| content_type.starts_with("multipart/form-data"))
     {
         return bucket_post_browser_upload(
-            storage,
-            auth_config,
+            &storage,
+            &auth_config,
             bucket,
             req,
             &req_id,
@@ -240,8 +244,8 @@ pub async fn bucket_post(
 }
 
 fn bucket_post_multi_object_delete(
-    storage: Arc<dyn Storage>,
-    auth_config: Arc<AuthConfig>,
+    storage: &Arc<dyn Storage>,
+    auth_config: &Arc<AuthConfig>,
     bucket: &str,
     req: &crate::server::http::Request,
     req_id: &str,
@@ -256,14 +260,14 @@ fn bucket_post_multi_object_delete(
     }
 
     let body_str =
-        String::from_utf8(req.body.to_vec()).map_err(|e| format!("Invalid UTF-8 body: {}", e))?;
+        String::from_utf8(req.body.to_vec()).map_err(|e| format!("Invalid UTF-8 body: {e}"))?;
     let objects = parse_delete_keys(&body_str);
 
     for (key, _) in &objects {
         if let Err(response) = check_authorization(
             req,
-            &auth_config,
-            &storage,
+            auth_config,
+            storage,
             bucket,
             Some(key.as_str()),
             "s3:DeleteObject",
@@ -286,9 +290,9 @@ fn bucket_post_multi_object_delete(
     resp_xml.push_str("<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
     for (key, version) in objects {
         resp_xml.push_str("<Deleted>");
-        resp_xml.push_str(&format!("<Key>{}</Key>", escape_xml_str(&key)));
+        let _ = write!(resp_xml, "<Key>{}</Key>", escape_xml_str(&key));
         if let Some(v) = version {
-            resp_xml.push_str(&format!("<VersionId>{}</VersionId>", escape_xml_str(&v)));
+            let _ = write!(resp_xml, "<VersionId>{}</VersionId>", escape_xml_str(&v));
         }
         resp_xml.push_str("</Deleted>");
     }
@@ -309,8 +313,8 @@ fn bucket_post_multi_object_delete(
 }
 
 fn bucket_post_browser_upload(
-    storage: Arc<dyn Storage>,
-    auth_config: Arc<AuthConfig>,
+    storage: &Arc<dyn Storage>,
+    auth_config: &Arc<AuthConfig>,
     bucket: &str,
     req: &crate::server::http::Request,
     req_id: &str,
@@ -330,8 +334,8 @@ fn bucket_post_browser_upload(
     {
         if let Err(response) = check_authorization(
             req,
-            &auth_config,
-            &storage,
+            auth_config,
+            storage,
             bucket,
             Some(key.as_str()),
             "s3:PutObject",
@@ -349,7 +353,7 @@ fn bucket_post_browser_upload(
             bucket,
             req,
             ResponseBuilder::new(StatusCode::NO_CONTENT)
-                .header("Location", &format!("/{}/{}", bucket, key))
+                .header("Location", &format!("/{bucket}/{key}"))
                 .header("x-amz-request-id", req_id)
                 .header("x-amz-id-2", &header_utils::generate_request_id()),
         )
@@ -394,7 +398,7 @@ mod tests {
             enforce_auth: false,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -408,7 +412,7 @@ mod tests {
             enforce_auth: true,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -437,6 +441,36 @@ mod tests {
         RequestExt::from_hyper(request)
             .await
             .expect("request should parse")
+    }
+
+    async fn parsed_request_with_origin(method: &str, uri: &str, body: &[u8]) -> RequestExt {
+        let request = HyperRequest::builder()
+            .method(method)
+            .uri(uri)
+            .header("Origin", "https://app.example")
+            .body(Body::from(body.to_vec()))
+            .expect("request should build");
+
+        RequestExt::from_hyper(request)
+            .await
+            .expect("request should parse")
+    }
+
+    async fn response_text(response: Response<Body>) -> String {
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should read")
+            .to_bytes();
+        String::from_utf8(body.to_vec()).expect("body should be utf8")
+    }
+
+    fn cors_origin(response: &Response<Body>) -> Option<&str> {
+        response
+            .headers()
+            .get("Access-Control-Allow-Origin")
+            .and_then(|value| value.to_str().ok())
     }
 
     async fn browser_upload_request(
@@ -681,6 +715,12 @@ mod tests {
         let storage = temp_storage();
         storage.create_bucket("bucket".to_string()).unwrap();
 
+        put_bucket_configurations(storage.clone()).await;
+        verify_bucket_configurations(storage.clone()).await;
+        delete_bucket_configurations(storage).await;
+    }
+
+    async fn put_bucket_configurations(storage: Arc<dyn Storage>) {
         let request_payment_xml = br#"<?xml version="1.0" encoding="UTF-8"?><RequestPaymentConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Payer>Requester</Payer></RequestPaymentConfiguration>"#;
         let website_xml = br#"<?xml version="1.0" encoding="UTF-8"?><WebsiteConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IndexDocument><Suffix>index.html</Suffix></IndexDocument></WebsiteConfiguration>"#;
         let cors_xml = br#"<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration><CORSRule><AllowedOrigin>*</AllowedOrigin><AllowedMethod>GET</AllowedMethod></CORSRule></CORSConfiguration>"#;
@@ -735,7 +775,9 @@ mod tests {
             .status(),
             StatusCode::OK
         );
+    }
 
+    async fn verify_bucket_configurations(storage: Arc<dyn Storage>) {
         let request_payment = bucket_get_or_list_objects(
             storage.clone(),
             auth_disabled_config(),
@@ -745,14 +787,7 @@ mod tests {
         )
         .await
         .expect("request payment get should complete");
-        let request_payment_body_bytes = request_payment
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        let request_payment_body =
-            String::from_utf8(request_payment_body_bytes.to_vec()).expect("body should be utf8");
+        let request_payment_body = response_text(request_payment).await;
         assert!(request_payment_body.contains("<Payer>Requester</Payer>"));
 
         let website = bucket_get_or_list_objects(
@@ -764,14 +799,7 @@ mod tests {
         )
         .await
         .expect("website get should complete");
-        let website_body_bytes = website
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        let website_body =
-            String::from_utf8(website_body_bytes.to_vec()).expect("body should be utf8");
+        let website_body = response_text(website).await;
         assert!(website_body.contains("index.html"));
 
         let cors = bucket_get_or_list_objects(
@@ -783,15 +811,11 @@ mod tests {
         )
         .await
         .expect("cors get should complete");
-        let cors_body_bytes = cors
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        let cors_body = String::from_utf8(cors_body_bytes.to_vec()).expect("body should be utf8");
+        let cors_body = response_text(cors).await;
         assert!(cors_body.contains("<AllowedMethod>GET</AllowedMethod>"));
+    }
 
+    async fn delete_bucket_configurations(storage: Arc<dyn Storage>) {
         assert_eq!(
             bucket_delete(
                 storage.clone(),
@@ -1106,6 +1130,13 @@ mod tests {
             )
             .unwrap();
 
+        put_mutation_cors_config(storage.clone()).await;
+        verify_cors_on_website_put(storage.clone()).await;
+        verify_cors_on_multi_delete(storage.clone()).await;
+        verify_cors_on_bucket_config_deletes(storage).await;
+    }
+
+    async fn put_mutation_cors_config(storage: Arc<dyn Storage>) {
         let cors_xml = br#"<?xml version="1.0" encoding="UTF-8"?><CORSConfiguration><CORSRule><AllowedOrigin>https://app.example</AllowedOrigin><AllowedMethod>PUT</AllowedMethod><AllowedMethod>POST</AllowedMethod><AllowedMethod>DELETE</AllowedMethod></CORSRule></CORSConfiguration>"#;
         let put_cors =
             parsed_request_with_method("PUT", "http://localhost/bucket?cors", cors_xml).await;
@@ -1118,19 +1149,15 @@ mod tests {
         )
         .await
         .expect("cors put should complete");
+    }
 
-        let put_website = RequestExt::from_hyper(
-            HyperRequest::builder()
-                .method("PUT")
-                .uri("http://localhost/bucket?website")
-                .header("Origin", "https://app.example")
-                .body(Body::from(
-                    br#"<?xml version="1.0" encoding="UTF-8"?><WebsiteConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IndexDocument><Suffix>index.html</Suffix></IndexDocument></WebsiteConfiguration>"#.to_vec(),
-                ))
-                .expect("request should build"),
+    async fn verify_cors_on_website_put(storage: Arc<dyn Storage>) {
+        let put_website = parsed_request_with_origin(
+            "PUT",
+            "http://localhost/bucket?website",
+            br#"<?xml version="1.0" encoding="UTF-8"?><WebsiteConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IndexDocument><Suffix>index.html</Suffix></IndexDocument></WebsiteConfiguration>"#,
         )
-        .await
-        .expect("request should parse");
+        .await;
         let put_website_response = bucket_put(
             storage.clone(),
             auth_disabled_config(),
@@ -1142,25 +1169,18 @@ mod tests {
         .expect("website put should complete");
         assert_eq!(put_website_response.status(), StatusCode::OK);
         assert_eq!(
-            put_website_response
-                .headers()
-                .get("Access-Control-Allow-Origin")
-                .and_then(|value| value.to_str().ok()),
+            cors_origin(&put_website_response),
             Some("https://app.example")
         );
+    }
 
-        let delete_request = RequestExt::from_hyper(
-            HyperRequest::builder()
-                .method("POST")
-                .uri("http://localhost/bucket?delete")
-                .header("Origin", "https://app.example")
-                .body(Body::from(
-                    br#"<Delete><Object><Key>delete-me.txt</Key></Object></Delete>"#.to_vec(),
-                ))
-                .expect("request should build"),
+    async fn verify_cors_on_multi_delete(storage: Arc<dyn Storage>) {
+        let delete_request = parsed_request_with_origin(
+            "POST",
+            "http://localhost/bucket?delete",
+            br"<Delete><Object><Key>delete-me.txt</Key></Object></Delete>",
         )
-        .await
-        .expect("request should parse");
+        .await;
         let delete_response = bucket_post(
             storage.clone(),
             auth_disabled_config(),
@@ -1171,24 +1191,12 @@ mod tests {
         .await
         .expect("multi delete should complete");
         assert_eq!(delete_response.status(), StatusCode::OK);
-        assert_eq!(
-            delete_response
-                .headers()
-                .get("Access-Control-Allow-Origin")
-                .and_then(|value| value.to_str().ok()),
-            Some("https://app.example")
-        );
+        assert_eq!(cors_origin(&delete_response), Some("https://app.example"));
+    }
 
-        let delete_website = RequestExt::from_hyper(
-            HyperRequest::builder()
-                .method("DELETE")
-                .uri("http://localhost/bucket?website")
-                .header("Origin", "https://app.example")
-                .body(Body::from(Bytes::new()))
-                .expect("request should build"),
-        )
-        .await
-        .expect("request should parse");
+    async fn verify_cors_on_bucket_config_deletes(storage: Arc<dyn Storage>) {
+        let delete_website =
+            parsed_request_with_origin("DELETE", "http://localhost/bucket?website", &[]).await;
         let delete_website_response = bucket_delete(
             storage.clone(),
             auth_disabled_config(),
@@ -1200,23 +1208,12 @@ mod tests {
         .expect("website delete should complete");
         assert_eq!(delete_website_response.status(), StatusCode::NO_CONTENT);
         assert_eq!(
-            delete_website_response
-                .headers()
-                .get("Access-Control-Allow-Origin")
-                .and_then(|value| value.to_str().ok()),
+            cors_origin(&delete_website_response),
             Some("https://app.example")
         );
 
-        let delete_cors = RequestExt::from_hyper(
-            HyperRequest::builder()
-                .method("DELETE")
-                .uri("http://localhost/bucket?cors")
-                .header("Origin", "https://app.example")
-                .body(Body::from(Bytes::new()))
-                .expect("request should build"),
-        )
-        .await
-        .expect("request should parse");
+        let delete_cors =
+            parsed_request_with_origin("DELETE", "http://localhost/bucket?cors", &[]).await;
         let delete_cors_response = bucket_delete(
             storage,
             auth_disabled_config(),
@@ -1228,10 +1225,7 @@ mod tests {
         .expect("cors delete should complete");
         assert_eq!(delete_cors_response.status(), StatusCode::NO_CONTENT);
         assert_eq!(
-            delete_cors_response
-                .headers()
-                .get("Access-Control-Allow-Origin")
-                .and_then(|value| value.to_str().ok()),
+            cors_origin(&delete_cors_response),
             Some("https://app.example")
         );
     }
@@ -1375,7 +1369,7 @@ mod tests {
             )
             .unwrap();
 
-        let delete_body = br#"<Delete><Object><Key>delete-me.txt</Key></Object></Delete>"#;
+        let delete_body = br"<Delete><Object><Key>delete-me.txt</Key></Object></Delete>";
         let delete_request =
             parsed_request_with_method("POST", "http://localhost/bucket?delete", delete_body).await;
         let delete_response = bucket_post(

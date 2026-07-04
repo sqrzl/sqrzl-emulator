@@ -22,9 +22,8 @@ impl FilesystemStorage {
         // Rebuild index from filesystem
         if let Ok(entries) = fs::read_dir(&base_path) {
             for entry in entries.flatten() {
-                let metadata = match entry.metadata() {
-                    Ok(m) => m,
-                    Err(_) => continue,
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
                 };
 
                 if metadata.is_dir() {
@@ -35,7 +34,11 @@ impl FilesystemStorage {
                     {
                         continue;
                     }
-                    if let Some(bucket_name) = entry.file_name().to_str().map(|s| s.to_string()) {
+                    if let Some(bucket_name) = entry
+                        .file_name()
+                        .to_str()
+                        .map(std::string::ToString::to_string)
+                    {
                         index.get_or_create_bucket(bucket_name.clone());
 
                         // Scan bucket for object_id directories
@@ -49,7 +52,7 @@ impl FilesystemStorage {
                                         if let Ok(obj) =
                                             serde_json::from_slice::<Object>(&metadata_json)
                                         {
-                                            index.insert(bucket_name.clone(), obj.key);
+                                            index.insert(&bucket_name, &obj.key);
                                         }
                                     }
                                 }
@@ -96,7 +99,7 @@ impl FilesystemStorage {
         self.bucket_dir(bucket).join("bucket.acl.json")
     }
 
-    pub(super) fn is_bucket_control_entry(&self, _bucket: &str, entry: &fs::DirEntry) -> bool {
+    pub(super) fn is_bucket_control_entry(entry: &fs::DirEntry) -> bool {
         let name = entry.file_name();
         let name = name.to_string_lossy();
 
@@ -109,8 +112,7 @@ impl FilesystemStorage {
             ".multipart" => entry
                 .path()
                 .read_dir()
-                .map(|entries| entries.flatten().next().is_none())
-                .unwrap_or(false),
+                .is_ok_and(|entries| entries.flatten().next().is_none()),
             _ => false,
         }
     }
@@ -180,7 +182,7 @@ impl FilesystemStorage {
 
     pub(super) fn part_path(&self, bucket: &str, upload_id: &str, part_number: u32) -> PathBuf {
         self.multipart_dir(bucket, upload_id)
-            .join(format!("part-{:05}", part_number))
+            .join(format!("part-{part_number:05}"))
     }
 
     pub(super) fn multipart_root(&self, bucket: &str) -> PathBuf {
@@ -196,13 +198,13 @@ impl FilesystemStorage {
             .join("upload.json")
     }
 
-    pub(super) fn read_upload_record(&self, upload_path: &Path) -> Result<MultipartUpload> {
+    pub(super) fn read_upload_record(upload_path: &Path) -> Result<MultipartUpload> {
         let json_bytes = fs::read(upload_path).map_err(|e| {
-            Error::InternalError(format!("Failed to read multipart upload record: {}", e))
+            Error::InternalError(format!("Failed to read multipart upload record: {e}"))
         })?;
 
         let mut upload: MultipartUpload = serde_json::from_slice(&json_bytes).map_err(|e| {
-            Error::InternalError(format!("Failed to parse multipart upload record: {}", e))
+            Error::InternalError(format!("Failed to parse multipart upload record: {e}"))
         })?;
         Self::normalize_upload_parts(&mut upload);
         Ok(upload)
@@ -225,13 +227,10 @@ impl FilesystemStorage {
         {
             let mut writer = std::io::BufWriter::new(&mut buffer);
             serde_json::to_writer(&mut writer, upload).map_err(|e| {
-                Error::InternalError(format!(
-                    "Failed to serialize multipart upload record: {}",
-                    e
-                ))
+                Error::InternalError(format!("Failed to serialize multipart upload record: {e}"))
             })?;
             writer.flush().map_err(|e| {
-                Error::InternalError(format!("Failed to write multipart upload record: {}", e))
+                Error::InternalError(format!("Failed to write multipart upload record: {e}"))
             })?;
         }
         Self::atomic_write(upload_path, &buffer)?;
@@ -243,7 +242,7 @@ impl FilesystemStorage {
         let upload_dir = self.upload_record_dir(bucket, upload_id);
         if upload_dir.exists() {
             fs::remove_dir_all(&upload_dir).map_err(|e| {
-                Error::InternalError(format!("Failed to remove multipart upload dir: {}", e))
+                Error::InternalError(format!("Failed to remove multipart upload dir: {e}"))
             })?;
         }
         Ok(())
@@ -257,9 +256,8 @@ impl FilesystemStorage {
         let mut uploads = std::collections::HashMap::new();
 
         if multipart_root.exists() {
-            let entries = fs::read_dir(&multipart_root).map_err(|e| {
-                Error::InternalError(format!("Failed to read multipart dir: {}", e))
-            })?;
+            let entries = fs::read_dir(&multipart_root)
+                .map_err(|e| Error::InternalError(format!("Failed to read multipart dir: {e}")))?;
 
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -267,7 +265,7 @@ impl FilesystemStorage {
                     continue;
                 }
                 let upload_path = path.join("upload.json");
-                if let Ok(upload) = self.read_upload_record(&upload_path) {
+                if let Ok(upload) = Self::read_upload_record(&upload_path) {
                     uploads.insert(upload.upload_id.clone(), upload);
                 }
             }
@@ -277,11 +275,11 @@ impl FilesystemStorage {
             let legacy_uploads_path = multipart_root.join("uploads.json");
             if legacy_uploads_path.exists() {
                 let json_bytes = fs::read(&legacy_uploads_path).map_err(|e| {
-                    Error::InternalError(format!("Failed to read legacy uploads index: {}", e))
+                    Error::InternalError(format!("Failed to read legacy uploads index: {e}"))
                 })?;
 
                 uploads = serde_json::from_slice(&json_bytes).map_err(|e| {
-                    Error::InternalError(format!("Failed to parse legacy uploads index: {}", e))
+                    Error::InternalError(format!("Failed to parse legacy uploads index: {e}"))
                 })?;
                 for upload in uploads.values_mut() {
                     Self::normalize_upload_parts(upload);
@@ -374,16 +372,15 @@ impl FilesystemStorage {
         object: &Object,
     ) -> Result<()> {
         let object_id_dir = self.object_id_dir(bucket, object_id);
-        fs::create_dir_all(&object_id_dir).map_err(|e| {
-            Error::InternalError(format!("Failed to create object directory: {}", e))
-        })?;
+        fs::create_dir_all(&object_id_dir)
+            .map_err(|e| Error::InternalError(format!("Failed to create object directory: {e}")))?;
 
         let object_data_path = self.object_data_path(bucket, object_id);
         Self::atomic_write(&object_data_path, &object.data)?;
 
         let metadata_path = self.object_metadata_path(bucket, object_id);
         let metadata_json = serde_json::to_string(object)
-            .map_err(|e| Error::InternalError(format!("Failed to serialize metadata: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to serialize metadata: {e}")))?;
         Self::atomic_write(&metadata_path, metadata_json.as_bytes())?;
 
         Ok(())
@@ -398,7 +395,7 @@ impl FilesystemStorage {
     ) -> Result<()> {
         let version_dir = self.version_dir(bucket, object_id, version_id);
         fs::create_dir_all(&version_dir).map_err(|e| {
-            Error::InternalError(format!("Failed to create version directory: {}", e))
+            Error::InternalError(format!("Failed to create version directory: {e}"))
         })?;
 
         let mut version_object = object.clone();
@@ -409,7 +406,7 @@ impl FilesystemStorage {
 
         let version_metadata_path = self.version_metadata_path(bucket, object_id, version_id);
         let metadata_json = serde_json::to_string(&version_object).map_err(|e| {
-            Error::InternalError(format!("Failed to serialize version metadata: {}", e))
+            Error::InternalError(format!("Failed to serialize version metadata: {e}"))
         })?;
 
         Self::atomic_write(&version_metadata_path, metadata_json.as_bytes())?;
@@ -424,9 +421,9 @@ impl FilesystemStorage {
         }
 
         let json = fs::read(&path)
-            .map_err(|e| Error::InternalError(format!("Failed to read bucket metadata: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read bucket metadata: {e}")))?;
         serde_json::from_slice(&json)
-            .map_err(|e| Error::InternalError(format!("Failed to parse bucket metadata: {}", e)))
+            .map_err(|e| Error::InternalError(format!("Failed to parse bucket metadata: {e}")))
     }
 
     pub(super) fn write_bucket_metadata(
@@ -436,25 +433,21 @@ impl FilesystemStorage {
     ) -> Result<()> {
         let path = self.bucket_metadata_path(bucket);
         let json = serde_json::to_vec(metadata).map_err(|e| {
-            Error::InternalError(format!("Failed to serialize bucket metadata: {}", e))
+            Error::InternalError(format!("Failed to serialize bucket metadata: {e}"))
         })?;
         Self::atomic_write(&path, &json)
     }
 
-    pub(super) fn read_object_metadata(&self, metadata_path: &Path) -> Result<Object> {
+    pub(super) fn read_object_metadata(metadata_path: &Path) -> Result<Object> {
         let json = fs::read_to_string(metadata_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read metadata: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read metadata: {e}")))?;
         serde_json::from_str(&json)
-            .map_err(|e| Error::InternalError(format!("Failed to parse metadata: {}", e)))
+            .map_err(|e| Error::InternalError(format!("Failed to parse metadata: {e}")))
     }
 
-    pub(super) fn write_object_metadata(
-        &self,
-        metadata_path: &Path,
-        object: &Object,
-    ) -> Result<()> {
+    pub(super) fn write_object_metadata(metadata_path: &Path, object: &Object) -> Result<()> {
         let json = serde_json::to_string(object)
-            .map_err(|e| Error::InternalError(format!("Failed to serialize metadata: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to serialize metadata: {e}")))?;
         Self::atomic_write(metadata_path, json.as_bytes())
     }
 
@@ -465,7 +458,7 @@ impl FilesystemStorage {
         }
 
         let entries = fs::read_dir(&versions_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to read versions dir: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read versions dir: {e}")))?;
 
         Ok(entries.flatten().next().is_some())
     }
@@ -474,9 +467,8 @@ impl FilesystemStorage {
         let parent = path
             .parent()
             .ok_or_else(|| Error::InternalError("Invalid file path".to_string()))?;
-        fs::create_dir_all(parent).map_err(|e| {
-            Error::InternalError(format!("Failed to create parent directory: {}", e))
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| Error::InternalError(format!("Failed to create parent directory: {e}")))?;
 
         let file_name = path
             .file_name()
@@ -486,13 +478,13 @@ impl FilesystemStorage {
 
         let write_result = (|| -> Result<()> {
             let mut file = fs::File::create(&temp_path)
-                .map_err(|e| Error::InternalError(format!("Failed to create temp file: {}", e)))?;
+                .map_err(|e| Error::InternalError(format!("Failed to create temp file: {e}")))?;
             file.write_all(bytes)
-                .map_err(|e| Error::InternalError(format!("Failed to write temp file: {}", e)))?;
+                .map_err(|e| Error::InternalError(format!("Failed to write temp file: {e}")))?;
             file.sync_all()
-                .map_err(|e| Error::InternalError(format!("Failed to sync temp file: {}", e)))?;
+                .map_err(|e| Error::InternalError(format!("Failed to sync temp file: {e}")))?;
             fs::rename(&temp_path, path)
-                .map_err(|e| Error::InternalError(format!("Failed to commit temp file: {}", e)))?;
+                .map_err(|e| Error::InternalError(format!("Failed to commit temp file: {e}")))?;
             Ok(())
         })();
 

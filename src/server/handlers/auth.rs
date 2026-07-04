@@ -48,7 +48,7 @@ mod tests {
             enforce_auth: true,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -168,7 +168,7 @@ mod tests {
             "bucket",
             "notes.txt",
             Acl {
-                canned: Default::default(),
+                canned: crate::models::policy::CannedAcl::default(),
                 grants: vec![
                     Grant {
                         grantee: Grantee::CanonicalUser {
@@ -195,7 +195,7 @@ mod tests {
             enforce_auth: true,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -271,12 +271,9 @@ pub(crate) fn verify_presigned_url(
             let host = req.header("host").unwrap_or("localhost:9000").to_string();
 
             // Get secret key for validation
-            let secret_key = match auth_config.secret_key() {
-                Some(key) => key,
-                None => {
-                    warn!("Presigned URL validation requested but no secret key configured");
-                    return Ok(true);
-                }
+            let Some(secret_key) = auth_config.secret_key() else {
+                warn!("Presigned URL validation requested but no secret key configured");
+                return Ok(true);
             };
 
             let presigned_config = crate::auth::PresignedUrlConfig {
@@ -293,7 +290,7 @@ pub(crate) fn verify_presigned_url(
                 return Err(xml_error_response(
                     StatusCode::FORBIDDEN,
                     "InvalidSignature",
-                    &format!("Presigned URL validation failed: {}", e),
+                    &format!("Presigned URL validation failed: {e}"),
                     &req_id,
                 ));
             }
@@ -305,7 +302,7 @@ pub(crate) fn verify_presigned_url(
             Err(xml_error_response(
                 StatusCode::BAD_REQUEST,
                 "InvalidRequest",
-                &format!("Invalid presigned URL parameters: {}", e),
+                &format!("Invalid presigned URL parameters: {e}"),
                 &req_id,
             ))
         }
@@ -331,9 +328,9 @@ pub(crate) fn check_authorization(
     }
 
     let resource = if let Some(k) = key {
-        format!("arn:aws:s3:::{}/{}", bucket, k)
+        format!("arn:aws:s3:::{bucket}/{k}")
     } else {
-        format!("arn:aws:s3:::{}", bucket)
+        format!("arn:aws:s3:::{bucket}")
     };
 
     let request_headers = build_request_headers(req);
@@ -388,22 +385,21 @@ pub(crate) fn check_authorization(
         }
     };
 
-    match final_decision {
-        PolicyEffect::Allow => Ok(auth_info),
-        _ => {
-            warn!(
-                principal = %context.principal,
-                action = %action,
-                resource = %resource,
-                "Access denied"
-            );
-            let req_id = header_utils::generate_request_id();
-            Err(xml_error_response(
-                StatusCode::FORBIDDEN,
-                "AccessDenied",
-                "Access Denied",
-                &req_id,
-            ))
-        }
+    if final_decision == PolicyEffect::Allow {
+        Ok(auth_info)
+    } else {
+        warn!(
+            principal = %context.principal,
+            action = %action,
+            resource = %resource,
+            "Access denied"
+        );
+        let req_id = header_utils::generate_request_id();
+        Err(xml_error_response(
+            StatusCode::FORBIDDEN,
+            "AccessDenied",
+            "Access Denied",
+            &req_id,
+        ))
     }
 }

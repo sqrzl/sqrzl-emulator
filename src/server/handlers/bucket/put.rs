@@ -1,4 +1,7 @@
-use super::helpers::*;
+use super::helpers::{
+    apply_bucket_cors_headers, metadata_value, with_bucket_metadata, S3_CORS_XML_KEY,
+    S3_REQUEST_PAYMENT_KEY, S3_WEBSITE_XML_KEY,
+};
 use super::{
     acl, bucket_service, check_authorization, header_utils, validation, xml_error_response,
     xml_utils, AuthConfig, Body, ResponseBuilder, Storage,
@@ -37,34 +40,34 @@ pub async fn bucket_put(
     }
 
     if req.has_query_param("lifecycle") {
-        return put_lifecycle(storage, bucket, req, &req_id);
+        return put_lifecycle(&storage, bucket, req, &req_id);
     }
 
     if req.has_query_param("requestPayment") {
-        return put_request_payment(storage, bucket, req, &req_id);
+        return put_request_payment(&storage, bucket, req, &req_id);
     }
 
     if req.has_query_param("website") {
-        return put_metadata_document(storage, bucket, req, &req_id, S3_WEBSITE_XML_KEY);
+        return put_metadata_document(&storage, bucket, req, &req_id, S3_WEBSITE_XML_KEY);
     }
 
     if req.has_query_param("cors") {
-        return put_metadata_document(storage, bucket, req, &req_id, S3_CORS_XML_KEY);
+        return put_metadata_document(&storage, bucket, req, &req_id, S3_CORS_XML_KEY);
     }
 
     if req.has_query_param("versioning") {
-        return put_versioning(storage, bucket, req, &req_id);
+        return put_versioning(&storage, bucket, req, &req_id);
     }
 
     if req.has_query_param("acl") {
-        return put_acl(storage, bucket, req, &req_id);
+        return Ok(put_acl(&storage, bucket, req, &req_id));
     }
 
     if req.has_query_param("policy") {
-        return put_policy(storage, bucket, req, &req_id);
+        return put_policy(&storage, bucket, req, &req_id);
     }
 
-    create_bucket(storage, bucket, &req_id)
+    create_bucket(&storage, bucket, &req_id)
 }
 
 fn bucket_put_action(req: &Request) -> &'static str {
@@ -88,7 +91,7 @@ fn bucket_put_action(req: &Request) -> &'static str {
 }
 
 fn put_lifecycle(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
@@ -119,7 +122,7 @@ fn put_lifecycle(
 }
 
 fn put_request_payment(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
@@ -151,7 +154,7 @@ fn put_request_payment(
 }
 
 fn put_metadata_document(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
@@ -173,7 +176,7 @@ fn put_metadata_document(
 }
 
 fn put_versioning(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
@@ -204,11 +207,11 @@ fn put_versioning(
 }
 
 fn put_acl(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
-) -> Result<Response<Body>, String> {
+) -> Response<Body> {
     let acl = match if req.body.is_empty() {
         acl::acl_from_headers(req).map_err(|message| ("InvalidArgument", message))
     } else {
@@ -216,36 +219,25 @@ fn put_acl(
     } {
         Ok(acl) => acl,
         Err((code, message)) => {
-            return Ok(xml_error_response(
-                StatusCode::BAD_REQUEST,
-                code,
-                &message,
-                req_id,
-            ));
+            return xml_error_response(StatusCode::BAD_REQUEST, code, &message, req_id);
         }
     };
 
     let result = tokio::task::block_in_place(|| {
         bucket_service::put_bucket_acl(storage.as_ref(), bucket, acl)
     });
-    Ok(bucket_write_response(
-        result,
-        storage.as_ref(),
-        bucket,
-        req,
-        req_id,
-    ))
+    bucket_write_response(result, storage.as_ref(), bucket, req, req_id)
 }
 
 fn put_policy(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
 ) -> Result<Response<Body>, String> {
     let body = request_body_text(req)?;
     let policy: crate::models::policy::BucketPolicyDocument =
-        serde_json::from_str(&body).map_err(|error| format!("Invalid JSON policy: {}", error))?;
+        serde_json::from_str(&body).map_err(|error| format!("Invalid JSON policy: {error}"))?;
     let result = tokio::task::block_in_place(|| {
         bucket_service::put_bucket_policy(storage.as_ref(), bucket, policy)
     });
@@ -259,7 +251,7 @@ fn put_policy(
 }
 
 fn create_bucket(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req_id: &str,
 ) -> Result<Response<Body>, String> {
@@ -315,5 +307,5 @@ fn empty_bucket_success(
 }
 
 fn request_body_text(req: &Request) -> Result<String, String> {
-    String::from_utf8(req.body.to_vec()).map_err(|error| format!("Invalid UTF-8 body: {}", error))
+    String::from_utf8(req.body.to_vec()).map_err(|error| format!("Invalid UTF-8 body: {error}"))
 }

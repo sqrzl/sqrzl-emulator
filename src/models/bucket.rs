@@ -45,6 +45,7 @@ pub struct LifecycleExpiration {
 }
 
 impl Bucket {
+    #[must_use]
     pub fn new(name: String) -> Self {
         Self {
             name,

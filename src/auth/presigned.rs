@@ -25,6 +25,7 @@ pub struct PresignedUrl {
 
 impl PresignedUrl {
     /// Generate a presigned URL for GET access using AWS Signature Version 4
+    #[must_use]
     pub fn generate_get_url(
         bucket: &str,
         key: &str,
@@ -36,6 +37,7 @@ impl PresignedUrl {
     }
 
     /// Generate a presigned URL for PUT access using AWS Signature Version 4
+    #[must_use]
     pub fn generate_put_url(
         bucket: &str,
         key: &str,
@@ -57,11 +59,11 @@ impl PresignedUrl {
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date_stamp = now.format("%Y%m%d").to_string();
-        let credential_scope = format!("{}/{}/{}/aws4_request", date_stamp, REGION, SERVICE);
+        let credential_scope = format!("{date_stamp}/{REGION}/{SERVICE}/aws4_request");
         let credential = format!("{}/{}", config.access_key, credential_scope);
 
         // Canonical URI (path component)
-        let canonical_uri = format!("/{}/{}", bucket, key);
+        let canonical_uri = format!("/{bucket}/{key}");
 
         // Canonical query string (must be sorted)
         let expires_str = expires_in_seconds.to_string();
@@ -83,21 +85,18 @@ impl PresignedUrl {
         let host = base_url
             .trim_start_matches("http://")
             .trim_start_matches("https://");
-        let canonical_headers = format!("host:{}\n", host);
+        let canonical_headers = format!("host:{host}\n");
         let signed_headers = "host";
 
         // Canonical request
         let canonical_request = format!(
-            "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
-            method, canonical_uri, canonical_query_string, canonical_headers, signed_headers
+            "{method}\n{canonical_uri}\n{canonical_query_string}\n{canonical_headers}\n{signed_headers}\nUNSIGNED-PAYLOAD"
         );
 
         // String to sign
         let canonical_request_hash = sha256_hex(canonical_request.as_bytes());
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-            amz_date, credential_scope, canonical_request_hash
-        );
+        let string_to_sign =
+            format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{canonical_request_hash}");
 
         // Signing key
         let signing_key = get_signature_key(&config.secret_key, &date_stamp, REGION, SERVICE);
@@ -113,6 +112,10 @@ impl PresignedUrl {
     }
 
     /// Parse and validate a presigned URL from query parameters
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub fn from_query_params(
         bucket: &str,
         key: &str,
@@ -155,6 +158,10 @@ impl PresignedUrl {
     }
 
     /// Validate the presigned URL signature and expiration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub fn validate(&self, host: &str, config: &PresignedUrlConfig) -> Result<(), String> {
         // Check expiration
         let expires_at = self.date + Duration::seconds(self.expires_in);
@@ -165,7 +172,7 @@ impl PresignedUrl {
         // Compute expected signature using SigV4
         let date_stamp = self.date.format("%Y%m%d").to_string();
         let amz_date = self.date.format("%Y%m%dT%H%M%SZ").to_string();
-        let credential_scope = format!("{}/{}/{}/aws4_request", date_stamp, REGION, SERVICE);
+        let credential_scope = format!("{date_stamp}/{REGION}/{SERVICE}/aws4_request");
 
         // Canonical URI
         let canonical_uri = format!("/{}/{}", self.bucket, self.key);
@@ -187,7 +194,7 @@ impl PresignedUrl {
             .join("&");
 
         // Canonical headers
-        let canonical_headers = format!("host:{}\n", host);
+        let canonical_headers = format!("host:{host}\n");
         let signed_headers = "host";
 
         // Canonical request
@@ -198,10 +205,8 @@ impl PresignedUrl {
 
         // String to sign
         let canonical_request_hash = sha256_hex(canonical_request.as_bytes());
-        let string_to_sign = format!(
-            "AWS4-HMAC-SHA256\n{}\n{}\n{}",
-            amz_date, credential_scope, canonical_request_hash
-        );
+        let string_to_sign =
+            format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{canonical_request_hash}");
 
         // Signing key and signature
         let signing_key = get_signature_key(&config.secret_key, &date_stamp, REGION, SERVICE);
@@ -240,7 +245,7 @@ fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
 }
 
 fn get_signature_key(secret: &str, date_stamp: &str, region: &str, service: &str) -> Vec<u8> {
-    let k_secret = format!("AWS4{}", secret);
+    let k_secret = format!("AWS4{secret}");
     let k_date = hmac_sha256(k_secret.as_bytes(), date_stamp.as_bytes());
     let k_region = hmac_sha256(&k_date, region.as_bytes());
     let k_service = hmac_sha256(&k_region, service.as_bytes());
@@ -318,10 +323,7 @@ mod tests {
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date_stamp = now.format("%Y%m%d").to_string();
-        let credential = format!(
-            "{}/{}/{}/{}/aws4_request",
-            access_key, date_stamp, REGION, SERVICE
-        );
+        let credential = format!("{access_key}/{date_stamp}/{REGION}/{SERVICE}/aws4_request");
 
         let mut params = HashMap::new();
         params.insert("X-Amz-Signature".to_string(), "abc123".to_string());
@@ -354,10 +356,7 @@ mod tests {
             .format("%Y%m%dT%H%M%SZ")
             .to_string();
         let date_stamp = (now - Duration::seconds(7200)).format("%Y%m%d").to_string();
-        let credential = format!(
-            "{}/{}/{}/{}/aws4_request",
-            access_key, date_stamp, REGION, SERVICE
-        );
+        let credential = format!("{access_key}/{date_stamp}/{REGION}/{SERVICE}/aws4_request");
 
         let mut params = HashMap::new();
         params.insert("X-Amz-Signature".to_string(), "abc123".to_string());

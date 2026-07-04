@@ -13,7 +13,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_s3_requests_
         call(
             storage.clone(),
             auth_disabled(),
-            request("PUT", "http://localhost/interop-s3", &[], b"").await,
+            request("PUT", "http://localhost/interop-s3", &[], b""),
         )
         .await
         .status(),
@@ -29,8 +29,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_s3_requests_
                 "http://localhost/interop-s3/hello.txt",
                 &[("content-type", "text/plain")],
                 b"s3 smoke",
-            )
-            .await,
+            ),
         )
         .await
         .status(),
@@ -41,7 +40,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_s3_requests_
         call(
             storage.clone(),
             auth_disabled(),
-            request("GET", "http://localhost/interop-s3/hello.txt", &[], b"").await,
+            request("GET", "http://localhost/interop-s3/hello.txt", &[], b""),
         )
         .await,
     )
@@ -57,8 +56,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_s3_requests_
                 "http://localhost/interop-s3/hello.txt",
                 &[("range", "bytes=0-1")],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -69,7 +67,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_s3_requests_
         call(
             storage,
             auth_disabled(),
-            request("GET", "http://localhost/interop-s3?list-type=2", &[], b"").await,
+            request("GET", "http://localhost/interop-s3?list-type=2", &[], b""),
         )
         .await,
     )
@@ -84,7 +82,7 @@ async fn should_assemble_completed_object_given_uploaded_parts_when_finishing_s3
     call(
         storage.clone(),
         auth_disabled(),
-        request("PUT", "http://localhost/interop-s3", &[], b"").await,
+        request("PUT", "http://localhost/interop-s3", &[], b""),
     )
     .await;
 
@@ -97,8 +95,7 @@ async fn should_assemble_completed_object_given_uploaded_parts_when_finishing_s3
                 "http://localhost/interop-s3/multipart.txt?uploads",
                 &[],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -113,8 +110,7 @@ async fn should_assemble_completed_object_given_uploaded_parts_when_finishing_s3
             &format!("http://localhost/interop-s3/multipart.txt?partNumber=1&uploadId={upload_id}"),
             &[],
             b"multi",
-        )
-        .await,
+        ),
     )
     .await;
     let etag_one = part_one
@@ -132,8 +128,7 @@ async fn should_assemble_completed_object_given_uploaded_parts_when_finishing_s3
             &format!("http://localhost/interop-s3/multipart.txt?partNumber=2&uploadId={upload_id}"),
             &[],
             b"part",
-        )
-        .await,
+        ),
     )
     .await;
     let etag_two = part_two
@@ -155,8 +150,7 @@ async fn should_assemble_completed_object_given_uploaded_parts_when_finishing_s3
                 &format!("http://localhost/interop-s3/multipart.txt?uploadId={upload_id}"),
                 &[("content-type", "application/xml")],
                 complete_xml.as_bytes(),
-            )
-            .await,
+            ),
         )
         .await
         .status(),
@@ -167,7 +161,7 @@ async fn should_assemble_completed_object_given_uploaded_parts_when_finishing_s3
         call(
             storage,
             auth_disabled(),
-            request("GET", "http://localhost/interop-s3/multipart.txt", &[], b"").await,
+            request("GET", "http://localhost/interop-s3/multipart.txt", &[], b""),
         )
         .await,
     )
@@ -181,7 +175,7 @@ async fn should_list_multiple_versions_given_versioning_enabled_when_object_is_o
     call(
         storage.clone(),
         auth_disabled(),
-        request("PUT", "http://localhost/interop-s3", &[], b"").await,
+        request("PUT", "http://localhost/interop-s3", &[], b""),
     )
     .await;
     let versioning_xml = br#"<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>"#;
@@ -193,8 +187,7 @@ async fn should_list_multiple_versions_given_versioning_enabled_when_object_is_o
             "http://localhost/interop-s3?versioning",
             &[("content-type", "application/xml")],
             versioning_xml,
-        )
-        .await,
+        ),
     )
     .await;
 
@@ -206,8 +199,7 @@ async fn should_list_multiple_versions_given_versioning_enabled_when_object_is_o
             "http://localhost/interop-s3/versioned.txt",
             &[],
             b"v1",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -218,8 +210,7 @@ async fn should_list_multiple_versions_given_versioning_enabled_when_object_is_o
             "http://localhost/interop-s3/versioned.txt",
             &[],
             b"v2",
-        )
-        .await,
+        ),
     )
     .await;
 
@@ -232,8 +223,7 @@ async fn should_list_multiple_versions_given_versioning_enabled_when_object_is_o
                 "http://localhost/interop-s3?versions&prefix=versioned.txt",
                 &[],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )

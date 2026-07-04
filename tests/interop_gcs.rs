@@ -18,8 +18,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_gcs_requests
             "http://localhost/interop-gcs",
             &[("host", "storage.googleapis.com")],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -33,8 +32,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_gcs_requests
                 ("content-type", "text/plain"),
             ],
             b"gcs smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let body = body_bytes(
@@ -46,8 +44,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_gcs_requests
                 "http://localhost/interop-gcs/hello.txt",
                 &[("host", "storage.googleapis.com")],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -66,8 +63,7 @@ async fn should_return_custom_metadata_given_gcs_metadata_headers_when_requestin
             "http://localhost/interop-gcs",
             &[("host", "storage.googleapis.com")],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -82,8 +78,7 @@ async fn should_return_custom_metadata_given_gcs_metadata_headers_when_requestin
                 ("x-goog-meta-owner", "sdk"),
             ],
             b"gcs smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let response = call(
@@ -94,8 +89,7 @@ async fn should_return_custom_metadata_given_gcs_metadata_headers_when_requestin
             "http://localhost/interop-gcs/hello.txt",
             &[("host", "storage.googleapis.com")],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     assert_eq!(
@@ -118,8 +112,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_gcs_objec
             "http://localhost/interop-gcs",
             &[("host", "storage.googleapis.com")],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -133,8 +126,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_gcs_objec
                 ("content-type", "text/plain"),
             ],
             b"gcs smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let body = body_bytes(
@@ -146,8 +138,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_gcs_objec
                 "http://localhost/interop-gcs/hello.txt",
                 &[("host", "storage.googleapis.com"), ("range", "bytes=0-2")],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -166,8 +157,7 @@ async fn should_list_matching_objects_given_existing_keys_when_querying_gcs_buck
             "http://localhost/interop-gcs",
             &[("host", "storage.googleapis.com")],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -181,8 +171,7 @@ async fn should_list_matching_objects_given_existing_keys_when_querying_gcs_buck
                 ("content-type", "text/plain"),
             ],
             b"gcs smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let listing = body_text(
@@ -194,8 +183,7 @@ async fn should_list_matching_objects_given_existing_keys_when_querying_gcs_buck
                 "http://localhost/interop-gcs",
                 &[("host", "storage.googleapis.com")],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -219,8 +207,7 @@ async fn should_complete_resumable_upload_given_json_api_session_when_finalizing
                 ("content-type", "application/json"),
             ],
             br#"{"name":"json-bucket"}"#,
-        )
-        .await,
+        ),
     )
     .await;
     let init = call_with_registry(
@@ -237,8 +224,7 @@ async fn should_complete_resumable_upload_given_json_api_session_when_finalizing
                 ("x-goog-meta-owner", "jules"),
             ],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     let location = init
@@ -260,8 +246,7 @@ async fn should_complete_resumable_upload_given_json_api_session_when_finalizing
                 ("x-forwarded-proto", "https"),
             ],
             b"json api",
-        )
-        .await,
+        ),
     )
     .await;
     let json = body_text(
@@ -274,8 +259,7 @@ async fn should_complete_resumable_upload_given_json_api_session_when_finalizing
                 "http://localhost/storage/v1/b/json-bucket/o/hello.txt",
                 &[("host", "storage.googleapis.com")],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )

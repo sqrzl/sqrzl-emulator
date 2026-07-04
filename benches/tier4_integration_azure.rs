@@ -67,7 +67,7 @@ fn bench_put_blob(c: &mut Criterion) {
             let response = runtime.block_on(server.request(request));
             assert_eq!(response.status(), StatusCode::CREATED);
             black_box(response.headers().get("etag").cloned());
-        })
+        });
     });
     group.finish();
 }
@@ -115,7 +115,7 @@ fn bench_get_blob(c: &mut Criterion) {
                 black_box(body);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }
@@ -164,7 +164,7 @@ fn bench_get_blob_range(c: &mut Criterion) {
                 black_box(body);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }
@@ -217,7 +217,7 @@ fn bench_list_blobs(c: &mut Criterion) {
                 black_box(listing);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }

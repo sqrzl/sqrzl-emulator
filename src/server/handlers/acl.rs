@@ -43,7 +43,7 @@ pub(super) fn acl_from_headers(req: &Request) -> Result<Acl, String> {
 
 pub(super) fn acl_from_xml_body(body: &[u8]) -> Result<Acl, String> {
     let body =
-        String::from_utf8(body.to_vec()).map_err(|err| format!("Invalid UTF-8 body: {}", err))?;
+        String::from_utf8(body.to_vec()).map_err(|err| format!("Invalid UTF-8 body: {err}"))?;
     let acl = xml_utils::parse_acl_xml(&body)?;
     Ok(normalize_acl(acl))
 }
@@ -94,7 +94,7 @@ fn parse_grantee_header_value(value: &str) -> Result<Vec<Grantee>, String> {
             continue;
         }
 
-        return Err(format!("Unsupported ACL grantee expression: {}", part));
+        return Err(format!("Unsupported ACL grantee expression: {part}"));
     }
 
     if grantees.is_empty() {
@@ -105,7 +105,7 @@ fn parse_grantee_header_value(value: &str) -> Result<Vec<Grantee>, String> {
 }
 
 fn parse_quoted_value(input: &str, key: &str) -> Option<String> {
-    let prefix = format!("{}=\"", key);
+    let prefix = format!("{key}=\"");
     let value = input.strip_prefix(&prefix)?;
     Some(value.strip_suffix('"')?.to_string())
 }

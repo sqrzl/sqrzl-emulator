@@ -27,7 +27,7 @@ pub fn auth_disabled() -> Arc<Config> {
         enforce_auth: false,
         admin_auth_disabled: false,
         blobs_path: "./blobs".to_string(),
-        lifecycle_interval: std::time::Duration::from_secs(3600),
+        lifecycle_interval: std::time::Duration::from_hours(1),
         api_port: 9000,
         ui_port: 9001,
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -41,14 +41,14 @@ pub fn auth_enabled(key: &str, secret: &str) -> Arc<Config> {
         enforce_auth: true,
         admin_auth_disabled: false,
         blobs_path: "./blobs".to_string(),
-        lifecycle_interval: std::time::Duration::from_secs(3600),
+        lifecycle_interval: std::time::Duration::from_hours(1),
         api_port: 9000,
         ui_port: 9001,
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
     })
 }
 
-pub async fn request(
+pub fn request(
     method: &str,
     uri: &str,
     headers: &[(&str, &str)],

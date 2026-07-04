@@ -38,6 +38,7 @@ pub struct BlobRecord {
 }
 
 impl BlobRecord {
+    #[must_use]
     pub fn from_object(namespace: &str, object: &Object) -> Self {
         Self {
             namespace: namespace.to_string(),
@@ -94,17 +95,61 @@ pub struct CreateUploadSessionRequest {
 }
 
 pub trait BlobBackend: Send + Sync {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_namespace(&self, name: String) -> Result<Namespace>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_namespace(&self, name: &str) -> Result<Namespace>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_namespaces(&self) -> Result<Vec<Namespace>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_namespace(&self, name: &str) -> Result<()>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn put_blob(&self, request: PutBlobRequest) -> Result<BlobRecord>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_blob(&self, namespace: &str, key: &str) -> Result<Object>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_blob_version(&self, namespace: &str, key: &str, version_id: &str) -> Result<Object>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn get_blob_range(&self, namespace: &str, key: &str, range: BlobRange) -> Result<BlobPayload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn delete_blob(&self, namespace: &str, key: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn update_blob_metadata(&self, request: UpdateBlobMetadataRequest) -> Result<BlobRecord>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_blobs(
         &self,
         namespace: &str,
@@ -113,10 +158,22 @@ pub trait BlobBackend: Send + Sync {
         marker: Option<&str>,
         max_keys: Option<usize>,
     ) -> Result<Vec<BlobRecord>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn list_blob_versions(&self, namespace: &str, prefix: Option<&str>) -> Result<Vec<BlobRecord>>;
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn create_upload_session(&self, request: CreateUploadSessionRequest)
         -> Result<MultipartUpload>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn upload_session_part(
         &self,
         namespace: &str,
@@ -124,6 +181,10 @@ pub trait BlobBackend: Send + Sync {
         part_number: u32,
         data: Vec<u8>,
     ) -> Result<String>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     fn complete_upload_session(&self, namespace: &str, upload_id: &str) -> Result<String>;
 }
 

@@ -10,7 +10,7 @@ async fn should_round_trip_namespace_bucket_and_object_operations_given_basic_oc
         call(
             storage.clone(),
             auth_disabled(),
-            request("GET", "http://localhost/n/tenant", &[], b"").await,
+            request("GET", "http://localhost/n/tenant", &[], b""),
         )
         .await,
     )
@@ -24,8 +24,7 @@ async fn should_round_trip_namespace_bucket_and_object_operations_given_basic_oc
             "http://localhost/n/tenant/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -36,8 +35,7 @@ async fn should_round_trip_namespace_bucket_and_object_operations_given_basic_oc
             "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
             &[("content-type", "text/plain")],
             b"oci smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let body = body_bytes(
@@ -49,8 +47,7 @@ async fn should_round_trip_namespace_bucket_and_object_operations_given_basic_oc
                 "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
                 &[],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -69,8 +66,7 @@ async fn should_return_custom_metadata_given_oci_metadata_headers_when_requestin
             "http://localhost/n/tenant/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -81,8 +77,7 @@ async fn should_return_custom_metadata_given_oci_metadata_headers_when_requestin
             "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
             &[("content-type", "text/plain"), ("opc-meta-owner", "sdk")],
             b"oci smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let response = call(
@@ -93,8 +88,7 @@ async fn should_return_custom_metadata_given_oci_metadata_headers_when_requestin
             "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
             &[],
             b"",
-        )
-        .await,
+        ),
     )
     .await;
     assert_eq!(
@@ -117,8 +111,7 @@ async fn should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket
             "http://localhost/n/tenant/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
-        )
-        .await,
+        ),
     )
     .await;
     call(
@@ -129,8 +122,7 @@ async fn should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket
             "http://localhost/n/tenant/b/interop-oci/o/folder/hello.txt",
             &[("content-type", "text/plain")],
             b"oci smoke",
-        )
-        .await,
+        ),
     )
     .await;
     let listing = body_text(
@@ -142,8 +134,7 @@ async fn should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket
                 "http://localhost/n/tenant/b/interop-oci/o?prefix=folder/",
                 &[],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -162,8 +153,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
             "http://localhost/n/tenant/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
-        )
-        .await,
+        ),
     )
     .await;
     let init = body_text(
@@ -175,8 +165,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
                 "http://localhost/n/tenant/b/interop-oci/u",
                 &[("content-type", "application/json")],
                 br#"{"object":"multi.txt","contentType":"text/plain","metadata":{"owner":"sdk"},"storageTier":"InfrequentAccess"}"#,
-            )
-            .await,
+            ),
         )
         .await,
     )
@@ -197,8 +186,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
             ),
             &[],
             b"multi",
-        )
-        .await,
+        ),
     )
     .await;
     let etag_one = part_one
@@ -218,8 +206,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
             ),
             &[],
             b"part",
-        )
-        .await,
+        ),
     )
     .await;
     let etag_two = part_two
@@ -240,8 +227,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
             &format!("http://localhost/n/tenant/b/interop-oci/u/multi.txt?uploadId={upload_id}"),
             &[("content-type", "application/json")],
             commit.as_bytes(),
-        )
-        .await,
+        ),
     )
     .await;
     let body = body_bytes(
@@ -253,8 +239,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
                 "http://localhost/n/tenant/b/interop-oci/o/multi.txt",
                 &[],
                 b"",
-            )
-            .await,
+            ),
         )
         .await,
     )

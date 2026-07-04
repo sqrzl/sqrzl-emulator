@@ -78,6 +78,10 @@ impl HttpRequestLike for Request {
 }
 
 impl Request {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub async fn from_hyper<B>(req: HyperRequest<B>) -> Result<Self, String>
     where
         B: hyper::body::Body<Data = Bytes> + Send + Unpin + 'static,
@@ -88,6 +92,10 @@ impl Request {
             .map_err(|err| err.to_string())
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub async fn from_hyper_with_max_body<B>(
         req: HyperRequest<B>,
         max_request_bytes: Option<usize>,
@@ -111,7 +119,7 @@ impl Request {
                     uri,
                     headers,
                 },
-                other => other,
+                RequestParseError::BodyRead(message) => RequestParseError::BodyRead(message),
             })?;
 
         let mut query_params = HashMap::new();
@@ -159,7 +167,7 @@ impl Request {
     }
 
     pub fn query_param(&self, name: &str) -> Option<&str> {
-        self.query_params.get(name).map(|s| s.as_str())
+        self.query_params.get(name).map(std::string::String::as_str)
     }
 
     pub fn has_query_param(&self, name: &str) -> bool {
@@ -179,7 +187,7 @@ where
         return body
             .collect()
             .await
-            .map(|collected| collected.to_bytes())
+            .map(http_body_util::Collected::to_bytes)
             .map_err(|err| RequestParseError::BodyRead(err.to_string()));
     };
 
@@ -211,6 +219,7 @@ pub struct ResponseBuilder {
 }
 
 impl ResponseBuilder {
+    #[must_use]
     pub fn new(status: StatusCode) -> Self {
         Self {
             status,
@@ -219,6 +228,7 @@ impl ResponseBuilder {
         }
     }
 
+    #[must_use]
     pub fn header(mut self, name: &str, value: &str) -> Self {
         if let Ok(header_name) = http::HeaderName::from_str(name) {
             if let Ok(header_value) = http::HeaderValue::from_str(value) {
@@ -228,25 +238,29 @@ impl ResponseBuilder {
         self
     }
 
+    #[must_use]
     pub fn content_type(self, ct: &str) -> Self {
         self.header("content-type", ct)
     }
 
+    #[must_use]
     pub fn body(mut self, body: Vec<u8>) -> Self {
         self.body = body;
         self
     }
 
+    #[must_use]
     pub fn body_str(self, body: &str) -> Self {
         self.body(body.as_bytes().to_vec())
     }
 
+    #[must_use]
     pub fn build(self) -> HttpResponse<Body> {
         let content_length = self.body.len();
 
         let mut response = HttpResponse::builder().status(self.status);
 
-        for (name, value) in self.headers.iter() {
+        for (name, value) in &self.headers {
             response = response.header(name.clone(), value.clone());
         }
 
@@ -260,10 +274,11 @@ impl ResponseBuilder {
         })
     }
 
+    #[must_use]
     pub fn empty(self) -> HttpResponse<Body> {
         let mut response = HttpResponse::builder().status(self.status);
 
-        for (name, value) in self.headers.iter() {
+        for (name, value) in &self.headers {
             response = response.header(name.clone(), value.clone());
         }
 
@@ -320,7 +335,7 @@ mod tests {
                 assert_eq!(bucket, "media");
                 assert_eq!(key, "photos/kitten.jpg");
             }
-            route => panic!("unexpected route: {:?}", route),
+            route => panic!("unexpected route: {route:?}"),
         }
     }
 
@@ -337,7 +352,7 @@ mod tests {
 
         match Router::route(&bucket_parsed) {
             RouteMatch::BucketGet(bucket) => assert_eq!(bucket, "media"),
-            route => panic!("unexpected route: {:?}", route),
+            route => panic!("unexpected route: {route:?}"),
         }
 
         let object_request = HyperRequest::builder()
@@ -354,7 +369,7 @@ mod tests {
                 assert_eq!(bucket, "media");
                 assert_eq!(key, "kitten.jpg");
             }
-            route => panic!("unexpected route: {:?}", route),
+            route => panic!("unexpected route: {route:?}"),
         }
     }
 }
@@ -403,8 +418,9 @@ impl Router {
             // List buckets: GET /
             [] if method == Method::GET && host_bucket.is_none() => RouteMatch::ListBuckets,
             [] if host_bucket.is_some() => match *method {
-                Method::GET => RouteMatch::BucketGet(host_bucket.unwrap_or_default()),
-                Method::OPTIONS => RouteMatch::BucketGet(host_bucket.unwrap_or_default()),
+                Method::GET | Method::OPTIONS => {
+                    RouteMatch::BucketGet(host_bucket.unwrap_or_default())
+                }
                 Method::PUT => RouteMatch::BucketPut(host_bucket.unwrap_or_default()),
                 Method::DELETE => RouteMatch::BucketDelete(host_bucket.unwrap_or_default()),
                 Method::HEAD => RouteMatch::BucketHead(host_bucket.unwrap_or_default()),
@@ -417,8 +433,7 @@ impl Router {
                 let key = key.join("/");
                 let bucket = host_bucket.unwrap_or_default();
                 match *method {
-                    Method::GET => RouteMatch::ObjectGet(bucket, key),
-                    Method::OPTIONS => RouteMatch::ObjectGet(bucket, key),
+                    Method::GET | Method::OPTIONS => RouteMatch::ObjectGet(bucket, key),
                     Method::PUT => RouteMatch::ObjectPut(bucket, key),
                     Method::DELETE => RouteMatch::ObjectDelete(bucket, key),
                     Method::HEAD => RouteMatch::ObjectHead(bucket, key),
@@ -429,8 +444,7 @@ impl Router {
 
             // Bucket operations
             [bucket] => match *method {
-                Method::GET => RouteMatch::BucketGet(bucket.to_string()),
-                Method::OPTIONS => RouteMatch::BucketGet(bucket.to_string()),
+                Method::GET | Method::OPTIONS => RouteMatch::BucketGet(bucket.to_string()),
                 Method::PUT => RouteMatch::BucketPut(bucket.to_string()),
                 Method::DELETE => RouteMatch::BucketDelete(bucket.to_string()),
                 Method::HEAD => RouteMatch::BucketHead(bucket.to_string()),
@@ -442,8 +456,7 @@ impl Router {
             [bucket, key @ ..] if !key.is_empty() => {
                 let key = key.join("/");
                 match *method {
-                    Method::GET => RouteMatch::ObjectGet(bucket.to_string(), key),
-                    Method::OPTIONS => RouteMatch::ObjectGet(bucket.to_string(), key),
+                    Method::GET | Method::OPTIONS => RouteMatch::ObjectGet(bucket.to_string(), key),
                     Method::PUT => RouteMatch::ObjectPut(bucket.to_string(), key),
                     Method::DELETE => RouteMatch::ObjectDelete(bucket.to_string(), key),
                     Method::HEAD => RouteMatch::ObjectHead(bucket.to_string(), key),

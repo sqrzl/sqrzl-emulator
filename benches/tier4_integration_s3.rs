@@ -72,7 +72,7 @@ fn bench_put_object(c: &mut Criterion) {
             let response = runtime.block_on(server.request(request));
             assert_eq!(response.status(), StatusCode::OK);
             black_box(response.headers().get("etag").cloned());
-        })
+        });
     });
     group.finish();
 }
@@ -114,7 +114,7 @@ fn bench_get_object(c: &mut Criterion) {
                 black_box(body);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }
@@ -156,7 +156,7 @@ fn bench_list_objects(c: &mut Criterion) {
             let listing = runtime.block_on(server.response_text(request));
             assert!(listing.contains("item-000.txt"));
             black_box(listing);
-        })
+        });
     });
     group.finish();
 }
@@ -204,7 +204,7 @@ fn bench_list_versions(c: &mut Criterion) {
                 black_box(listing);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }

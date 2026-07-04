@@ -155,9 +155,8 @@ fn matching_rule(
     let rules = load_rules(storage, bucket).ok()?;
 
     for rule in rules {
-        let allow_origin = match allowed_origin(&rule, origin) {
-            Some(value) => value,
-            None => continue,
+        let Some(allow_origin) = allowed_origin(&rule, origin) else {
+            continue;
         };
         if !allows_method(&rule, method) {
             continue;
@@ -180,9 +179,8 @@ fn matching_rule_from_xml(
     let rules = parse_cors_rules(cors_xml).ok()?;
 
     for rule in rules {
-        let allow_origin = match allowed_origin(&rule, origin) {
-            Some(value) => value,
-            None => continue,
+        let Some(allow_origin) = allowed_origin(&rule, origin) else {
+            continue;
         };
         if !allows_method(&rule, method) {
             continue;
@@ -296,8 +294,7 @@ fn parse_cors_rules(xml: &str) -> Result<Vec<CorsRule>, crate::error::Error> {
             Ok(Event::Eof) => break,
             Err(err) => {
                 return Err(crate::error::Error::InvalidRequest(format!(
-                    "Invalid CORS XML: {}",
-                    err
+                    "Invalid CORS XML: {err}"
                 )))
             }
             _ => {}

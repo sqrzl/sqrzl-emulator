@@ -39,9 +39,7 @@ impl PageTokenKind {
 }
 
 pub(super) fn decode_component(input: &str) -> String {
-    decode(input)
-        .map(|component| component.into_owned())
-        .unwrap_or_else(|_| input.to_string())
+    decode(input).map_or_else(|_| input.to_string(), std::borrow::Cow::into_owned)
 }
 
 fn parse_query_map(query: &str) -> HashMap<String, String> {
@@ -151,7 +149,7 @@ pub(super) fn parse_object_page_params(query: &str) -> Result<ObjectPageParams> 
         ));
     }
 
-    let prefix = params.get("prefix").map(|value| value.to_string());
+    let prefix = params.get("prefix").cloned();
     let search = params
         .get("search")
         .map(|value| value.trim().to_ascii_lowercase())

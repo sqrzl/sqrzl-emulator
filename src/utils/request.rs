@@ -8,7 +8,7 @@ pub fn request_origin(req: &impl HttpRequestLike) -> String {
 
     let scheme = request_scheme(req);
     let authority = request_authority(req, &scheme);
-    format!("{}://{}", scheme, authority)
+    format!("{scheme}://{authority}")
 }
 
 fn normalize_origin(origin: &str) -> Option<String> {
@@ -19,7 +19,7 @@ fn normalize_origin(origin: &str) -> Option<String> {
     let uri = http::Uri::from_str(origin).ok()?;
     let scheme = uri.scheme_str()?;
     let authority = uri.authority()?.as_str();
-    Some(format!("{}://{}", scheme, authority))
+    Some(format!("{scheme}://{authority}"))
 }
 
 fn request_scheme(req: &impl HttpRequestLike) -> String {
@@ -72,7 +72,7 @@ fn append_forwarded_port(authority: String, req: &impl HttpRequestLike, scheme: 
         return authority;
     }
 
-    format!("{}:{}", authority, port)
+    format!("{authority}:{port}")
 }
 
 fn is_default_port(scheme: &str, port: &str) -> bool {

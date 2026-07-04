@@ -6,9 +6,10 @@ use hex;
 use http::StatusCode;
 use hyper::Response;
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use tracing::warn;
 
-/// Verify SigV4 signature in the request.
+/// Verify `SigV4` signature in the request.
 #[allow(clippy::result_large_err)]
 pub(crate) fn verify_sigv4_signature(
     req: &dyn crate::auth::HttpRequestLike,
@@ -18,9 +19,8 @@ pub(crate) fn verify_sigv4_signature(
         return Ok(true);
     }
 
-    let auth_header = match req.header("authorization") {
-        Some(h) => h,
-        None => return Ok(true),
+    let Some(auth_header) = req.header("authorization") else {
+        return Ok(true);
     };
 
     if !auth_header.starts_with("AWS4-HMAC-SHA256") {
@@ -41,16 +41,13 @@ pub(crate) fn verify_sigv4_signature(
         }
     };
 
-    let signature = match extract_sigv4_signature(auth_header) {
-        Some(sig) => sig,
-        None => {
-            return Err(xml_error_response(
-                StatusCode::BAD_REQUEST,
-                "InvalidRequest",
-                "Missing signature in authorization header",
-                &req_id,
-            ));
-        }
+    let Some(signature) = extract_sigv4_signature(auth_header) else {
+        return Err(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "Missing signature in authorization header",
+            &req_id,
+        ));
     };
 
     let signed_headers = match extract_signed_headers(auth_header) {
@@ -65,32 +62,23 @@ pub(crate) fn verify_sigv4_signature(
         }
     };
 
-    let credential_scope = match extract_credential_scope(auth_header) {
-        Some(scope) => scope,
-        None => {
-            return Err(xml_error_response(
-                StatusCode::BAD_REQUEST,
-                "InvalidRequest",
-                "Missing credential in authorization header",
-                &req_id,
-            ));
-        }
+    let Some(credential_scope) = extract_credential_scope(auth_header) else {
+        return Err(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "Missing credential in authorization header",
+            &req_id,
+        ));
     };
 
-    let secret_key = match auth_config.secret_key() {
-        Some(key) => key,
-        None => {
-            warn!("SigV4 signature verification requested but no secret key configured");
-            return Ok(true);
-        }
+    let Some(secret_key) = auth_config.secret_key() else {
+        warn!("SigV4 signature verification requested but no secret key configured");
+        return Ok(true);
     };
 
-    let access_key = match auth_config.access_key() {
-        Some(key) => key,
-        None => {
-            warn!("SigV4 signature verification requested but no access key configured");
-            return Ok(true);
-        }
+    let Some(access_key) = auth_config.access_key() else {
+        warn!("SigV4 signature verification requested but no access key configured");
+        return Ok(true);
     };
 
     let canonical_request = build_canonical_request(req, &signed_headers);
@@ -120,7 +108,7 @@ pub(crate) fn verify_sigv4_signature(
     Ok(true)
 }
 
-/// Extract signature from SigV4 Authorization header.
+/// Extract signature from `SigV4` Authorization header.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn extract_sigv4_signature(auth_header: &str) -> Option<String> {
     for part in auth_header.split(',') {
@@ -132,7 +120,7 @@ pub(crate) fn extract_sigv4_signature(auth_header: &str) -> Option<String> {
     None
 }
 
-/// Extract credential scope from SigV4 Authorization header.
+/// Extract credential scope from `SigV4` Authorization header.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn extract_credential_scope(auth_header: &str) -> Option<String> {
     for part in auth_header.split(',') {
@@ -148,7 +136,7 @@ pub(crate) fn extract_credential_scope(auth_header: &str) -> Option<String> {
     None
 }
 
-/// Extract the SignedHeaders list from SigV4 Authorization header.
+/// Extract the `SignedHeaders` list from `SigV4` Authorization header.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn extract_signed_headers(auth_header: &str) -> Option<Vec<String>> {
     for part in auth_header.split(',') {
@@ -182,7 +170,7 @@ fn uri_encode(value: &str, encode_slash: bool) -> String {
         if should_keep {
             out.push(ch);
         } else {
-            out.push_str(&format!("%{:02X}", byte));
+            let _ = write!(out, "%{byte:02X}");
         }
     }
     out
@@ -207,11 +195,9 @@ fn canonical_query_string(query: Option<&str>) -> String {
         .map(|part| {
             let (raw_key, raw_value) = part.split_once('=').unwrap_or((part, ""));
             let key = urlencoding::decode(raw_key)
-                .map(|decoded| decoded.into_owned())
-                .unwrap_or_else(|_| raw_key.to_string());
+                .map_or_else(|_| raw_key.to_string(), std::borrow::Cow::into_owned);
             let value = urlencoding::decode(raw_value)
-                .map(|decoded| decoded.into_owned())
-                .unwrap_or_else(|_| raw_value.to_string());
+                .map_or_else(|_| raw_value.to_string(), std::borrow::Cow::into_owned);
             (uri_encode(&key, true), uri_encode(&value, true))
         })
         .collect();
@@ -220,12 +206,12 @@ fn canonical_query_string(query: Option<&str>) -> String {
 
     params
         .into_iter()
-        .map(|(key, value)| format!("{}={}", key, value))
+        .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>()
         .join("&")
 }
 
-/// Build canonical request for SigV4 verification using the same rules as the TS SDK signer.
+/// Build canonical request for `SigV4` verification using the same rules as the TS SDK signer.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn build_canonical_request(
     req: &dyn crate::auth::HttpRequestLike,
@@ -240,7 +226,7 @@ pub(crate) fn build_canonical_request(
         .map(|name| {
             let value = req.header(name).unwrap_or("");
             let normalized_value = value.split_whitespace().collect::<Vec<_>>().join(" ");
-            format!("{}:{}", name, normalized_value)
+            format!("{name}:{normalized_value}")
         })
         .collect();
 
@@ -256,16 +242,9 @@ pub(crate) fn build_canonical_request(
     let payload_hash = req
         .header("x-amz-content-sha256")
         .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| sha256_hex(req.body()));
+        .map_or_else(|| sha256_hex(req.body()), std::string::ToString::to_string);
 
     format!(
-        "{}\n{}\n{}\n{}\n\n{}\n{}",
-        method,
-        canonical_uri,
-        canonical_query,
-        canonical_headers_str,
-        signed_headers_str,
-        payload_hash
+        "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers_str}\n\n{signed_headers_str}\n{payload_hash}"
     )
 }

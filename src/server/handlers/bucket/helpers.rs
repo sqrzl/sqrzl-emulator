@@ -18,7 +18,7 @@ pub(super) fn escape_xml_str(input: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-        .replace("'", "&apos;")
+        .replace('\'', "&apos;")
 }
 
 pub(super) fn parse_delete_keys(xml: &str) -> Vec<(String, Option<String>)> {
@@ -60,8 +60,7 @@ pub(super) fn parse_delete_keys(xml: &str) -> Vec<(String, Option<String>)> {
                 }
                 _ => {}
             },
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
         buf.clear();
@@ -108,8 +107,7 @@ pub(super) fn metadata_value(xml: &str, tag: &[u8]) -> Option<String> {
                 let decoded = t.decode().unwrap_or_default();
                 return Some(unescape(&decoded).unwrap_or_default().to_string());
             }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
         buf.clear();
@@ -144,9 +142,9 @@ pub(super) fn parse_multipart_form_upload(
 ) -> Option<(String, Vec<u8>, String)> {
     let boundary = content_type
         .split(';')
-        .map(|part| part.trim())
+        .map(str::trim)
         .find_map(|part| part.strip_prefix("boundary="))?;
-    let boundary_marker = format!("--{}", boundary);
+    let boundary_marker = format!("--{boundary}");
     let boundary_bytes = boundary_marker.as_bytes();
 
     let mut key: Option<String> = None;
@@ -173,7 +171,7 @@ pub(super) fn parse_multipart_form_upload(
         for header in raw_headers.split("\r\n") {
             let lower = header.to_ascii_lowercase();
             if lower.starts_with("content-disposition:") {
-                for token in header.split(';').skip(1).map(|token| token.trim()) {
+                for token in header.split(';').skip(1).map(str::trim) {
                     if let Some(name) = token.strip_prefix("name=\"") {
                         field_name = Some(name.trim_end_matches('"').to_string());
                     } else if let Some(name) = token.strip_prefix("filename=\"") {
@@ -181,10 +179,10 @@ pub(super) fn parse_multipart_form_upload(
                     }
                 }
             } else if lower.starts_with("content-type:") {
-                file_content_type = header
-                    .split_once(':')
-                    .map(|(_, value)| value.trim().to_string())
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                file_content_type = header.split_once(':').map_or_else(
+                    || "application/octet-stream".to_string(),
+                    |(_, value)| value.trim().to_string(),
+                );
             }
         }
 

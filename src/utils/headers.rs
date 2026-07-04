@@ -4,22 +4,26 @@ use md5;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Compute MD5 hash (ETag) of data
+/// Compute MD5 hash (`ETag`) of data
+#[must_use]
 pub fn compute_etag(data: &[u8]) -> String {
     format!("{:x}", md5::compute(data))
 }
 
 /// Generate unique request ID
+#[must_use]
 pub fn generate_request_id() -> String {
     Uuid::new_v4().to_string()
 }
 
 /// Format a timestamp as RFC2822 (Last-Modified)
+#[must_use]
 pub fn format_last_modified_at(last_modified: &DateTime<Utc>) -> String {
     last_modified.to_rfc2822()
 }
 
 /// Format current time as RFC2822 (Last-Modified)
+#[must_use]
 pub fn format_last_modified() -> String {
     format_last_modified_at(&Utc::now())
 }

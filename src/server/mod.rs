@@ -16,6 +16,10 @@ mod http;
 pub(crate) use handlers::handle_request as handle_s3_request;
 pub use http::{Request as RequestExt, RequestParseError, ResponseBuilder, RouteMatch, Router};
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub async fn serve_h1_connection<S>(
     stream: tokio::net::TcpStream,
     service: S,
@@ -58,6 +62,10 @@ impl Server {
         }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub async fn start(self) -> crate::error::Result<()> {
         let storage = self.storage.clone();
         let auth_config = self.auth_config.clone();
@@ -165,7 +173,7 @@ mod adapter_routing_tests {
             enforce_auth: false,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,

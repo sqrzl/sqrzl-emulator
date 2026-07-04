@@ -6,6 +6,7 @@ use crate::storage::{
 };
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -28,7 +29,7 @@ impl BucketStore for FilesystemStorage {
         }
 
         fs::create_dir(&bucket_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to create bucket: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to create bucket: {e}")))?;
 
         // Update index
         self.index.get_or_create_bucket(name);
@@ -45,18 +46,18 @@ impl BucketStore for FilesystemStorage {
 
         // Check if bucket is empty
         let entries = fs::read_dir(&bucket_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to read bucket: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read bucket: {e}")))?;
 
         for entry in entries {
             let entry = entry
-                .map_err(|e| Error::InternalError(format!("Failed to read bucket entry: {}", e)))?;
-            if !self.is_bucket_control_entry(name, &entry) {
+                .map_err(|e| Error::InternalError(format!("Failed to read bucket entry: {e}")))?;
+            if !Self::is_bucket_control_entry(&entry) {
                 return Err(Error::BucketNotEmpty);
             }
         }
 
         fs::remove_dir_all(&bucket_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to delete bucket: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to delete bucket: {e}")))?;
 
         // Update index
         self.index.clear_bucket(name);
@@ -80,15 +81,15 @@ impl BucketStore for FilesystemStorage {
     fn list_buckets(&self) -> Result<Vec<Bucket>> {
         let mut buckets = Vec::new();
         let entries = fs::read_dir(&self.base_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read base path: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read base path: {e}")))?;
 
         for entry in entries {
             let entry =
-                entry.map_err(|e| Error::InternalError(format!("Failed to read entry: {}", e)))?;
+                entry.map_err(|e| Error::InternalError(format!("Failed to read entry: {e}")))?;
 
             let metadata = entry
                 .metadata()
-                .map_err(|e| Error::InternalError(format!("Failed to get metadata: {}", e)))?;
+                .map_err(|e| Error::InternalError(format!("Failed to get metadata: {e}")))?;
 
             if metadata.is_dir() {
                 let name = entry.file_name();
@@ -170,7 +171,7 @@ impl ObjectStore for FilesystemStorage {
         self.write_object_files(bucket, &object_id, &object)?;
 
         // Update index
-        self.index.insert(bucket.to_string(), key);
+        self.index.insert(bucket, &key);
 
         Ok(())
     }
@@ -184,9 +185,9 @@ impl ObjectStore for FilesystemStorage {
         }
 
         let metadata_path = self.object_metadata_path(bucket, &object_id);
-        let mut object = self.read_object_metadata(&metadata_path)?;
+        let mut object = Self::read_object_metadata(&metadata_path)?;
         object.data = fs::read(&object_data_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read object: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read object: {e}")))?;
         Ok(object)
     }
 
@@ -206,7 +207,7 @@ impl ObjectStore for FilesystemStorage {
 
         let metadata_path = self.object_metadata_path(bucket, &object_id);
 
-        let object = self.read_object_metadata(&metadata_path)?;
+        let object = Self::read_object_metadata(&metadata_path)?;
 
         // Validate range
         if start >= object.size {
@@ -215,28 +216,26 @@ impl ObjectStore for FilesystemStorage {
             ));
         }
 
-        let actual_end = end
-            .map(|e| e.min(object.size - 1))
-            .unwrap_or(object.size - 1);
+        let actual_end = end.map_or(object.size - 1, |e| e.min(object.size - 1));
         if actual_end < start {
             return Err(Error::InternalError(
                 "Invalid range: end < start".to_string(),
             ));
         }
 
-        let length = (actual_end - start + 1) as usize;
+        let length = usize::try_from(actual_end - start + 1)
+            .map_err(|_| Error::InternalError("Requested range is too large".to_string()))?;
 
         // Read range from file
-        use std::io::{Read, Seek, SeekFrom};
         let mut file = fs::File::open(&object_data_path)
-            .map_err(|e| Error::InternalError(format!("Failed to open object file: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to open object file: {e}")))?;
 
         file.seek(SeekFrom::Start(start))
-            .map_err(|e| Error::InternalError(format!("Failed to seek: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to seek: {e}")))?;
 
         let mut buffer = vec![0u8; length];
         file.read_exact(&mut buffer)
-            .map_err(|e| Error::InternalError(format!("Failed to read range: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read range: {e}")))?;
 
         Ok((object, buffer))
     }
@@ -257,12 +256,12 @@ impl ObjectStore for FilesystemStorage {
 
             if object_data_path.exists() {
                 fs::remove_file(&object_data_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {}", e)))?;
+                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
             }
 
             if metadata_path.exists() {
                 fs::remove_file(&metadata_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {}", e)))?;
+                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
             }
 
             if !self.version_entries_exist(bucket, &object_id)? {
@@ -271,7 +270,7 @@ impl ObjectStore for FilesystemStorage {
         } else {
             // Remove entire object_id directory
             fs::remove_dir_all(&object_id_dir)
-                .map_err(|e| Error::InternalError(format!("Failed to delete object: {}", e)))?;
+                .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
         }
 
         // Update index
@@ -297,11 +296,11 @@ impl ObjectStore for FilesystemStorage {
             return Err(Error::KeyNotFound);
         }
 
-        let mut object = self.read_object_metadata(&metadata_path)?;
+        let mut object = Self::read_object_metadata(&metadata_path)?;
 
         object.storage_class = storage_class.to_string();
 
-        self.write_object_metadata(&metadata_path, &object)
+        Self::write_object_metadata(&metadata_path, &object)
     }
 
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool> {
@@ -322,9 +321,9 @@ impl AclStore for FilesystemStorage {
         }
 
         let json = fs::read(&path)
-            .map_err(|e| Error::InternalError(format!("Failed to read bucket ACL: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read bucket ACL: {e}")))?;
         serde_json::from_slice(&json)
-            .map_err(|e| Error::InternalError(format!("Failed to parse bucket ACL: {}", e)))
+            .map_err(|e| Error::InternalError(format!("Failed to parse bucket ACL: {e}")))
     }
 
     fn put_bucket_acl(&self, bucket: &str, acl: Acl) -> Result<()> {
@@ -334,7 +333,7 @@ impl AclStore for FilesystemStorage {
 
         let path = self.bucket_acl_path(bucket);
         let json = serde_json::to_vec(&acl)
-            .map_err(|e| Error::InternalError(format!("Failed to serialize bucket ACL: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to serialize bucket ACL: {e}")))?;
         Self::atomic_write(&path, &json)
     }
 
@@ -346,7 +345,7 @@ impl AclStore for FilesystemStorage {
             return Err(Error::KeyNotFound);
         }
 
-        let object = self.read_object_metadata(&metadata_path)?;
+        let object = Self::read_object_metadata(&metadata_path)?;
 
         Ok(object.acl.unwrap_or_default())
     }
@@ -363,11 +362,11 @@ impl AclStore for FilesystemStorage {
             return Err(Error::KeyNotFound);
         }
 
-        let mut object = self.read_object_metadata(&metadata_path)?;
+        let mut object = Self::read_object_metadata(&metadata_path)?;
 
         object.acl = Some(acl);
 
-        self.write_object_metadata(&metadata_path, &object)
+        Self::write_object_metadata(&metadata_path, &object)
     }
 }
 
@@ -387,9 +386,9 @@ impl LifecycleStore for FilesystemStorage {
         }
 
         let json = fs::read(&lifecycle_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read lifecycle config: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read lifecycle config: {e}")))?;
         serde_json::from_slice(&json)
-            .map_err(|e| Error::InternalError(format!("Failed to parse lifecycle config: {}", e)))
+            .map_err(|e| Error::InternalError(format!("Failed to parse lifecycle config: {e}")))
     }
 
     fn put_bucket_lifecycle(
@@ -404,7 +403,7 @@ impl LifecycleStore for FilesystemStorage {
 
         let lifecycle_path = bucket_path.join(".lifecycle.json");
         let json = serde_json::to_vec(&config).map_err(|e| {
-            Error::InternalError(format!("Failed to serialize lifecycle config: {}", e))
+            Error::InternalError(format!("Failed to serialize lifecycle config: {e}"))
         })?;
         Self::atomic_write(&lifecycle_path, &json)
     }
@@ -418,7 +417,7 @@ impl LifecycleStore for FilesystemStorage {
         let lifecycle_path = bucket_path.join(".lifecycle.json");
         if lifecycle_path.exists() {
             fs::remove_file(&lifecycle_path).map_err(|e| {
-                Error::InternalError(format!("Failed to delete lifecycle config: {}", e))
+                Error::InternalError(format!("Failed to delete lifecycle config: {e}"))
             })?;
         }
         Ok(())
@@ -441,10 +440,10 @@ impl PolicyStore for FilesystemStorage {
         }
 
         let policy_json = fs::read(&policy_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read policy: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read policy: {e}")))?;
 
         serde_json::from_slice(&policy_json)
-            .map_err(|e| Error::InternalError(format!("Failed to parse policy: {}", e)))
+            .map_err(|e| Error::InternalError(format!("Failed to parse policy: {e}")))
     }
 
     fn put_bucket_policy(
@@ -459,7 +458,7 @@ impl PolicyStore for FilesystemStorage {
 
         let policy_path = bucket_path.join(".policy.json");
         let policy_json = serde_json::to_vec(&policy)
-            .map_err(|e| Error::InternalError(format!("Failed to serialize policy: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to serialize policy: {e}")))?;
 
         Self::atomic_write(&policy_path, &policy_json)
     }
@@ -473,7 +472,7 @@ impl PolicyStore for FilesystemStorage {
         let policy_path = bucket_path.join(".policy.json");
         if policy_path.exists() {
             fs::remove_file(&policy_path)
-                .map_err(|e| Error::InternalError(format!("Failed to delete policy: {}", e)))?;
+                .map_err(|e| Error::InternalError(format!("Failed to delete policy: {e}")))?;
         }
         Ok(())
     }
@@ -492,14 +491,14 @@ impl ProviderStateStore for FilesystemStorage {
         }
 
         fs::read(&path)
-            .map_err(|e| Error::InternalError(format!("Failed to read provider state: {}", e)))
+            .map_err(|e| Error::InternalError(format!("Failed to read provider state: {e}")))
     }
 
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()> {
         let path = self.provider_state_path(provider, key);
         if path.exists() {
             fs::remove_file(path).map_err(|e| {
-                Error::InternalError(format!("Failed to delete provider state: {}", e))
+                Error::InternalError(format!("Failed to delete provider state: {e}"))
             })?;
         }
         Ok(())
@@ -515,7 +514,7 @@ impl TagStore for FilesystemStorage {
             return Err(Error::KeyNotFound);
         }
 
-        Ok(self.read_object_metadata(&metadata_path)?.tags)
+        Ok(Self::read_object_metadata(&metadata_path)?.tags)
     }
 
     fn put_object_tags(
@@ -535,11 +534,11 @@ impl TagStore for FilesystemStorage {
             return Err(Error::KeyNotFound);
         }
 
-        let mut object = self.read_object_metadata(&metadata_path)?;
+        let mut object = Self::read_object_metadata(&metadata_path)?;
 
         object.tags = tags;
 
-        self.write_object_metadata(&metadata_path, &object)?;
+        Self::write_object_metadata(&metadata_path, &object)?;
 
         Ok(())
     }
@@ -556,12 +555,12 @@ impl TagStore for FilesystemStorage {
             return Err(Error::KeyNotFound);
         }
 
-        let mut object = self.read_object_metadata(&metadata_path)?;
+        let mut object = Self::read_object_metadata(&metadata_path)?;
 
         // Clear all tags
         object.tags.clear();
 
-        self.write_object_metadata(&metadata_path, &object)?;
+        Self::write_object_metadata(&metadata_path, &object)?;
 
         Ok(())
     }
@@ -610,7 +609,7 @@ impl ObjectListingStore for FilesystemStorage {
                     DirectoryEntryKind::Object => {
                         let object_id = Self::compute_object_id(bucket, &entry.path);
                         let metadata_path = self.object_metadata_path(bucket, &object_id);
-                        if let Ok(obj) = self.read_object_metadata(&metadata_path) {
+                        if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
                             objects.push(obj);
                         }
                     }
@@ -634,7 +633,7 @@ impl ObjectListingStore for FilesystemStorage {
         for obj_key in &page_keys {
             let object_id = Self::compute_object_id(bucket, obj_key);
             let metadata_path = self.object_metadata_path(bucket, &object_id);
-            if let Ok(obj) = self.read_object_metadata(&metadata_path) {
+            if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
                 objects.push(obj);
             }
         }
@@ -685,7 +684,7 @@ impl MultipartStore for FilesystemStorage {
         let upload = MultipartUpload::new(key, content_type, metadata, provider_metadata);
         let upload_dir = self.multipart_dir(bucket, &upload.upload_id);
         fs::create_dir_all(&upload_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to create multipart dir: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to create multipart dir: {e}")))?;
         self.ensure_uploads_cache_loaded(bucket)?;
         self.write_upload_record(bucket, &upload)?;
         let mut cache = self
@@ -815,15 +814,19 @@ impl MultipartStore for FilesystemStorage {
 
         // Validate parts are sequential starting from 1
         for (i, part) in parts.iter().enumerate() {
-            if part.part_number != (i as u32 + 1) {
+            let expected_part = u32::try_from(i + 1).map_err(|_| Error::InvalidPartOrder)?;
+            if part.part_number != expected_part {
                 return Err(Error::InvalidPartOrder);
             }
         }
 
         // Read all parts and concatenate
-        let total_size = parts
-            .iter()
-            .fold(0usize, |acc, part| acc.saturating_add(part.size as usize));
+        let total_size = parts.iter().try_fold(0usize, |acc, part| {
+            let part_size = usize::try_from(part.size).map_err(|_| {
+                Error::InternalError("Multipart object is too large for this platform".to_string())
+            })?;
+            Ok(acc.saturating_add(part_size))
+        })?;
         let mut object_data = Vec::with_capacity(total_size);
         for part in &parts {
             if let Some(part_data) = part_data.get(&part.part_number) {
@@ -831,7 +834,7 @@ impl MultipartStore for FilesystemStorage {
             } else {
                 let part_path = self.part_path(bucket, upload_id, part.part_number);
                 let part_data = fs::read(&part_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to read part: {}", e)))?;
+                    .map_err(|e| Error::InternalError(format!("Failed to read part: {e}")))?;
                 object_data.extend_from_slice(&part_data);
             }
         }
@@ -852,7 +855,7 @@ impl MultipartStore for FilesystemStorage {
             final_etag.clone(),
         );
         if let Some(storage_class) = provider_metadata.get("storage_class") {
-            obj.storage_class = storage_class.clone();
+            obj.storage_class.clone_from(storage_class);
         }
         self.put_object(bucket, key, obj)?;
         self.remove_upload_record(bucket, upload_id)?;
@@ -931,9 +934,9 @@ impl VersionStore for FilesystemStorage {
         }
 
         let metadata_path = self.version_metadata_path(bucket, &object_id, version_id);
-        let mut object = self.read_object_metadata(&metadata_path)?;
+        let mut object = Self::read_object_metadata(&metadata_path)?;
         object.data = fs::read(&version_data_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read version: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to read version: {e}")))?;
 
         object.version_id = Some(version_id.to_string());
 
@@ -960,13 +963,13 @@ impl VersionStore for FilesystemStorage {
                 if path.is_dir() {
                     // Skip special directories
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with(".") {
+                        if name.starts_with('.') {
                             continue;
                         }
                     }
 
                     let metadata_path = path.join("object.meta.json");
-                    if let Ok(obj) = self.read_object_metadata(&metadata_path) {
+                    if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
                         if obj.key.starts_with(prefix) && obj.version_id.is_some() {
                             versions.push(obj);
                         }
@@ -985,7 +988,8 @@ impl VersionStore for FilesystemStorage {
                                     {
                                         // Read version metadata to get the key and check prefix
                                         let metadata_path = version_path.join("object.meta.json");
-                                        if let Ok(obj) = self.read_object_metadata(&metadata_path) {
+                                        if let Ok(obj) = Self::read_object_metadata(&metadata_path)
+                                        {
                                             if obj.key.starts_with(prefix) {
                                                 versions.push(obj);
                                             }
@@ -1027,7 +1031,7 @@ impl VersionStore for FilesystemStorage {
 
         let mut versions = Vec::new();
         let metadata_path = self.object_metadata_path(bucket, &object_id);
-        if let Ok(obj) = self.read_object_metadata(&metadata_path) {
+        if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
             if obj.key == key && obj.version_id.is_some() {
                 versions.push(obj);
             }
@@ -1042,7 +1046,7 @@ impl VersionStore for FilesystemStorage {
                 }
 
                 let metadata_path = version_path.join("object.meta.json");
-                if let Ok(obj) = self.read_object_metadata(&metadata_path) {
+                if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
                     if obj.key == key {
                         versions.push(obj);
                     }
@@ -1079,15 +1083,13 @@ impl VersionStore for FilesystemStorage {
             let metadata_path = self.object_metadata_path(bucket, &object_id);
 
             if object_data_path.exists() {
-                fs::remove_file(&object_data_path).map_err(|e| {
-                    Error::InternalError(format!("Failed to delete version: {}", e))
-                })?;
+                fs::remove_file(&object_data_path)
+                    .map_err(|e| Error::InternalError(format!("Failed to delete version: {e}")))?;
             }
 
             if metadata_path.exists() {
-                fs::remove_file(&metadata_path).map_err(|e| {
-                    Error::InternalError(format!("Failed to delete version: {}", e))
-                })?;
+                fs::remove_file(&metadata_path)
+                    .map_err(|e| Error::InternalError(format!("Failed to delete version: {e}")))?;
             }
 
             self.index.remove(bucket, key);
@@ -1102,7 +1104,7 @@ impl VersionStore for FilesystemStorage {
 
         let version_dir = self.version_dir(bucket, &object_id, version_id);
         fs::remove_dir_all(&version_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to delete version: {}", e)))?;
+            .map_err(|e| Error::InternalError(format!("Failed to delete version: {e}")))?;
 
         if !self.object_data_path(bucket, &object_id).exists()
             && !self.version_entries_exist(bucket, &object_id)?

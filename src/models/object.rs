@@ -24,10 +24,12 @@ pub struct Object {
 }
 
 impl Object {
+    #[must_use]
     pub fn new(key: String, data: Vec<u8>, content_type: String) -> Self {
         Self::new_with_metadata(key, data, content_type, HashMap::new())
     }
 
+    #[must_use]
     pub fn new_with_metadata(
         key: String,
         data: Vec<u8>,
@@ -38,6 +40,7 @@ impl Object {
         Self::new_with_metadata_and_etag(key, data, content_type, metadata, etag)
     }
 
+    #[must_use]
     pub fn new_with_metadata_and_etag(
         key: String,
         data: Vec<u8>,
@@ -64,7 +67,8 @@ impl Object {
     }
 }
 
-/// Compute S3-compatible ETag (MD5 for single-part objects)
+/// Compute S3-compatible `ETag` (MD5 for single-part objects)
+#[must_use]
 pub fn compute_etag(data: &[u8]) -> String {
     crate::utils::headers::compute_etag(data)
 }

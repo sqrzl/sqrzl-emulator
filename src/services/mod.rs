@@ -10,6 +10,7 @@ use serde::Serialize;
 pub mod bucket;
 pub mod object;
 
+#[must_use]
 pub fn xml_error_response(
     status: StatusCode,
     error_code: &str,
@@ -25,6 +26,7 @@ pub fn xml_error_response(
         .build()
 }
 
+#[must_use]
 pub fn xml_success_response(status: StatusCode, xml: String, req_id: &str) -> Response<Body> {
     ResponseBuilder::new(status)
         .content_type("application/xml; charset=utf-8")
@@ -34,6 +36,7 @@ pub fn xml_success_response(status: StatusCode, xml: String, req_id: &str) -> Re
         .build()
 }
 
+#[must_use]
 pub fn empty_success_response(status: StatusCode, req_id: &str) -> Response<Body> {
     ResponseBuilder::new(status)
         .header("x-amz-request-id", req_id)
@@ -41,6 +44,7 @@ pub fn empty_success_response(status: StatusCode, req_id: &str) -> Response<Body
         .empty()
 }
 
+#[must_use]
 pub fn storage_error_response(error: &Error, req_id: &str) -> Response<Body> {
     xml_error_response(
         error.status_code(),
@@ -65,6 +69,7 @@ pub fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response<Bod
     }
 }
 
+#[must_use]
 pub fn json_error_response(err: &Error) -> Response<Body> {
     #[derive(Serialize)]
     struct ApiError<'a> {

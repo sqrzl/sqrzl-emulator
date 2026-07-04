@@ -1,4 +1,7 @@
-use super::helpers::*;
+use super::helpers::{
+    bucket_get_action, build_list_objects_v2_entries, list_objects_v2_start_index, S3_CORS_XML_KEY,
+    S3_REQUEST_PAYMENT_KEY, S3_WEBSITE_XML_KEY,
+};
 use super::{
     bucket_service, check_authorization, cors, header_utils, object_service, xml_error_response,
     xml_utils, AuthConfig, Body, ResponseBuilder, Storage,
@@ -41,10 +44,10 @@ pub async fn bucket_get_or_list_objects(
     }
 
     if req.query_param("list-type") == Some("2") {
-        return Ok(list_objects_v2(storage, bucket, req, &req_id));
+        return Ok(list_objects_v2(&storage, bucket, req, &req_id));
     }
 
-    Ok(list_objects_v1(storage, bucket, req, &req_id))
+    Ok(list_objects_v1(&storage, bucket, req, &req_id))
 }
 
 fn bucket_subresource_response(
@@ -119,8 +122,7 @@ fn get_request_payment(
             let payer = bucket_record
                 .metadata
                 .get(S3_REQUEST_PAYMENT_KEY)
-                .map(|value| value.as_str())
-                .unwrap_or("BucketOwner");
+                .map_or("BucketOwner", std::string::String::as_str);
             let xml = format!(
                 "{}\n<RequestPaymentConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n  <Payer>{}</Payer>\n</RequestPaymentConfiguration>",
                 xml_utils::xml_declaration(),
@@ -198,7 +200,7 @@ fn get_policy(
     }) {
         Ok(policy) => {
             let json = serde_json::to_string(&policy)
-                .map_err(|error| format!("JSON serialization error: {}", error))?;
+                .map_err(|error| format!("JSON serialization error: {error}"))?;
             Ok(bucket_body_response(
                 storage.as_ref(),
                 bucket,
@@ -357,7 +359,7 @@ fn list_object_versions(
 }
 
 fn list_objects_v2(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
@@ -414,7 +416,7 @@ fn list_objects_v2(
 }
 
 fn list_objects_v1(
-    storage: Arc<dyn Storage>,
+    storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
@@ -439,7 +441,7 @@ fn list_objects_v1(
         Ok(mut result) => {
             result.objects.retain(|object| {
                 !tokio::task::block_in_place(|| {
-                    crate::lifecycle::check_object_expiration(&storage, bucket, &object.key)
+                    crate::lifecycle::check_object_expiration(storage, bucket, &object.key)
                 })
                 .unwrap_or(false)
             });
@@ -479,10 +481,14 @@ fn next_continuation_token<'a>(
     }
 
     if page_end > start_index {
-        return page_entries.last().map(|entry| entry.token());
+        return page_entries
+            .last()
+            .map(crate::utils::xml::ListObjectsV2Entry::token);
     }
 
-    entries.get(start_index).map(|entry| entry.token())
+    entries
+        .get(start_index)
+        .map(crate::utils::xml::ListObjectsV2Entry::token)
 }
 
 fn bucket_xml_response(

@@ -60,29 +60,29 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
+    #[must_use]
     pub fn status_code(&self) -> http::StatusCode {
         match self {
-            Error::BucketAlreadyExists => http::StatusCode::CONFLICT,
-            Error::BucketNotFound => http::StatusCode::NOT_FOUND,
-            Error::BucketNotEmpty => http::StatusCode::CONFLICT,
-            Error::KeyNotFound => http::StatusCode::NOT_FOUND,
-            Error::InvalidRequest(_) => http::StatusCode::BAD_REQUEST,
+            Error::BucketAlreadyExists | Error::BucketNotEmpty => http::StatusCode::CONFLICT,
+            Error::BucketNotFound
+            | Error::KeyNotFound
+            | Error::RouteNotFound(_)
+            | Error::InvalidUploadId
+            | Error::NoSuchUpload
+            | Error::NoSuchVersion
+            | Error::NoSuchLifecycleConfiguration => http::StatusCode::NOT_FOUND,
+            Error::InvalidRequest(_)
+            | Error::InvalidPartNumber
+            | Error::InvalidPartOrder
+            | Error::IncompleteMultipartUpload
+            | Error::InvalidPolicy(_) => http::StatusCode::BAD_REQUEST,
             Error::MethodNotAllowed(_) => http::StatusCode::METHOD_NOT_ALLOWED,
-            Error::RouteNotFound(_) => http::StatusCode::NOT_FOUND,
-            Error::AccessDenied => http::StatusCode::FORBIDDEN,
-            Error::InvalidUploadId => http::StatusCode::NOT_FOUND,
-            Error::NoSuchUpload => http::StatusCode::NOT_FOUND,
-            Error::InvalidPartNumber => http::StatusCode::BAD_REQUEST,
-            Error::InvalidPartOrder => http::StatusCode::BAD_REQUEST,
-            Error::IncompleteMultipartUpload => http::StatusCode::BAD_REQUEST,
-            Error::NoSuchVersion => http::StatusCode::NOT_FOUND,
-            Error::NoSuchLifecycleConfiguration => http::StatusCode::NOT_FOUND,
-            Error::InvalidPolicy(_) => http::StatusCode::BAD_REQUEST,
-            Error::SignatureDoesNotMatch => http::StatusCode::FORBIDDEN,
+            Error::AccessDenied | Error::SignatureDoesNotMatch => http::StatusCode::FORBIDDEN,
             Error::InternalError(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
+    #[must_use]
     pub fn error_code(&self) -> &'static str {
         match self {
             Error::BucketAlreadyExists => "BucketAlreadyExists",
@@ -93,8 +93,7 @@ impl Error {
             Error::MethodNotAllowed(_) => "MethodNotAllowed",
             Error::RouteNotFound(_) => "NotFound",
             Error::AccessDenied => "AccessDenied",
-            Error::InvalidUploadId => "NoSuchUpload",
-            Error::NoSuchUpload => "NoSuchUpload",
+            Error::InvalidUploadId | Error::NoSuchUpload => "NoSuchUpload",
             Error::InvalidPartNumber => "InvalidPartNumber",
             Error::InvalidPartOrder => "InvalidPartOrder",
             Error::IncompleteMultipartUpload => "IncompleteMultipartUpload",

@@ -65,7 +65,7 @@ fn bench_put_object(c: &mut Criterion) {
             let response = runtime.block_on(server.request(request));
             assert_eq!(response.status(), StatusCode::OK);
             black_box(response.headers().get("etag").cloned());
-        })
+        });
     });
     group.finish();
 }
@@ -107,7 +107,7 @@ fn bench_get_object(c: &mut Criterion) {
                 black_box(body);
             },
             BatchSize::SmallInput,
-        )
+        );
     });
     group.finish();
 }

@@ -1,3 +1,7 @@
+use crate::models::lifecycle::{
+    Expiration, Filter, LifecycleConfiguration, NoncurrentVersionExpiration, Rule, Status,
+    StorageClass, Tag, Transition,
+};
 use crate::models::policy::{Grant, Grantee, Permission};
 use crate::models::{Acl, CannedAcl};
 use quick_xml::escape::unescape;
@@ -5,6 +9,10 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn parse_versioning_xml(body: &str) -> Result<bool, String> {
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(true);
@@ -28,7 +36,7 @@ pub fn parse_versioning_xml(body: &str) -> Result<bool, String> {
                 enabled = text == "Enabled";
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error: {}", e)),
+            Err(e) => return Err(format!("XML parse error: {e}")),
             _ => {}
         }
         buf.clear();
@@ -37,6 +45,10 @@ pub fn parse_versioning_xml(body: &str) -> Result<bool, String> {
     Ok(enabled)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn parse_tagging_xml(body: &str) -> Result<HashMap<String, String>, String> {
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(true);
@@ -84,7 +96,7 @@ pub fn parse_tagging_xml(body: &str) -> Result<HashMap<String, String>, String> 
         return Err("TooManyTags".to_string());
     }
 
-    for (k, v) in tags.iter() {
+    for (k, v) in &tags {
         if k.is_empty() {
             return Err("InvalidTagKey".to_string());
         }
@@ -99,6 +111,10 @@ pub fn parse_tagging_xml(body: &str) -> Result<HashMap<String, String>, String> 
     Ok(tags)
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(true);
@@ -168,14 +184,14 @@ pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
                             "READ_ACP" => Permission::ReadAcp,
                             "WRITE_ACP" => Permission::WriteAcp,
                             "FULL_CONTROL" => Permission::FullControl,
-                            _ => return Err(format!("Unsupported ACL permission: {}", text)),
-                        })
+                            _ => return Err(format!("Unsupported ACL permission: {text}")),
+                        });
                     }
                     _ => {}
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error: {}", e)),
+            Err(e) => return Err(format!("XML parse error: {e}")),
             _ => {}
         }
         buf.clear();
@@ -187,204 +203,261 @@ pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
     })
 }
 
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn parse_lifecycle_xml(
     body: &str,
 ) -> Result<crate::models::lifecycle::LifecycleConfiguration, String> {
-    use crate::models::lifecycle::*;
-
     let mut reader = Reader::from_str(body);
     reader.config_mut().trim_text(true);
-
-    let mut rules = Vec::new();
-    let mut current_rule: Option<Rule> = None;
-    let mut current_filter: Option<Filter> = None;
-    let mut current_expiration: Option<Expiration> = None;
-    let mut current_noncurrent_version_expiration: Option<NoncurrentVersionExpiration> = None;
-    let mut current_transition: Option<Transition> = None;
-    let mut current_tag: Option<(String, String)> = None;
-
-    let mut path_stack: Vec<String> = Vec::new();
-    let mut text_buffer = String::new();
+    let mut state = LifecycleParseState::default();
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                path_stack.push(name.clone());
-
-                match name.as_str() {
-                    "Rule" => {
-                        current_rule = Some(Rule {
-                            id: None,
-                            status: Status::Disabled,
-                            filter: None,
-                            expiration: None,
-                            noncurrent_version_expiration: None,
-                            transitions: Vec::new(),
-                        });
-                    }
-                    "Filter" => {
-                        current_filter = Some(Filter {
-                            prefix: None,
-                            tags: Vec::new(),
-                        });
-                    }
-                    "Expiration" => {
-                        current_expiration = Some(Expiration {
-                            days: None,
-                            date: None,
-                            expired_object_delete_marker: None,
-                        });
-                    }
-                    "NoncurrentVersionExpiration" => {
-                        current_noncurrent_version_expiration =
-                            Some(NoncurrentVersionExpiration { noncurrent_days: 0 });
-                    }
-                    "Transition" => {
-                        current_transition = Some(Transition {
-                            days: None,
-                            date: None,
-                            storage_class: StorageClass::Standard,
-                        });
-                    }
-                    "Tag" => {
-                        current_tag = Some((String::new(), String::new()));
-                    }
-                    _ => {}
-                }
-                text_buffer.clear();
+                state.start(&name);
             }
             Ok(Event::Text(e)) => {
                 let decoded = e.decode().unwrap_or_default();
-                text_buffer = unescape(&decoded).unwrap_or_default().to_string();
+                state.set_text(unescape(&decoded).unwrap_or_default().to_string());
             }
             Ok(Event::End(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-
-                match name.as_str() {
-                    "ID" => {
-                        if let Some(ref mut rule) = current_rule {
-                            rule.id = Some(text_buffer.clone());
-                        }
-                    }
-                    "Status" => {
-                        if let Some(ref mut rule) = current_rule {
-                            rule.status = if text_buffer == "Enabled" {
-                                Status::Enabled
-                            } else {
-                                Status::Disabled
-                            };
-                        }
-                    }
-                    "Prefix" => {
-                        if let Some(ref mut filter) = current_filter {
-                            filter.prefix = Some(text_buffer.clone());
-                        }
-                    }
-                    "Key" => {
-                        if let Some(ref mut tag) = current_tag {
-                            tag.0 = text_buffer.clone();
-                        }
-                    }
-                    "Value" => {
-                        if let Some(ref mut tag) = current_tag {
-                            tag.1 = text_buffer.clone();
-                        }
-                    }
-                    "Tag" => {
-                        if let (Some(ref mut filter), Some(tag)) =
-                            (&mut current_filter, current_tag.take())
-                        {
-                            filter.tags.push(Tag {
-                                key: tag.0,
-                                value: tag.1,
-                            });
-                        }
-                    }
-                    "Days" => {
-                        if let Ok(days) = text_buffer.parse::<u32>() {
-                            if let Some(ref mut exp) = current_expiration {
-                                exp.days = Some(days);
-                            } else if let Some(ref mut trans) = current_transition {
-                                trans.days = Some(days);
-                            }
-                        }
-                    }
-                    "NoncurrentDays" => {
-                        if let Ok(days) = text_buffer.parse::<u32>() {
-                            if let Some(ref mut noncurrent_expiration) =
-                                current_noncurrent_version_expiration
-                            {
-                                noncurrent_expiration.noncurrent_days = days;
-                            }
-                        }
-                    }
-                    "Date" => {
-                        if let Some(ref mut exp) = current_expiration {
-                            exp.date = Some(text_buffer.clone());
-                        } else if let Some(ref mut trans) = current_transition {
-                            trans.date = Some(text_buffer.clone());
-                        }
-                    }
-                    "ExpiredObjectDeleteMarker" => {
-                        if let Some(ref mut exp) = current_expiration {
-                            exp.expired_object_delete_marker = Some(text_buffer == "true");
-                        }
-                    }
-                    "StorageClass" => {
-                        if let Some(ref mut trans) = current_transition {
-                            trans.storage_class = match text_buffer.as_str() {
-                                "GLACIER" => StorageClass::Glacier,
-                                "DEEP_ARCHIVE" => StorageClass::DeepArchive,
-                                _ => StorageClass::Standard,
-                            };
-                        }
-                    }
-                    "Filter" => {
-                        if let (Some(ref mut rule), Some(filter)) =
-                            (&mut current_rule, current_filter.take())
-                        {
-                            rule.filter = Some(filter);
-                        }
-                    }
-                    "Expiration" => {
-                        if let (Some(ref mut rule), Some(exp)) =
-                            (&mut current_rule, current_expiration.take())
-                        {
-                            rule.expiration = Some(exp);
-                        }
-                    }
-                    "NoncurrentVersionExpiration" => {
-                        if let (Some(ref mut rule), Some(noncurrent_expiration)) = (
-                            &mut current_rule,
-                            current_noncurrent_version_expiration.take(),
-                        ) {
-                            rule.noncurrent_version_expiration = Some(noncurrent_expiration);
-                        }
-                    }
-                    "Transition" => {
-                        if let (Some(ref mut rule), Some(trans)) =
-                            (&mut current_rule, current_transition.take())
-                        {
-                            rule.transitions.push(trans);
-                        }
-                    }
-                    "Rule" => {
-                        if let Some(rule) = current_rule.take() {
-                            rules.push(rule);
-                        }
-                    }
-                    _ => {}
-                }
-
-                path_stack.pop();
-                text_buffer.clear();
+                state.end(&name);
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error: {}", e)),
+            Err(e) => return Err(format!("XML parse error: {e}")),
             _ => {}
         }
     }
 
-    Ok(LifecycleConfiguration { rules })
+    Ok(state.finish())
+}
+
+#[derive(Default)]
+struct LifecycleParseState {
+    rules: Vec<Rule>,
+    current_rule: Option<Rule>,
+    current_filter: Option<Filter>,
+    current_expiration: Option<Expiration>,
+    current_noncurrent_version_expiration: Option<NoncurrentVersionExpiration>,
+    current_transition: Option<Transition>,
+    current_tag: Option<(String, String)>,
+    text: String,
+}
+
+impl LifecycleParseState {
+    fn start(&mut self, name: &str) {
+        match name {
+            "Rule" => self.current_rule = Some(Self::new_rule()),
+            "Filter" => {
+                self.current_filter = Some(Filter {
+                    prefix: None,
+                    tags: Vec::new(),
+                });
+            }
+            "Expiration" => self.current_expiration = Some(Self::new_expiration()),
+            "NoncurrentVersionExpiration" => {
+                self.current_noncurrent_version_expiration =
+                    Some(NoncurrentVersionExpiration { noncurrent_days: 0 });
+            }
+            "Transition" => self.current_transition = Some(Self::new_transition()),
+            "Tag" => self.current_tag = Some((String::new(), String::new())),
+            _ => {}
+        }
+        self.text.clear();
+    }
+
+    fn set_text(&mut self, text: String) {
+        self.text = text;
+    }
+
+    fn end(&mut self, name: &str) {
+        self.end_rule_field(name);
+        self.end_filter_field(name);
+        self.end_action_field(name);
+        self.close_element(name);
+        self.text.clear();
+    }
+
+    fn finish(self) -> LifecycleConfiguration {
+        LifecycleConfiguration { rules: self.rules }
+    }
+
+    fn new_rule() -> Rule {
+        Rule {
+            id: None,
+            status: Status::Disabled,
+            filter: None,
+            expiration: None,
+            noncurrent_version_expiration: None,
+            transitions: Vec::new(),
+        }
+    }
+
+    fn new_expiration() -> Expiration {
+        Expiration {
+            days: None,
+            date: None,
+            expired_object_delete_marker: None,
+        }
+    }
+
+    fn new_transition() -> Transition {
+        Transition {
+            days: None,
+            date: None,
+            storage_class: StorageClass::Standard,
+        }
+    }
+
+    fn end_rule_field(&mut self, name: &str) {
+        if let Some(ref mut rule) = self.current_rule {
+            match name {
+                "ID" => rule.id = Some(self.text.clone()),
+                "Status" => {
+                    rule.status = if self.text == "Enabled" {
+                        Status::Enabled
+                    } else {
+                        Status::Disabled
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn end_filter_field(&mut self, name: &str) {
+        match name {
+            "Prefix" => {
+                if let Some(ref mut filter) = self.current_filter {
+                    filter.prefix = Some(self.text.clone());
+                }
+            }
+            "Key" => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.0.clone_from(&self.text);
+                }
+            }
+            "Value" => {
+                if let Some(ref mut tag) = self.current_tag {
+                    tag.1.clone_from(&self.text);
+                }
+            }
+            "Tag" => self.finish_tag(),
+            _ => {}
+        }
+    }
+
+    fn end_action_field(&mut self, name: &str) {
+        match name {
+            "Days" => self.set_days(),
+            "NoncurrentDays" => self.set_noncurrent_days(),
+            "Date" => self.set_date(),
+            "ExpiredObjectDeleteMarker" => self.set_expired_marker(),
+            "StorageClass" => self.set_storage_class(),
+            _ => {}
+        }
+    }
+
+    fn close_element(&mut self, name: &str) {
+        match name {
+            "Filter" => {
+                if let (Some(ref mut rule), Some(filter)) =
+                    (&mut self.current_rule, self.current_filter.take())
+                {
+                    rule.filter = Some(filter);
+                }
+            }
+            "Expiration" => {
+                if let (Some(ref mut rule), Some(exp)) =
+                    (&mut self.current_rule, self.current_expiration.take())
+                {
+                    rule.expiration = Some(exp);
+                }
+            }
+            "NoncurrentVersionExpiration" => self.finish_noncurrent_expiration(),
+            "Transition" => self.finish_transition(),
+            "Rule" => {
+                if let Some(rule) = self.current_rule.take() {
+                    self.rules.push(rule);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn finish_tag(&mut self) {
+        if let (Some(ref mut filter), Some(tag)) =
+            (&mut self.current_filter, self.current_tag.take())
+        {
+            filter.tags.push(Tag {
+                key: tag.0,
+                value: tag.1,
+            });
+        }
+    }
+
+    fn set_days(&mut self) {
+        if let Ok(days) = self.text.parse::<u32>() {
+            if let Some(ref mut exp) = self.current_expiration {
+                exp.days = Some(days);
+            } else if let Some(ref mut trans) = self.current_transition {
+                trans.days = Some(days);
+            }
+        }
+    }
+
+    fn set_noncurrent_days(&mut self) {
+        if let (Ok(days), Some(ref mut noncurrent_expiration)) = (
+            self.text.parse::<u32>(),
+            &mut self.current_noncurrent_version_expiration,
+        ) {
+            noncurrent_expiration.noncurrent_days = days;
+        }
+    }
+
+    fn set_date(&mut self) {
+        if let Some(ref mut exp) = self.current_expiration {
+            exp.date = Some(self.text.clone());
+        } else if let Some(ref mut trans) = self.current_transition {
+            trans.date = Some(self.text.clone());
+        }
+    }
+
+    fn set_expired_marker(&mut self) {
+        if let Some(ref mut exp) = self.current_expiration {
+            exp.expired_object_delete_marker = Some(self.text == "true");
+        }
+    }
+
+    fn set_storage_class(&mut self) {
+        if let Some(ref mut trans) = self.current_transition {
+            trans.storage_class = match self.text.as_str() {
+                "GLACIER" => StorageClass::Glacier,
+                "DEEP_ARCHIVE" => StorageClass::DeepArchive,
+                _ => StorageClass::Standard,
+            };
+        }
+    }
+
+    fn finish_noncurrent_expiration(&mut self) {
+        if let (Some(ref mut rule), Some(noncurrent_expiration)) = (
+            &mut self.current_rule,
+            self.current_noncurrent_version_expiration.take(),
+        ) {
+            rule.noncurrent_version_expiration = Some(noncurrent_expiration);
+        }
+    }
+
+    fn finish_transition(&mut self) {
+        if let (Some(ref mut rule), Some(trans)) =
+            (&mut self.current_rule, self.current_transition.take())
+        {
+            rule.transitions.push(trans);
+        }
+    }
 }

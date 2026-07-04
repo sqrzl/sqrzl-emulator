@@ -23,6 +23,7 @@ impl Default for OciAdapter {
 }
 
 impl OciAdapter {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -77,7 +78,7 @@ impl OciAdapter {
     fn error_response(status: StatusCode, code: &str, message: &str) -> Response<Body> {
         Self::json_response(
             status,
-            &format!("{{\"code\":\"{}\",\"message\":\"{}\"}}", code, message),
+            &format!("{{\"code\":\"{code}\",\"message\":\"{message}\"}}"),
         )
     }
 
@@ -153,12 +154,12 @@ impl OciAdapter {
         if end < start {
             return None;
         }
-        Some((start as usize, end as usize))
+        Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
     }
 
     fn decode_object_path(path: &str) -> Result<String, String> {
         urlencoding::decode(path)
-            .map(|decoded| decoded.into_owned())
+            .map(std::borrow::Cow::into_owned)
             .map_err(|err| format!("Invalid encoded OCI object path: {err}"))
     }
 
@@ -170,13 +171,15 @@ impl OciAdapter {
             .header("etag", &blob.etag)
             .header("last-modified", &blob.last_modified.to_rfc2822());
         for (key, value) in &blob.metadata {
-            builder = builder.header(&format!("opc-meta-{}", key), value);
+            builder = builder.header(&format!("opc-meta-{key}"), value);
         }
         builder
     }
 
     #[allow(clippy::result_large_err)]
     fn authorize(req: &Request, config: &AuthConfig) -> Result<(), Response<Body>> {
+        type HmacSha256 = Hmac<Sha256>;
+
         if !config.enforce_auth {
             return Ok(());
         }
@@ -227,7 +230,6 @@ impl OciAdapter {
             ));
         }
 
-        type HmacSha256 = Hmac<Sha256>;
         let secret = config.secret_key().unwrap_or_default().as_bytes().to_vec();
         let mut mac = HmacSha256::new_from_slice(&secret).map_err(|_| {
             Self::error_response(
@@ -249,13 +251,14 @@ impl OciAdapter {
         }
     }
 
-    async fn handle_request(
+    fn handle_request(
         &self,
-        storage: Arc<dyn Storage>,
-        auth_config: Arc<AuthConfig>,
-        req: Request,
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
     ) -> Result<Response<Body>, String> {
-        let (namespace, parts) = match Self::parse_path(&req) {
+        let _ = self.name();
+        let (namespace, parts) = match Self::parse_path(req) {
             Ok(parsed) => parsed,
             Err(msg) => {
                 return Ok(Self::error_response(
@@ -266,339 +269,28 @@ impl OciAdapter {
             }
         };
 
-        if let Err(response) = Self::authorize(&req, &auth_config) {
+        if let Err(response) = Self::authorize(req, auth_config) {
             return Ok(response);
         }
 
         if parts.is_empty() {
-            if req.method() == Method::GET {
-                return Ok(Self::text_response(StatusCode::OK, &namespace));
-            }
-            return Ok(Self::error_response(
-                StatusCode::METHOD_NOT_ALLOWED,
-                "MethodNotAllowed",
-                "Unsupported OCI namespace operation",
-            ));
+            return Ok(Self::handle_namespace_request(req, &namespace));
         }
 
-        if !parts.is_empty() && parts[0] == "b" && parts.len() == 1 {
-            return match *req.method() {
-                Method::POST => {
-                    let payload: serde_json::Value =
-                        serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
-                    let bucket = payload
-                        .get("name")
-                        .and_then(|value| value.as_str())
-                        .ok_or_else(|| "Missing OCI bucket name".to_string())?;
-                    storage
-                        .as_ref()
-                        .create_namespace(bucket.to_string())
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::json_response(
-                        StatusCode::OK,
-                        &format!(
-                            "{{\"name\":\"{}\",\"namespace\":\"{}\"}}",
-                            bucket, namespace
-                        ),
-                    ))
-                }
-                _ => Ok(Self::error_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    "MethodNotAllowed",
-                    "Unsupported OCI bucket collection operation",
-                )),
-            };
+        if parts[0] == "b" && parts.len() == 1 {
+            return Self::handle_bucket_collection(storage, req, &namespace);
         }
 
-        if parts.len() >= 2 && parts[0] == "b" && parts.len() == 2 {
-            let bucket = parts[1].clone();
-            return match *req.method() {
-                Method::PUT => {
-                    storage
-                        .as_ref()
-                        .create_namespace(bucket)
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::json_response(
-                        StatusCode::OK,
-                        "{\"etag\":\"created\"}",
-                    ))
-                }
-                Method::DELETE => {
-                    storage
-                        .as_ref()
-                        .delete_namespace(&bucket)
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::json_response(StatusCode::NO_CONTENT, ""))
-                }
-                Method::GET => {
-                    storage
-                        .as_ref()
-                        .get_namespace(&bucket)
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::json_response(
-                        StatusCode::OK,
-                        &format!(
-                            "{{\"name\":\"{}\",\"namespace\":\"{}\"}}",
-                            bucket, namespace
-                        ),
-                    ))
-                }
-                _ => Ok(Self::error_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    "MethodNotAllowed",
-                    "Unsupported OCI bucket operation",
-                )),
-            };
+        if parts.len() == 2 && parts[0] == "b" {
+            return Self::handle_bucket_request(storage, req, &namespace, &parts[1]);
         }
 
         if parts.len() >= 3 && parts[0] == "b" && parts[2] == "u" {
-            let bucket = parts[1].clone();
-            if parts.len() == 3 {
-                return match *req.method() {
-                    Method::POST => {
-                        let payload: serde_json::Value =
-                            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
-                        let object = payload
-                            .get("object")
-                            .and_then(|value| value.as_str())
-                            .ok_or_else(|| "Missing OCI multipart object name".to_string())?;
-                        let content_type = payload
-                            .get("contentType")
-                            .and_then(|value| value.as_str())
-                            .map(|value| value.to_string());
-                        let metadata = Self::metadata_from_json(payload.get("metadata"));
-                        let storage_tier = payload
-                            .get("storageTier")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("Standard")
-                            .to_string();
-                        let upload = storage
-                            .as_ref()
-                            .create_upload_session(CreateUploadSessionRequest {
-                                namespace: bucket.clone(),
-                                key: object.to_string(),
-                                content_type,
-                                metadata,
-                                provider_metadata: HashMap::from([
-                                    ("storage_tier".to_string(), storage_tier.clone()),
-                                    ("storage_class".to_string(), storage_tier.clone()),
-                                ]),
-                            })
-                            .map_err(|err| err.to_string())?;
-                        Ok(Self::json_response(
-                            StatusCode::OK,
-                            &serde_json::json!({
-                                "namespace": namespace,
-                                "bucket": bucket,
-                                "object": upload.key,
-                                "uploadId": upload.upload_id,
-                                "timeCreated": upload.initiated.to_rfc3339(),
-                                "storageTier": storage_tier,
-                            })
-                            .to_string(),
-                        ))
-                    }
-                    _ => Ok(Self::error_response(
-                        StatusCode::METHOD_NOT_ALLOWED,
-                        "MethodNotAllowed",
-                        "Unsupported OCI multipart collection operation",
-                    )),
-                };
-            }
-
-            let object = Self::decode_object_path(&parts[3..].join("/"))?;
-            let upload_id = req
-                .query_param("uploadId")
-                .ok_or_else(|| "Missing uploadId query parameter".to_string())?;
-            return match *req.method() {
-                Method::PUT => {
-                    let part_number = req
-                        .query_param("uploadPartNum")
-                        .ok_or_else(|| "Missing uploadPartNum query parameter".to_string())?
-                        .parse::<u32>()
-                        .map_err(|_| "Invalid uploadPartNum query parameter".to_string())?;
-                    let etag = storage
-                        .as_ref()
-                        .upload_session_part(&bucket, upload_id, part_number, req.body.to_vec())
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::response(StatusCode::OK).header("etag", &etag).empty())
-                }
-                Method::POST => {
-                    let payload: serde_json::Value =
-                        serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
-                    let upload = storage
-                        .get_multipart_upload(&bucket, upload_id)
-                        .map_err(|err| err.to_string())?;
-                    if upload.key != object {
-                        return Ok(Self::error_response(
-                            StatusCode::BAD_REQUEST,
-                            "InvalidParameter",
-                            "Multipart upload object did not match upload session",
-                        ));
-                    }
-                    if let Some(parts_to_commit) = payload
-                        .get("partsToCommit")
-                        .and_then(|value| value.as_array())
-                    {
-                        for part in parts_to_commit {
-                            let part_num = part
-                                .get("partNum")
-                                .and_then(|value| value.as_u64())
-                                .ok_or_else(|| "Missing partNum in partsToCommit".to_string())?
-                                as u32;
-                            let etag = part
-                                .get("etag")
-                                .and_then(|value| value.as_str())
-                                .ok_or_else(|| "Missing etag in partsToCommit".to_string())?;
-                            let stored_part = upload
-                                .parts
-                                .iter()
-                                .find(|stored| stored.part_number == part_num)
-                                .ok_or_else(|| format!("Missing uploaded part {}", part_num))?;
-                            if stored_part.etag != etag {
-                                return Ok(Self::error_response(
-                                    StatusCode::BAD_REQUEST,
-                                    "InvalidPart",
-                                    "Multipart commit etag did not match uploaded part",
-                                ));
-                            }
-                        }
-                    }
-                    let etag = storage
-                        .as_ref()
-                        .complete_upload_session(&bucket, upload_id)
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::response(StatusCode::OK).header("etag", &etag).empty())
-                }
-                Method::DELETE => {
-                    storage
-                        .abort_multipart_upload(&bucket, upload_id)
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::response(StatusCode::NO_CONTENT).empty())
-                }
-                _ => Ok(Self::error_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    "MethodNotAllowed",
-                    "Unsupported OCI multipart operation",
-                )),
-            };
+            return Self::handle_multipart_request(storage, req, &namespace, &parts);
         }
 
         if parts.len() >= 3 && parts[0] == "b" && parts[2] == "o" {
-            let bucket = parts[1].clone();
-            if parts.len() == 3 {
-                if req.method() == Method::GET {
-                    let objects = storage
-                        .as_ref()
-                        .list_blobs(&bucket, req.query_param("prefix"), None, None, None)
-                        .map_err(|err| err.to_string())?;
-                    let items = objects
-                        .iter()
-                        .map(|blob| format!(
-                            "{{\"name\":\"{}\",\"size\":{},\"etag\":\"{}\",\"timeCreated\":\"{}\"}}",
-                            blob.key, blob.size, blob.etag, blob.last_modified.to_rfc3339()
-                        ))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    return Ok(Self::json_response(
-                        StatusCode::OK,
-                        &format!("{{\"objects\":[{}]}}", items),
-                    ));
-                }
-                return Ok(Self::error_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    "MethodNotAllowed",
-                    "Unsupported OCI object list operation",
-                ));
-            }
-
-            let object = Self::decode_object_path(&parts[3..].join("/"))?;
-            return match *req.method() {
-                Method::PUT => {
-                    let stored = storage
-                        .as_ref()
-                        .put_blob(PutBlobRequest {
-                            namespace: bucket.clone(),
-                            key: object.clone(),
-                            data: req.body.to_vec(),
-                            content_type: req
-                                .header("content-type")
-                                .unwrap_or("application/octet-stream")
-                                .to_string(),
-                            metadata: Self::metadata_from_headers(&req),
-                            tags: HashMap::new(),
-                        })
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::json_response(
-                        StatusCode::OK,
-                        &format!(
-                            "{{\"etag\":\"{}\",\"name\":\"{}\"}}",
-                            stored.etag, stored.key
-                        ),
-                    ))
-                }
-                Method::GET => {
-                    let blob = storage
-                        .as_ref()
-                        .get_blob(&bucket, &object)
-                        .map_err(|err| err.to_string())?;
-                    if let Some(range_header) = req.header("range") {
-                        if let Some((start, end)) =
-                            Self::parse_range_header(range_header, blob.size)
-                        {
-                            let payload = storage
-                                .as_ref()
-                                .get_blob_range(
-                                    &bucket,
-                                    &object,
-                                    BlobRange {
-                                        start: start as u64,
-                                        end: end as u64,
-                                    },
-                                )
-                                .map_err(|err| err.to_string())?;
-                            return Ok(Self::object_response(
-                                StatusCode::PARTIAL_CONTENT,
-                                &payload.blob,
-                            )
-                            .header("content-length", &payload.data.len().to_string())
-                            .header(
-                                "content-range",
-                                &format!("bytes {}-{}/{}", start, end, blob.size),
-                            )
-                            .body(payload.data)
-                            .build());
-                        }
-                        return Ok(Self::error_response(
-                            StatusCode::RANGE_NOT_SATISFIABLE,
-                            "InvalidRange",
-                            "The requested range is not satisfiable",
-                        ));
-                    }
-                    Ok(Self::object_response(StatusCode::OK, &blob)
-                        .body(blob.data)
-                        .build())
-                }
-                Method::HEAD => {
-                    let blob = storage
-                        .as_ref()
-                        .get_blob(&bucket, &object)
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::object_response(StatusCode::OK, &blob).empty())
-                }
-                Method::DELETE => {
-                    storage
-                        .as_ref()
-                        .delete_blob(&bucket, &object)
-                        .map_err(|err| err.to_string())?;
-                    Ok(Self::json_response(StatusCode::NO_CONTENT, ""))
-                }
-                _ => Ok(Self::error_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    "MethodNotAllowed",
-                    "Unsupported OCI object operation",
-                )),
-            };
+            return Self::handle_object_request(storage, req, &parts);
         }
 
         Ok(Self::error_response(
@@ -606,6 +298,437 @@ impl OciAdapter {
             "InvalidParameter",
             "Unsupported OCI path",
         ))
+    }
+
+    fn handle_namespace_request(req: &Request, namespace: &str) -> Response<Body> {
+        if req.method() == Method::GET {
+            return Self::text_response(StatusCode::OK, namespace);
+        }
+        Self::error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "MethodNotAllowed",
+            "Unsupported OCI namespace operation",
+        )
+    }
+
+    fn handle_bucket_collection(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        namespace: &str,
+    ) -> Result<Response<Body>, String> {
+        if req.method() != Method::POST {
+            return Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "MethodNotAllowed",
+                "Unsupported OCI bucket collection operation",
+            ));
+        }
+        let payload: serde_json::Value =
+            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
+        let bucket = payload
+            .get("name")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Missing OCI bucket name".to_string())?;
+        storage
+            .as_ref()
+            .create_namespace(bucket.to_string())
+            .map_err(|err| err.to_string())?;
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &format!("{{\"name\":\"{bucket}\",\"namespace\":\"{namespace}\"}}"),
+        ))
+    }
+
+    fn handle_bucket_request(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        namespace: &str,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        match *req.method() {
+            Method::PUT => {
+                storage
+                    .as_ref()
+                    .create_namespace(bucket.to_string())
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::json_response(
+                    StatusCode::OK,
+                    "{\"etag\":\"created\"}",
+                ))
+            }
+            Method::DELETE => {
+                storage
+                    .as_ref()
+                    .delete_namespace(bucket)
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::json_response(StatusCode::NO_CONTENT, ""))
+            }
+            Method::GET => {
+                storage
+                    .as_ref()
+                    .get_namespace(bucket)
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::json_response(
+                    StatusCode::OK,
+                    &format!("{{\"name\":\"{bucket}\",\"namespace\":\"{namespace}\"}}"),
+                ))
+            }
+            _ => Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "MethodNotAllowed",
+                "Unsupported OCI bucket operation",
+            )),
+        }
+    }
+
+    fn handle_multipart_request(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        namespace: &str,
+        parts: &[String],
+    ) -> Result<Response<Body>, String> {
+        let bucket = parts[1].as_str();
+        if parts.len() == 3 {
+            return Self::handle_multipart_collection(storage, req, namespace, bucket);
+        }
+
+        let object = Self::decode_object_path(&parts[3..].join("/"))?;
+        let upload_id = req
+            .query_param("uploadId")
+            .ok_or_else(|| "Missing uploadId query parameter".to_string())?;
+        match *req.method() {
+            Method::PUT => Self::upload_multipart_part(storage, req, bucket, upload_id),
+            Method::POST => Self::commit_multipart_upload(storage, req, bucket, &object, upload_id),
+            Method::DELETE => {
+                storage
+                    .abort_multipart_upload(bucket, upload_id)
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::response(StatusCode::NO_CONTENT).empty())
+            }
+            _ => Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "MethodNotAllowed",
+                "Unsupported OCI multipart operation",
+            )),
+        }
+    }
+
+    fn handle_multipart_collection(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        namespace: &str,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        if req.method() != Method::POST {
+            return Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "MethodNotAllowed",
+                "Unsupported OCI multipart collection operation",
+            ));
+        }
+        let payload: serde_json::Value =
+            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
+        let upload = Self::create_multipart_session(storage, bucket, &payload)?;
+        let storage_tier = payload
+            .get("storageTier")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Standard");
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &serde_json::json!({
+                "namespace": namespace,
+                "bucket": bucket,
+                "object": upload.key,
+                "uploadId": upload.upload_id,
+                "timeCreated": upload.initiated.to_rfc3339(),
+                "storageTier": storage_tier,
+            })
+            .to_string(),
+        ))
+    }
+
+    fn create_multipart_session(
+        storage: &Arc<dyn Storage>,
+        bucket: &str,
+        payload: &serde_json::Value,
+    ) -> Result<crate::models::MultipartUpload, String> {
+        let object = payload
+            .get("object")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "Missing OCI multipart object name".to_string())?;
+        let content_type = payload
+            .get("contentType")
+            .and_then(|value| value.as_str())
+            .map(std::string::ToString::to_string);
+        let metadata = Self::metadata_from_json(payload.get("metadata"));
+        let storage_tier = payload
+            .get("storageTier")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Standard")
+            .to_string();
+        storage
+            .as_ref()
+            .create_upload_session(CreateUploadSessionRequest {
+                namespace: bucket.to_string(),
+                key: object.to_string(),
+                content_type,
+                metadata,
+                provider_metadata: HashMap::from([
+                    ("storage_tier".to_string(), storage_tier.clone()),
+                    ("storage_class".to_string(), storage_tier),
+                ]),
+            })
+            .map_err(|err| err.to_string())
+    }
+
+    fn upload_multipart_part(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        upload_id: &str,
+    ) -> Result<Response<Body>, String> {
+        let part_number = req
+            .query_param("uploadPartNum")
+            .ok_or_else(|| "Missing uploadPartNum query parameter".to_string())?
+            .parse::<u32>()
+            .map_err(|_| "Invalid uploadPartNum query parameter".to_string())?;
+        let etag = storage
+            .as_ref()
+            .upload_session_part(bucket, upload_id, part_number, req.body.to_vec())
+            .map_err(|err| err.to_string())?;
+        Ok(Self::response(StatusCode::OK).header("etag", &etag).empty())
+    }
+
+    fn commit_multipart_upload(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+        upload_id: &str,
+    ) -> Result<Response<Body>, String> {
+        let payload: serde_json::Value =
+            serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
+        let upload = storage
+            .get_multipart_upload(bucket, upload_id)
+            .map_err(|err| err.to_string())?;
+        if upload.key != object {
+            return Ok(Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidParameter",
+                "Multipart upload object did not match upload session",
+            ));
+        }
+        if let Some(response) = Self::validate_parts_to_commit(&payload, &upload)? {
+            return Ok(response);
+        }
+        let etag = storage
+            .as_ref()
+            .complete_upload_session(bucket, upload_id)
+            .map_err(|err| err.to_string())?;
+        Ok(Self::response(StatusCode::OK).header("etag", &etag).empty())
+    }
+
+    fn validate_parts_to_commit(
+        payload: &serde_json::Value,
+        upload: &crate::models::MultipartUpload,
+    ) -> Result<Option<Response<Body>>, String> {
+        let Some(parts_to_commit) = payload
+            .get("partsToCommit")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Ok(None);
+        };
+        for part in parts_to_commit {
+            let part_num = Self::part_num_from_json(part)?;
+            let etag = part
+                .get("etag")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "Missing etag in partsToCommit".to_string())?;
+            let stored_part = upload
+                .parts
+                .iter()
+                .find(|stored| stored.part_number == part_num)
+                .ok_or_else(|| format!("Missing uploaded part {part_num}"))?;
+            if stored_part.etag != etag {
+                return Ok(Some(Self::error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidPart",
+                    "Multipart commit etag did not match uploaded part",
+                )));
+            }
+        }
+        Ok(None)
+    }
+
+    fn part_num_from_json(part: &serde_json::Value) -> Result<u32, String> {
+        part.get("partNum")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| "Missing partNum in partsToCommit".to_string())
+            .and_then(|value| {
+                u32::try_from(value)
+                    .map_err(|_| "partNum in partsToCommit is too large".to_string())
+            })
+    }
+
+    fn handle_object_request(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        parts: &[String],
+    ) -> Result<Response<Body>, String> {
+        let bucket = parts[1].as_str();
+        if parts.len() == 3 {
+            return Self::list_objects(storage, req, bucket);
+        }
+
+        let object = Self::decode_object_path(&parts[3..].join("/"))?;
+        match *req.method() {
+            Method::PUT => Self::put_object(storage, req, bucket, &object),
+            Method::GET => Self::get_object(storage, req, bucket, &object),
+            Method::HEAD => Self::head_object(storage, bucket, &object),
+            Method::DELETE => {
+                storage
+                    .as_ref()
+                    .delete_blob(bucket, &object)
+                    .map_err(|err| err.to_string())?;
+                Ok(Self::json_response(StatusCode::NO_CONTENT, ""))
+            }
+            _ => Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "MethodNotAllowed",
+                "Unsupported OCI object operation",
+            )),
+        }
+    }
+
+    fn list_objects(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        if req.method() != Method::GET {
+            return Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "MethodNotAllowed",
+                "Unsupported OCI object list operation",
+            ));
+        }
+        let objects = storage
+            .as_ref()
+            .list_blobs(bucket, req.query_param("prefix"), None, None, None)
+            .map_err(|err| err.to_string())?;
+        let items = objects
+            .iter()
+            .map(|blob| {
+                format!(
+                    "{{\"name\":\"{}\",\"size\":{},\"etag\":\"{}\",\"timeCreated\":\"{}\"}}",
+                    blob.key,
+                    blob.size,
+                    blob.etag,
+                    blob.last_modified.to_rfc3339()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &format!("{{\"objects\":[{items}]}}"),
+        ))
+    }
+
+    fn put_object(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        let stored = storage
+            .as_ref()
+            .put_blob(PutBlobRequest {
+                namespace: bucket.to_string(),
+                key: object.to_string(),
+                data: req.body.to_vec(),
+                content_type: req
+                    .header("content-type")
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+                metadata: Self::metadata_from_headers(req),
+                tags: HashMap::new(),
+            })
+            .map_err(|err| err.to_string())?;
+        Ok(Self::json_response(
+            StatusCode::OK,
+            &format!(
+                "{{\"etag\":\"{}\",\"name\":\"{}\"}}",
+                stored.etag, stored.key
+            ),
+        ))
+    }
+
+    fn get_object(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        let blob = storage
+            .as_ref()
+            .get_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
+        if let Some(range_header) = req.header("range") {
+            return Self::object_range_response(storage, bucket, object, &blob, range_header);
+        }
+        Ok(Self::object_response(StatusCode::OK, &blob)
+            .body(blob.data)
+            .build())
+    }
+
+    fn object_range_response(
+        storage: &Arc<dyn Storage>,
+        bucket: &str,
+        object: &str,
+        blob: &crate::models::Object,
+        range_header: &str,
+    ) -> Result<Response<Body>, String> {
+        if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
+            let payload = storage
+                .as_ref()
+                .get_blob_range(
+                    bucket,
+                    object,
+                    BlobRange {
+                        start: start as u64,
+                        end: end as u64,
+                    },
+                )
+                .map_err(|err| err.to_string())?;
+            return Ok(
+                Self::object_response(StatusCode::PARTIAL_CONTENT, &payload.blob)
+                    .header("content-length", &payload.data.len().to_string())
+                    .header(
+                        "content-range",
+                        &format!("bytes {start}-{end}/{}", blob.size),
+                    )
+                    .body(payload.data)
+                    .build(),
+            );
+        }
+        Ok(Self::error_response(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "InvalidRange",
+            "The requested range is not satisfiable",
+        ))
+    }
+
+    fn head_object(
+        storage: &Arc<dyn Storage>,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        let blob = storage
+            .as_ref()
+            .get_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
+        Ok(Self::object_response(StatusCode::OK, &blob).empty())
     }
 }
 
@@ -618,8 +741,7 @@ impl ProviderAdapter for OciAdapter {
         req.path().starts_with("/n/")
             || req
                 .header("authorization")
-                .map(|value| value.starts_with("Signature "))
-                .unwrap_or(false)
+                .is_some_and(|value| value.starts_with("Signature "))
     }
 
     fn matches_request_head(&self, _method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
@@ -642,7 +764,11 @@ impl ProviderAdapter for OciAdapter {
         auth_config: Arc<AuthConfig>,
         req: Request,
     ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, String>> + Send + 'a>> {
-        Box::pin(async move { self.handle_request(storage, auth_config, req).await })
+        Box::pin(std::future::ready(self.handle_request(
+            &storage,
+            &auth_config,
+            &req,
+        )))
     }
 }
 
@@ -668,7 +794,7 @@ mod tests {
             enforce_auth: false,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -682,7 +808,7 @@ mod tests {
             enforce_auth: true,
             admin_auth_disabled: false,
             blobs_path: "./blobs".to_string(),
-            lifecycle_interval: std::time::Duration::from_secs(3600),
+            lifecycle_interval: std::time::Duration::from_hours(1),
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
@@ -713,7 +839,7 @@ mod tests {
         let mut mac = HmacSha256::new_from_slice(b"oci-secret").expect("key");
         mac.update(OciAdapter::signing_string(req).as_bytes());
         let signature = BASE64.encode(mac.finalize().into_bytes());
-        format!("Signature keyId=\"oci-key\",algorithm=\"hmac-sha256\",headers=\"date (request-target) host\",signature=\"{}\"", signature)
+        format!("Signature keyId=\"oci-key\",algorithm=\"hmac-sha256\",headers=\"date (request-target) host\",signature=\"{signature}\"")
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -723,19 +849,18 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request("GET", "http://localhost/n/tenant", &[], b"").await,
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request("GET", "http://localhost/n/tenant", &[], b"").await,
             )
-            .await
             .expect("namespace lookup should succeed");
         assert_eq!(response.status(), StatusCode::OK);
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/n/tenant/b",
                     &[("content-type", "application/json")],
@@ -743,14 +868,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("bucket create should succeed");
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/n/tenant/b/archive/o/report.txt",
                     &[("content-type", "text/plain")],
@@ -758,16 +882,14 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("object put should succeed");
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request("GET", "http://localhost/n/tenant/b/archive/o", &[], b"").await,
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request("GET", "http://localhost/n/tenant/b/archive/o", &[], b"").await,
             )
-            .await
             .expect("object list should succeed");
         let body = response
             .into_body()
@@ -781,9 +903,9 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/n/tenant/b/archive/o/report.txt",
                     &[],
@@ -791,7 +913,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("object get should succeed");
         let body = response
             .into_body()
@@ -823,8 +944,7 @@ mod tests {
             .insert("authorization", auth.parse().expect("header should parse"));
 
         let response = adapter
-            .handle_request(storage, oci_auth(), request)
-            .await
+            .handle_request(&storage, &oci_auth(), &request)
             .expect("oci auth request should complete");
         assert_eq!(response.status(), StatusCode::OK);
     }
@@ -836,9 +956,9 @@ mod tests {
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/n/tenant/b",
                     &[("content-type", "application/json")],
@@ -846,14 +966,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("bucket create should succeed");
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/n/tenant/b/archive/o/folder/report.txt",
                     &[("content-type", "text/plain"), ("opc-meta-owner", "casey")],
@@ -861,14 +980,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("object put should succeed");
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/n/tenant/b/archive/o?prefix=folder/",
                     &[],
@@ -876,7 +994,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("list should succeed");
         let body = response
             .into_body()
@@ -890,9 +1007,9 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
                     "HEAD",
                     "http://localhost/n/tenant/b/archive/o/folder/report.txt",
                     &[],
@@ -900,7 +1017,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("head should succeed");
         assert_eq!(
             response
@@ -925,9 +1041,9 @@ mod tests {
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/n/tenant/b",
                     &[("content-type", "application/json")],
@@ -935,14 +1051,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("bucket create should succeed");
 
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     "http://localhost/n/tenant/b/range-bucket/o/hello.txt",
                     &[("content-type", "text/plain")],
@@ -950,14 +1065,13 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("object put should succeed");
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
                     "GET",
                     "http://localhost/n/tenant/b/range-bucket/o/hello.txt",
                     &[("range", "bytes=0-2")],
@@ -965,7 +1079,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("range get should succeed");
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(
@@ -991,11 +1104,10 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request("GET", "http://localhost/n/tenant", &[], b"").await,
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request("GET", "http://localhost/n/tenant", &[], b"").await,
             )
-            .await
             .expect("namespace lookup should succeed");
         let body = response
             .into_body()
@@ -1007,9 +1119,9 @@ mod tests {
 
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/n/tenant/b",
                     &[("content-type", "application/json")],
@@ -1017,17 +1129,15 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("bucket create should succeed");
         assert_eq!(response.status(), StatusCode::OK);
 
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request("GET", "http://localhost/n/tenant/b/sdk-bucket", &[], b"").await,
+                &storage,
+                &auth_disabled(),
+                &parsed_request("GET", "http://localhost/n/tenant/b/sdk-bucket", &[], b"").await,
             )
-            .await
             .expect("bucket get should succeed");
         let body = response
             .into_body()
@@ -1045,11 +1155,27 @@ mod tests {
         let adapter = OciAdapter::new();
         let storage = temp_storage();
 
+        create_oci_multipart_bucket(&adapter, &storage).await;
+        let upload_id = create_oci_multipart_upload(&adapter, &storage).await;
+        let part_one_etag = upload_oci_part(&adapter, &storage, &upload_id, 1, b"multi").await;
+        let part_two_etag = upload_oci_part(&adapter, &storage, &upload_id, 2, b"part").await;
+        commit_oci_multipart_upload(
+            &adapter,
+            &storage,
+            &upload_id,
+            &part_one_etag,
+            &part_two_etag,
+        )
+        .await;
+        verify_oci_multipart_metadata(&adapter, &storage).await;
+    }
+
+    async fn create_oci_multipart_bucket(adapter: &OciAdapter, storage: &Arc<dyn Storage>) {
         adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/n/tenant/b",
                     &[("content-type", "application/json")],
@@ -1057,14 +1183,18 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("bucket create should succeed");
+    }
 
+    async fn create_oci_multipart_upload(
+        adapter: &OciAdapter,
+        storage: &Arc<dyn Storage>,
+    ) -> String {
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     "http://localhost/n/tenant/b/multipart-bucket/u",
                     &[("content-type", "application/json")],
@@ -1072,97 +1202,79 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("multipart create should succeed");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("body should read")
-            .to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
-        let upload_id = json
-            .get("uploadId")
-            .and_then(|value| value.as_str())
+        let json: serde_json::Value =
+            serde_json::from_slice(&read_test_body(response).await).expect("json should parse");
+        json.get("uploadId")
+            .and_then(serde_json::Value::as_str)
             .expect("upload id should exist")
-            .to_string();
+            .to_string()
+    }
 
+    async fn upload_oci_part(
+        adapter: &OciAdapter,
+        storage: &Arc<dyn Storage>,
+        upload_id: &str,
+        part_number: u32,
+        body: &[u8],
+    ) -> String {
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "PUT",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={}&uploadPartNum=1",
-                        upload_id
+                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum={part_number}"
                     ),
                     &[],
-                    b"multi",
+                    body,
                 )
                 .await,
             )
-            .await
-            .expect("part one upload should succeed");
-        let part_one_etag = response
+            .expect("part upload should succeed");
+        response
             .headers()
             .get("etag")
             .and_then(|value| value.to_str().ok())
             .expect("etag should exist")
-            .to_string();
+            .to_string()
+    }
 
+    async fn commit_oci_multipart_upload(
+        adapter: &OciAdapter,
+        storage: &Arc<dyn Storage>,
+        upload_id: &str,
+        part_one_etag: &str,
+        part_two_etag: &str,
+    ) {
         let response = adapter
             .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
-                    "PUT",
-                    &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={}&uploadPartNum=2",
-                        upload_id
-                    ),
-                    &[],
-                    b"part",
-                )
-                .await,
-            )
-            .await
-            .expect("part two upload should succeed");
-        let part_two_etag = response
-            .headers()
-            .get("etag")
-            .and_then(|value| value.to_str().ok())
-            .expect("etag should exist")
-            .to_string();
-
-        let response = adapter
-            .handle_request(
-                storage.clone(),
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "POST",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={}",
-                        upload_id
+                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
                     ),
                     &[("content-type", "application/json")],
                     format!(
-                        "{{\"partsToCommit\":[{{\"partNum\":1,\"etag\":\"{}\"}},{{\"partNum\":2,\"etag\":\"{}\"}}]}}",
-                        part_one_etag, part_two_etag
+                        "{{\"partsToCommit\":[{{\"partNum\":1,\"etag\":\"{part_one_etag}\"}},{{\"partNum\":2,\"etag\":\"{part_two_etag}\"}}]}}"
                     )
                     .as_bytes(),
                 )
                 .await,
             )
-            .await
             .expect("multipart commit should succeed");
         assert_eq!(response.status(), StatusCode::OK);
+    }
 
+    async fn verify_oci_multipart_metadata(adapter: &OciAdapter, storage: &Arc<dyn Storage>) {
         let response = adapter
             .handle_request(
-                storage,
-                auth_disabled(),
-                parsed_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
                     "HEAD",
                     "http://localhost/n/tenant/b/multipart-bucket/o/multi.txt",
                     &[],
@@ -1170,7 +1282,6 @@ mod tests {
                 )
                 .await,
             )
-            .await
             .expect("head should succeed");
         assert_eq!(
             response
@@ -1179,5 +1290,15 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("sdk")
         );
+    }
+
+    async fn read_test_body(response: Response<Body>) -> Vec<u8> {
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should read")
+            .to_bytes()
+            .to_vec()
     }
 }

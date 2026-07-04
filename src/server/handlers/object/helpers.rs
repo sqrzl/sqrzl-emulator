@@ -71,8 +71,8 @@ pub(super) fn copy_source_range_data(
         return Err("Invalid copy source range".to_string());
     }
 
-    let start_idx = start as usize;
-    let end_idx = end as usize;
+    let start_idx = usize::try_from(start).map_err(|_| "Invalid copy source range".to_string())?;
+    let end_idx = usize::try_from(end).map_err(|_| "Invalid copy source range".to_string())?;
     Ok(source_obj.data[start_idx..=end_idx].to_vec())
 }
 
@@ -119,8 +119,8 @@ pub(super) fn object_response_headers(
 
     builder = add_version_header(builder, obj.version_id.as_deref());
 
-    for (k, v) in obj.metadata.iter() {
-        builder = builder.header(&format!("x-amz-meta-{}", k), v);
+    for (k, v) in &obj.metadata {
+        builder = builder.header(&format!("x-amz-meta-{k}"), v);
     }
 
     if let Some(value) = obj.provider_metadata.get(S3_SSE_MODE_KEY) {
@@ -158,14 +158,12 @@ fn parse_lock_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 pub(super) fn object_is_locked(obj: &crate::models::Object) -> bool {
     obj.provider_metadata
         .get(S3_OBJECT_LOCK_LEGAL_HOLD_KEY)
-        .map(|value| value.eq_ignore_ascii_case("ON"))
-        .unwrap_or(false)
+        .is_some_and(|value| value.eq_ignore_ascii_case("ON"))
         || obj
             .provider_metadata
             .get(S3_OBJECT_LOCK_UNTIL_KEY)
             .and_then(|value| parse_lock_timestamp(value))
-            .map(|value| value > chrono::Utc::now())
-            .unwrap_or(false)
+            .is_some_and(|value| value > chrono::Utc::now())
 }
 
 pub(super) fn locked_object_response(req_id: &str) -> Response<Body> {
@@ -205,8 +203,7 @@ pub(super) fn validate_get_sse_headers(
             || obj
                 .provider_metadata
                 .get(S3_SSE_C_KEY_MD5_KEY)
-                .map(|value| value != provided_md5)
-                .unwrap_or(true)
+                .is_none_or(|value| value != provided_md5)
         {
             return Some(xml_error_response(
                 StatusCode::FORBIDDEN,

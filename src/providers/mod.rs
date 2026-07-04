@@ -58,10 +58,15 @@ impl Default for AdapterRegistry {
 }
 
 impl AdapterRegistry {
+    #[must_use]
     pub fn new(adapters: Vec<Arc<dyn ProviderAdapter>>) -> Self {
         Self { adapters }
     }
 
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
     pub async fn handle(
         &self,
         storage: Arc<dyn Storage>,

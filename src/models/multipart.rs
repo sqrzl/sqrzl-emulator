@@ -28,6 +28,7 @@ pub struct Part {
 }
 
 impl MultipartUpload {
+    #[must_use]
     pub fn new(
         key: String,
         content_type: Option<String>,
