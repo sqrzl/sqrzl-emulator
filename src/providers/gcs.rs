@@ -1,4 +1,4 @@
-use super::ProviderAdapter;
+use super::{state, ProviderAdapter};
 use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::{BlobBackend, BlobRange, PutBlobRequest, UpdateBlobMetadataRequest};
 use crate::body::Body;
@@ -8,9 +8,8 @@ use crate::utils::request_origin;
 use crate::utils::xml::push_escaped_xml;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
-use http::{Method, StatusCode};
+use http::{HeaderMap, Method, StatusCode, Uri};
 use hyper::Response;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use std::collections::HashMap;
@@ -56,37 +55,38 @@ impl GcsAdapter {
             .header("date", &crate::utils::headers::format_last_modified())
     }
 
-    fn load_provider_state<T>(
-        storage: &dyn Storage,
-        provider: &str,
-        key: &str,
-    ) -> Result<Option<T>, String>
-    where
-        T: DeserializeOwned,
-    {
-        match storage.get_provider_state(provider, key) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|err| format!("Failed to parse provider state: {err}")),
-            Err(crate::error::Error::KeyNotFound) => Ok(None),
-            Err(err) => Err(err.to_string()),
-        }
+    fn matches_head(uri: &Uri, headers: &HeaderMap) -> bool {
+        let path = uri.path();
+        let host = headers
+            .get("host")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|host| host.split(':').next())
+            .unwrap_or("");
+        let authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let query = uri.query().unwrap_or("");
+
+        host.eq_ignore_ascii_case("storage.googleapis.com")
+            || host.eq_ignore_ascii_case("storage.localhost")
+            || authorization.starts_with("GOOG1 ")
+            || query.contains("GoogleAccessId=")
+            || path.starts_with("/upload/storage/v1/")
+            || path.starts_with("/storage/v1/")
+            || path.starts_with("/download/storage/v1/")
     }
 
-    fn save_provider_state<T>(
-        storage: &dyn Storage,
-        provider: &str,
-        key: &str,
-        value: &T,
-    ) -> Result<(), String>
-    where
-        T: Serialize,
-    {
-        let bytes = serde_json::to_vec(value)
-            .map_err(|err| format!("Failed to serialize provider state: {err}"))?;
-        storage
-            .put_provider_state(provider, key, bytes)
-            .map_err(|err| err.to_string())
+    fn payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
+        let message =
+            format!("Request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)");
+        let mut body =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>EntityTooLarge</Code><Message>"
+                .to_string();
+        push_escaped_xml(&mut body, &message);
+        body.push_str("</Message></Error>");
+
+        Self::xml_response(StatusCode::PAYLOAD_TOO_LARGE, body)
     }
 
     fn xml_response(status: StatusCode, body: String) -> Response<Body> {
@@ -1356,6 +1356,20 @@ impl ProviderAdapter for GcsAdapter {
             || req.path().starts_with("/download/storage/v1/")
     }
 
+    fn matches_request_head(&self, _method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
+        Self::matches_head(uri, headers)
+    }
+
+    fn render_payload_too_large(
+        &self,
+        _method: &Method,
+        _uri: &Uri,
+        _headers: &HeaderMap,
+        max_request_bytes: usize,
+    ) -> Response<Body> {
+        Self::payload_too_large_response(max_request_bytes)
+    }
+
     fn handle<'a>(
         &'a self,
         storage: Arc<dyn Storage>,
@@ -1609,7 +1623,7 @@ impl GcsAdapter {
                     .to_string(),
                 metadata: Self::metadata_from_headers(&req),
             };
-            Self::save_provider_state(
+            state::save_json(
                 storage.as_ref(),
                 GCS_RESUMABLE_SESSION_STATE,
                 &session_id,
@@ -1641,7 +1655,7 @@ impl GcsAdapter {
                     .map_err(|_| "Failed to lock resumable sessions".to_string())?;
                 sessions.remove(session_id)
             }
-            .or(Self::load_provider_state(
+            .or(state::load_json(
                 storage.as_ref(),
                 GCS_RESUMABLE_SESSION_STATE,
                 session_id,

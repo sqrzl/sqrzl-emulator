@@ -1,4 +1,4 @@
-use super::ProviderAdapter;
+use super::{state, ProviderAdapter};
 use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::{BlobBackend, BlobRange, CreateUploadSessionRequest, UpdateBlobMetadataRequest};
 use crate::body::Body;
@@ -12,12 +12,11 @@ use base64::{
 };
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
-use http::{Method, StatusCode};
+use http::{HeaderMap, Method, StatusCode, Uri};
 use hyper::Response;
 use quick_xml::escape::unescape;
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -76,39 +75,6 @@ impl AzureBlobAdapter {
 
     fn blob_state_key(account: &str, container: &str, blob: &str) -> String {
         format!("{}/{}/{}", account, container, blob)
-    }
-
-    fn load_provider_state<T>(
-        storage: &dyn Storage,
-        provider: &str,
-        key: &str,
-    ) -> Result<Option<T>, String>
-    where
-        T: DeserializeOwned,
-    {
-        match storage.get_provider_state(provider, key) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|err| format!("Failed to parse provider state: {err}")),
-            Err(crate::error::Error::KeyNotFound) => Ok(None),
-            Err(err) => Err(err.to_string()),
-        }
-    }
-
-    fn save_provider_state<T>(
-        storage: &dyn Storage,
-        provider: &str,
-        key: &str,
-        value: &T,
-    ) -> Result<(), String>
-    where
-        T: Serialize,
-    {
-        let bytes = serde_json::to_vec(value)
-            .map_err(|err| format!("Failed to serialize provider state: {err}"))?;
-        storage
-            .put_provider_state(provider, key, bytes)
-            .map_err(|err| err.to_string())
     }
 
     fn parse_range_header(value: &str, size: u64) -> Option<(usize, usize)> {
@@ -176,6 +142,36 @@ impl AzureBlobAdapter {
             .header("x-ms-version", AZURE_VERSION)
             .header("x-ms-request-id", &Self::request_id())
             .header("date", &crate::utils::headers::format_last_modified())
+    }
+
+    fn matches_head(uri: &Uri, headers: &HeaderMap) -> bool {
+        let authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let query = uri.query().unwrap_or("");
+
+        headers.contains_key("x-ms-version")
+            || headers.contains_key("x-ms-blob-type")
+            || authorization.starts_with("SharedKey ")
+            || query.contains("restype=")
+            || query.contains("comp=")
+    }
+
+    fn payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
+        let message =
+            format!("Request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)");
+        let mut body =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>RequestBodyTooLarge</Code><Message>"
+                .to_string();
+        push_escaped_xml(&mut body, &message);
+        body.push_str("</Message></Error>");
+
+        Self::response(StatusCode::PAYLOAD_TOO_LARGE)
+            .content_type("application/xml")
+            .header("x-ms-error-code", "RequestBodyTooLarge")
+            .body(body.into_bytes())
+            .build()
     }
 
     fn empty_response(status: StatusCode) -> Response<Body> {
@@ -784,6 +780,20 @@ impl ProviderAdapter for AzureBlobAdapter {
             || req.query_param("comp").is_some()
     }
 
+    fn matches_request_head(&self, _method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
+        Self::matches_head(uri, headers)
+    }
+
+    fn render_payload_too_large(
+        &self,
+        _method: &Method,
+        _uri: &Uri,
+        _headers: &HeaderMap,
+        max_request_bytes: usize,
+    ) -> Response<Body> {
+        Self::payload_too_large_response(max_request_bytes)
+    }
+
     fn handle<'a>(
         &'a self,
         storage: Arc<dyn Storage>,
@@ -1089,7 +1099,7 @@ impl AzureBlobAdapter {
                 .map_err(|_| "Failed to lock Azure block session state".to_string())?
                 .get(&session_key)
                 .cloned()
-                .or(Self::load_provider_state(
+                .or(state::load_json(
                     storage.as_ref(),
                     AZURE_BLOCK_SESSION_STATE,
                     &session_key,
@@ -1101,7 +1111,7 @@ impl AzureBlobAdapter {
             session
                 .blocks
                 .insert(block_id.to_string(), req.body.to_vec());
-            Self::save_provider_state(
+            state::save_json(
                 storage.as_ref(),
                 AZURE_BLOCK_SESSION_STATE,
                 &session_key,
@@ -1127,7 +1137,7 @@ impl AzureBlobAdapter {
                     .map_err(|_| "Failed to lock Azure block session state".to_string())?;
                 sessions.remove(&session_key)
             }
-            .or(Self::load_provider_state(
+            .or(state::load_json(
                 storage.as_ref(),
                 AZURE_BLOCK_SESSION_STATE,
                 &session_key,
@@ -1169,7 +1179,7 @@ impl AzureBlobAdapter {
                 .lock()
                 .map_err(|_| "Failed to lock Azure committed block state".to_string())?
                 .insert(session_key.clone(), block_ids.clone());
-            Self::save_provider_state(
+            state::save_json(
                 storage.as_ref(),
                 AZURE_COMMITTED_BLOCKS_STATE,
                 &session_key,
@@ -1209,7 +1219,7 @@ impl AzureBlobAdapter {
                 .map_err(|_| "Failed to lock Azure committed block state".to_string())?
                 .get(&session_key)
                 .cloned()
-                .or(Self::load_provider_state(
+                .or(state::load_json(
                     storage.as_ref(),
                     AZURE_COMMITTED_BLOCKS_STATE,
                     &session_key,

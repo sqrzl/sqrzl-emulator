@@ -6,7 +6,7 @@ use crate::server::{RequestExt as Request, ResponseBuilder};
 use crate::storage::Storage;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
-use http::{Method, StatusCode};
+use http::{HeaderMap, Method, StatusCode, Uri};
 use hyper::Response;
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -39,6 +39,25 @@ impl OciAdapter {
         ResponseBuilder::new(status)
             .header("opc-request-id", &uuid::Uuid::new_v4().to_string())
             .header("date", &crate::utils::headers::format_last_modified())
+    }
+
+    fn matches_head(uri: &Uri, headers: &HeaderMap) -> bool {
+        let authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+
+        uri.path().starts_with("/n/") || authorization.starts_with("Signature ")
+    }
+
+    fn payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
+        let message =
+            format!("Request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)");
+        let body = serde_json::json!({
+            "code": "PayloadTooLarge",
+            "message": message,
+        });
+        Self::json_response(StatusCode::PAYLOAD_TOO_LARGE, &body.to_string())
     }
 
     fn json_response(status: StatusCode, body: &str) -> Response<Body> {
@@ -601,6 +620,20 @@ impl ProviderAdapter for OciAdapter {
                 .header("authorization")
                 .map(|value| value.starts_with("Signature "))
                 .unwrap_or(false)
+    }
+
+    fn matches_request_head(&self, _method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
+        Self::matches_head(uri, headers)
+    }
+
+    fn render_payload_too_large(
+        &self,
+        _method: &Method,
+        _uri: &Uri,
+        _headers: &HeaderMap,
+        max_request_bytes: usize,
+    ) -> Response<Body> {
+        Self::payload_too_large_response(max_request_bytes)
     }
 
     fn handle<'a>(

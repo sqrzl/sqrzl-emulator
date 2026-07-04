@@ -3,14 +3,17 @@ use crate::error::{Error, Result};
 use crate::services::{bucket as bucket_service, json_response, object as object_service};
 use crate::storage::Storage;
 use crate::utils::validation;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
 use http_body_util::BodyExt;
 use hyper::{Method, Request, Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use urlencoding::decode;
+
+mod dto;
+mod pagination;
+
+use dto::*;
+use pagination::*;
 
 pub async fn handle_request<B>(storage: Arc<dyn Storage>, req: Request<B>) -> Result<Response<Body>>
 where
@@ -108,24 +111,6 @@ pub fn error_response(err: &Error) -> Response<Body> {
     json_response(err.status_code(), &body)
 }
 
-fn parse_query_map(query: &str) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    for pair in query.split('&').filter(|p| !p.is_empty()) {
-        if let Some((k, v)) = pair.split_once('=') {
-            let key = decode_component(k);
-            let val = decode_component(v);
-            out.insert(key, val);
-        }
-    }
-    out
-}
-
-fn decode_component(input: &str) -> String {
-    decode(input)
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|_| input.to_string())
-}
-
 async fn read_json<T: DeserializeOwned, B>(req: Request<B>) -> Result<T>
 where
     B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
@@ -145,228 +130,6 @@ fn empty_response(status: StatusCode) -> Response<Body> {
         .status(status)
         .body(Body::default())
         .unwrap_or_else(|_| Response::new(Body::default()))
-}
-
-fn object_to_metadata(obj: crate::models::Object) -> crate::api::models::ObjectMetadata {
-    crate::api::models::ObjectMetadata {
-        key: obj.key,
-        size: obj.size,
-        last_modified: obj.last_modified.to_rfc3339(),
-        etag: obj.etag,
-        content_type: Some(obj.content_type),
-        metadata: obj.metadata,
-        version_id: obj.version_id,
-        storage_class: obj.storage_class,
-    }
-}
-
-fn bucket_to_details(bucket: crate::models::Bucket) -> crate::api::models::BucketDetails {
-    let versioning_enabled = bucket_service::versioning_enabled(&bucket);
-    crate::api::models::BucketDetails {
-        name: bucket.name,
-        created_at: bucket.created_at.to_rfc3339(),
-        versioning_enabled,
-    }
-}
-
-fn bucket_to_info(bucket: crate::models::Bucket) -> crate::api::models::BucketInfo {
-    let versioning_enabled = bucket_service::versioning_enabled(&bucket);
-    crate::api::models::BucketInfo {
-        name: bucket.name,
-        created_at: bucket.created_at.to_rfc3339(),
-        versioning_enabled,
-    }
-}
-
-fn object_to_info(o: crate::models::Object) -> crate::api::models::ObjectInfo {
-    crate::api::models::ObjectInfo {
-        key: o.key,
-        size: o.size,
-        last_modified: o.last_modified.to_rfc3339(),
-        etag: o.etag,
-        content_type: Some(o.content_type),
-        storage_class: o.storage_class,
-    }
-}
-
-fn common_prefix_to_folder_info(
-    prefix: String,
-    path_prefix: &str,
-) -> crate::api::models::ObjectFolderInfo {
-    let name = prefix
-        .strip_prefix(path_prefix)
-        .unwrap_or(&prefix)
-        .to_string();
-
-    crate::api::models::ObjectFolderInfo { name, prefix }
-}
-
-#[derive(Clone, Debug)]
-struct PageParams {
-    next: usize,
-    limit: usize,
-    search: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-struct ObjectPageParams {
-    next: Option<String>,
-    limit: usize,
-    prefix: Option<String>,
-    search: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PageTokenKind {
-    Buckets,
-    Objects,
-    Versions,
-    MultipartUploads,
-}
-
-impl PageTokenKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Buckets => "buckets",
-            Self::Objects => "objects",
-            Self::Versions => "versions",
-            Self::MultipartUploads => "multipart-uploads",
-        }
-    }
-}
-
-fn parse_next_token(token: &str, kind: PageTokenKind) -> Result<usize> {
-    let decoded = URL_SAFE_NO_PAD
-        .decode(token)
-        .map_err(|_| Error::InvalidRequest("invalid next token".into()))?;
-    let decoded = String::from_utf8(decoded)
-        .map_err(|_| Error::InvalidRequest("invalid next token".into()))?;
-    let (token_kind, offset) = decoded
-        .split_once(':')
-        .ok_or_else(|| Error::InvalidRequest("invalid next token".into()))?;
-
-    if token_kind != kind.as_str() {
-        return Err(Error::InvalidRequest("invalid next token".into()));
-    }
-
-    offset
-        .parse::<usize>()
-        .map_err(|_| Error::InvalidRequest("invalid next token".into()))
-}
-
-fn parse_page_params(query: &str, kind: PageTokenKind) -> Result<PageParams> {
-    let params = parse_query_map(query);
-
-    let next = params
-        .get("next")
-        .map(|value| parse_next_token(value, kind))
-        .transpose()?
-        .unwrap_or(0);
-
-    let limit = params
-        .get("limit")
-        .map(|value| {
-            value
-                .parse::<usize>()
-                .map_err(|_| Error::InvalidRequest("invalid limit".into()))
-        })
-        .transpose()?
-        .unwrap_or(50);
-
-    if !(1..=500).contains(&limit) {
-        return Err(Error::InvalidRequest(
-            "limit must be between 1 and 500".into(),
-        ));
-    }
-
-    let search = params
-        .get("search")
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty());
-
-    Ok(PageParams {
-        next,
-        limit,
-        search,
-    })
-}
-
-fn parse_object_next_token(token: &str, kind: PageTokenKind) -> Result<String> {
-    let decoded = URL_SAFE_NO_PAD
-        .decode(token)
-        .map_err(|_| Error::InvalidRequest("invalid next token".into()))?;
-    let decoded = String::from_utf8(decoded)
-        .map_err(|_| Error::InvalidRequest("invalid next token".into()))?;
-    let (token_kind, marker) = decoded
-        .split_once(':')
-        .ok_or_else(|| Error::InvalidRequest("invalid next token".into()))?;
-
-    if token_kind != kind.as_str() {
-        return Err(Error::InvalidRequest("invalid next token".into()));
-    }
-
-    Ok(marker.to_string())
-}
-
-fn parse_object_page_params(query: &str) -> Result<ObjectPageParams> {
-    let params = parse_query_map(query);
-
-    let next = params
-        .get("next")
-        .map(|value| parse_object_next_token(value, PageTokenKind::Objects))
-        .transpose()?;
-
-    let limit = params
-        .get("limit")
-        .map(|value| {
-            value
-                .parse::<usize>()
-                .map_err(|_| Error::InvalidRequest("invalid limit".into()))
-        })
-        .transpose()?
-        .unwrap_or(50);
-
-    if !(1..=500).contains(&limit) {
-        return Err(Error::InvalidRequest(
-            "limit must be between 1 and 500".into(),
-        ));
-    }
-
-    let prefix = params.get("prefix").map(|value| value.to_string());
-    let search = params
-        .get("search")
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty());
-
-    Ok(ObjectPageParams {
-        next,
-        limit,
-        prefix,
-        search,
-    })
-}
-
-fn paginate<T>(items: Vec<T>, page: &PageParams) -> (Vec<T>, Option<usize>) {
-    let start = page.next.min(items.len());
-    let end = (start + page.limit).min(items.len());
-    let next = (end < items.len()).then_some(end);
-    let items = items.into_iter().skip(start).take(page.limit).collect();
-    (items, next)
-}
-
-fn encode_next(next: Option<usize>, kind: PageTokenKind) -> Option<String> {
-    next.map(|offset| URL_SAFE_NO_PAD.encode(format!("{}:{}", kind.as_str(), offset)))
-}
-
-fn encode_object_next(next: Option<String>, kind: PageTokenKind) -> Option<String> {
-    next.map(|marker| URL_SAFE_NO_PAD.encode(format!("{}:{}", kind.as_str(), marker)))
-}
-
-fn contains_search(value: &str, search: Option<&str>) -> bool {
-    match search {
-        Some(search) => value.to_ascii_lowercase().contains(search),
-        None => true,
-    }
 }
 
 fn parse_bucket_and_remainder(rest: &str) -> Result<(String, Option<&str>)> {

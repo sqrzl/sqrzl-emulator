@@ -1,6 +1,9 @@
 use crate::error::{Error, Result};
 use crate::models::{policy::Acl, Bucket, MultipartUpload, Object};
-use crate::storage::{DirectoryEntryKind, LockFreeIndex, Storage};
+use crate::storage::{
+    AclStore, BucketStore, DirectoryEntryKind, LifecycleStore, LockFreeIndex, MultipartStore,
+    ObjectListingStore, ObjectStore, PolicyStore, ProviderStateStore, TagStore, VersionStore,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -16,7 +19,7 @@ pub struct FilesystemStorage {
     object_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
-impl Storage for FilesystemStorage {
+impl BucketStore for FilesystemStorage {
     fn create_bucket(&self, name: String) -> Result<()> {
         let bucket_dir = self.bucket_dir(&name);
 
@@ -123,7 +126,9 @@ impl Storage for FilesystemStorage {
         bucket_record.metadata = metadata;
         Ok(bucket_record)
     }
+}
 
+impl ObjectStore for FilesystemStorage {
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
         let object_lock = self.object_lock(bucket, &key)?;
         let _guard = object_lock
@@ -303,7 +308,9 @@ impl Storage for FilesystemStorage {
         // Fast path: check lock-free index first
         Ok(self.index.contains(bucket, key))
     }
+}
 
+impl AclStore for FilesystemStorage {
     fn get_bucket_acl(&self, bucket: &str) -> Result<Acl> {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
@@ -362,7 +369,9 @@ impl Storage for FilesystemStorage {
 
         self.write_object_metadata(&metadata_path, &object)
     }
+}
 
+impl LifecycleStore for FilesystemStorage {
     fn get_bucket_lifecycle(
         &self,
         bucket: &str,
@@ -414,7 +423,9 @@ impl Storage for FilesystemStorage {
         }
         Ok(())
     }
+}
 
+impl PolicyStore for FilesystemStorage {
     fn get_bucket_policy(
         &self,
         bucket: &str,
@@ -466,7 +477,9 @@ impl Storage for FilesystemStorage {
         }
         Ok(())
     }
+}
 
+impl ProviderStateStore for FilesystemStorage {
     fn put_provider_state(&self, provider: &str, key: &str, data: Vec<u8>) -> Result<()> {
         let path = self.provider_state_path(provider, key);
         Self::atomic_write(&path, &data)
@@ -491,7 +504,9 @@ impl Storage for FilesystemStorage {
         }
         Ok(())
     }
+}
 
+impl TagStore for FilesystemStorage {
     fn get_object_tags(&self, bucket: &str, key: &str) -> Result<HashMap<String, String>> {
         let object_id = Self::compute_object_id(bucket, key);
         let metadata_path = self.object_metadata_path(bucket, &object_id);
@@ -550,7 +565,9 @@ impl Storage for FilesystemStorage {
 
         Ok(())
     }
+}
 
+impl ObjectListingStore for FilesystemStorage {
     fn list_objects(
         &self,
         bucket: &str,
@@ -640,7 +657,9 @@ impl Storage for FilesystemStorage {
             next_marker,
         })
     }
+}
 
+impl MultipartStore for FilesystemStorage {
     fn create_multipart_upload(&self, bucket: &str, key: String) -> Result<MultipartUpload> {
         self.create_multipart_upload_with_metadata(
             bucket,
@@ -861,7 +880,9 @@ impl Storage for FilesystemStorage {
 
         Ok(())
     }
+}
 
+impl VersionStore for FilesystemStorage {
     fn enable_versioning(&self, bucket: &str) -> Result<()> {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);

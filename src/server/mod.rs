@@ -3,7 +3,7 @@ use crate::body::Body;
 use crate::hyper_compat::Compat;
 use crate::providers::AdapterRegistry;
 use crate::storage::Storage;
-use ::http::{HeaderMap, Method, Uri};
+use ::http::Method;
 use hyper::service::{service_fn, Service};
 use hyper::{Request, Response, StatusCode};
 use std::convert::Infallible;
@@ -135,100 +135,12 @@ where
             method,
             uri,
             headers,
-        }) => Ok(payload_too_large_response(
-            &method,
-            &uri,
-            &headers,
-            max_request_bytes,
-        )),
+        }) => Ok(adapters.render_payload_too_large(&method, &uri, &headers, max_request_bytes)),
         Err(e) => {
             error!("Failed to parse request: {}", e);
             Ok(simple_text_response(StatusCode::BAD_REQUEST, "Bad Request"))
         }
     }
-}
-
-fn payload_too_large_response(
-    _method: &Method,
-    uri: &Uri,
-    headers: &HeaderMap,
-    max_request_bytes: usize,
-) -> Response<Body> {
-    let message =
-        format!("Request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)");
-    let path = uri.path();
-    let host = headers
-        .get("host")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    let authorization = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    let query = uri.query().unwrap_or("");
-
-    if headers.contains_key("x-ms-version")
-        || authorization.starts_with("SharedKey ")
-        || query.contains("restype=")
-        || query.contains("comp=")
-    {
-        let body = format!(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?><Error><Code>RequestBodyTooLarge</Code><Message>{}</Message></Error>",
-            escape_xml(&message)
-        );
-        return ResponseBuilder::new(StatusCode::PAYLOAD_TOO_LARGE)
-            .content_type("application/xml")
-            .header("x-ms-error-code", "RequestBodyTooLarge")
-            .body(body.into_bytes())
-            .build();
-    }
-
-    if host.split(':').next().is_some_and(|host| {
-        host.eq_ignore_ascii_case("storage.googleapis.com")
-            || host.eq_ignore_ascii_case("storage.localhost")
-    }) || path.starts_with("/storage/v1/")
-        || path.starts_with("/download/storage/v1/")
-        || path.starts_with("/upload/storage/v1/")
-        || authorization.starts_with("GOOG1 ")
-        || query.contains("GoogleAccessId=")
-    {
-        let body = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>EntityTooLarge</Code><Message>{}</Message></Error>",
-            escape_xml(&message)
-        );
-        return ResponseBuilder::new(StatusCode::PAYLOAD_TOO_LARGE)
-            .content_type("application/xml")
-            .body(body.into_bytes())
-            .build();
-    }
-
-    if path.starts_with("/n/") || authorization.starts_with("Signature ") {
-        let body = serde_json::json!({
-            "code": "PayloadTooLarge",
-            "message": message,
-        });
-        return ResponseBuilder::new(StatusCode::PAYLOAD_TOO_LARGE)
-            .content_type("application/json")
-            .body(body.to_string().into_bytes())
-            .build();
-    }
-
-    let req_id = crate::utils::headers::generate_request_id();
-    let body = crate::utils::xml::error_xml("EntityTooLarge", &message, &req_id);
-    ResponseBuilder::new(StatusCode::PAYLOAD_TOO_LARGE)
-        .content_type("application/xml; charset=utf-8")
-        .header("x-amz-request-id", &req_id)
-        .body(body.into_bytes())
-        .build()
-}
-
-fn escape_xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]

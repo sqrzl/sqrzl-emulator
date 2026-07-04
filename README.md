@@ -71,6 +71,7 @@ Ubuntu runner and uses Dockerized cross-compilers to produce Linux binaries.
 ## Docs Map
 
 - [Support certification](docs/support-certification.md)
+- [Architecture diagrams](docs/architecture.md)
 - [Storage UI guidelines](docs/sqrzl-storage-ui-guidelines.md)
 - [Askr bug log](askr-bug.md)
 - [UI quick start and architecture](ui/README.md)

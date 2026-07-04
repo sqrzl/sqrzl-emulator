@@ -1,14 +1,17 @@
 use crate::error::Result;
 use crate::models::{Acl, Bucket, MultipartUpload, Object};
-use crate::storage::Storage;
-use std::collections::HashMap;
+use crate::storage::{
+    AclStore, BucketStore, LifecycleStore, MultipartStore, ObjectListingStore, ObjectStore,
+    PolicyStore, ProviderStateStore, Storage, TagStore, VersionStore,
+};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 /// In-memory index for fast lookups
 #[derive(Clone)]
 struct ObjectIndex {
     /// bucket_name -> Set of object keys
-    buckets: HashMap<String, Vec<String>>,
+    buckets: HashMap<String, BTreeSet<String>>,
 }
 
 /// Wraps any Storage implementation with in-memory indices for O(1) list/exists operations
@@ -19,12 +22,14 @@ pub struct IndexedStorage {
 
 impl IndexedStorage {
     pub fn new(inner: Arc<dyn Storage>) -> Self {
-        Self {
+        let storage = Self {
             inner,
             index: Arc::new(RwLock::new(ObjectIndex {
                 buckets: HashMap::new(),
             })),
-        }
+        };
+        storage.rebuild_index_from_inner();
+        storage
     }
 
     fn update_index_put(&self, bucket: &str, key: String) {
@@ -33,7 +38,7 @@ impl IndexedStorage {
                 .buckets
                 .entry(bucket.to_string())
                 .or_default()
-                .push(key);
+                .insert(key);
         }
     }
 
@@ -57,22 +62,55 @@ impl IndexedStorage {
         }
     }
 
-    fn get_indexed_objects(&self, bucket: &str, prefix: Option<&str>) -> Vec<String> {
-        let Ok(index) = self.index.read() else {
-            return Vec::new();
+    fn rebuild_index_from_inner(&self) {
+        let Ok(buckets) = self.inner.list_buckets() else {
+            return;
         };
-        if let Some(keys) = index.buckets.get(bucket) {
+
+        for bucket in buckets {
+            self.update_index_create_bucket(bucket.name.clone());
+            let mut marker = None;
+            loop {
+                let Ok(page) = self.inner.list_objects(
+                    &bucket.name,
+                    None,
+                    None,
+                    marker.as_deref(),
+                    Some(1000),
+                ) else {
+                    break;
+                };
+
+                for object in page.objects {
+                    self.update_index_put(&bucket.name, object.key);
+                }
+
+                if !page.is_truncated {
+                    break;
+                }
+
+                let Some(next_marker) = page.next_marker else {
+                    break;
+                };
+                marker = Some(next_marker);
+            }
+        }
+    }
+
+    fn get_indexed_objects(&self, bucket: &str, prefix: Option<&str>) -> Option<Vec<String>> {
+        let Ok(index) = self.index.read() else {
+            return None;
+        };
+        index.buckets.get(bucket).map(|keys| {
             keys.iter()
                 .filter(|k| prefix.is_none_or(|p| k.starts_with(p)))
                 .cloned()
                 .collect()
-        } else {
-            Vec::new()
-        }
+        })
     }
 }
 
-impl Storage for IndexedStorage {
+impl BucketStore for IndexedStorage {
     fn create_bucket(&self, name: String) -> Result<()> {
         self.inner.create_bucket(name.clone())?;
         self.update_index_create_bucket(name);
@@ -104,7 +142,9 @@ impl Storage for IndexedStorage {
     ) -> Result<Bucket> {
         self.inner.update_bucket_metadata(bucket, metadata)
     }
+}
 
+impl ObjectStore for IndexedStorage {
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
         self.inner.put_object(bucket, key.clone(), object)?;
         self.update_index_put(bucket, key);
@@ -154,45 +194,48 @@ impl Storage for IndexedStorage {
         // Fallback to storage
         self.inner.object_exists(bucket, key)
     }
+}
 
+impl ObjectListingStore for IndexedStorage {
     fn list_objects(
         &self,
         bucket: &str,
         prefix: Option<&str>,
-        _delimiter: Option<&str>,
+        delimiter: Option<&str>,
         marker: Option<&str>,
         max_keys: Option<usize>,
     ) -> Result<crate::models::ListObjectsResult> {
-        // Get keys from index without disk access
-        let mut keys = self.get_indexed_objects(bucket, prefix);
+        if delimiter.is_some_and(|value| !value.is_empty()) {
+            return self
+                .inner
+                .list_objects(bucket, prefix, delimiter, marker, max_keys);
+        }
 
-        // Sort keys
-        keys.sort();
+        let Some(mut keys) = self.get_indexed_objects(bucket, prefix) else {
+            return self
+                .inner
+                .list_objects(bucket, prefix, delimiter, marker, max_keys);
+        };
 
-        // Apply marker filter
         if let Some(m) = marker {
             keys.retain(|key| key.as_str() > m);
         }
 
-        // Apply pagination
         let max_keys = max_keys.unwrap_or(1000);
         let is_truncated = keys.len() > max_keys;
-
-        let next_marker = if is_truncated && keys.len() > max_keys {
-            let next_key = if max_keys == 0 {
-                keys[0].clone()
+        let page_keys = keys.iter().take(max_keys).cloned().collect::<Vec<_>>();
+        let next_marker = if is_truncated {
+            if max_keys == 0 {
+                keys.first().cloned()
             } else {
-                keys[max_keys - 1].clone()
-            };
-            keys.truncate(max_keys);
-            Some(next_key)
+                page_keys.last().cloned()
+            }
         } else {
             None
         };
 
-        // Fetch full objects from storage
-        let mut objects = Vec::new();
-        for key in keys {
+        let mut objects = Vec::with_capacity(page_keys.len());
+        for key in page_keys {
             if let Ok(obj) = self.inner.get_object(bucket, &key) {
                 objects.push(obj);
             }
@@ -205,7 +248,9 @@ impl Storage for IndexedStorage {
             next_marker,
         })
     }
+}
 
+impl MultipartStore for IndexedStorage {
     fn create_multipart_upload(&self, bucket: &str, key: String) -> Result<MultipartUpload> {
         self.inner.create_multipart_upload(bucket, key)
     }
@@ -256,7 +301,9 @@ impl Storage for IndexedStorage {
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {
         self.inner.abort_multipart_upload(bucket, upload_id)
     }
+}
 
+impl VersionStore for IndexedStorage {
     fn enable_versioning(&self, bucket: &str) -> Result<()> {
         self.inner.enable_versioning(bucket)
     }
@@ -293,7 +340,9 @@ impl Storage for IndexedStorage {
     fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
         self.inner.delete_object_version(bucket, key, version_id)
     }
+}
 
+impl TagStore for IndexedStorage {
     fn get_object_tags(
         &self,
         bucket: &str,
@@ -314,7 +363,9 @@ impl Storage for IndexedStorage {
     fn delete_object_tags(&self, bucket: &str, key: &str) -> Result<()> {
         self.inner.delete_object_tags(bucket, key)
     }
+}
 
+impl AclStore for IndexedStorage {
     fn get_bucket_acl(&self, name: &str) -> Result<Acl> {
         self.inner.get_bucket_acl(name)
     }
@@ -330,7 +381,9 @@ impl Storage for IndexedStorage {
     fn put_object_acl(&self, bucket: &str, key: &str, acl: Acl) -> Result<()> {
         self.inner.put_object_acl(bucket, key, acl)
     }
+}
 
+impl LifecycleStore for IndexedStorage {
     fn get_bucket_lifecycle(
         &self,
         bucket: &str,
@@ -349,7 +402,9 @@ impl Storage for IndexedStorage {
     fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()> {
         self.inner.delete_bucket_lifecycle(bucket)
     }
+}
 
+impl PolicyStore for IndexedStorage {
     fn get_bucket_policy(
         &self,
         bucket: &str,
@@ -368,7 +423,9 @@ impl Storage for IndexedStorage {
     fn delete_bucket_policy(&self, bucket: &str) -> Result<()> {
         self.inner.delete_bucket_policy(bucket)
     }
+}
 
+impl ProviderStateStore for IndexedStorage {
     fn put_provider_state(&self, provider: &str, key: &str, data: Vec<u8>) -> Result<()> {
         self.inner.put_provider_state(provider, key, data)
     }
@@ -379,5 +436,151 @@ impl Storage for IndexedStorage {
 
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()> {
         self.inner.delete_provider_state(provider, key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::FilesystemStorage;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn temp_path() -> PathBuf {
+        std::env::temp_dir().join(format!("sqrzl_indexed_test_{}", Uuid::new_v4()))
+    }
+
+    fn object(key: &str, data: &[u8]) -> Object {
+        Object::new(key.to_string(), data.to_vec(), "text/plain".to_string())
+    }
+
+    fn keys(result: crate::models::ListObjectsResult) -> Vec<String> {
+        result
+            .objects
+            .into_iter()
+            .map(|object| object.key)
+            .collect()
+    }
+
+    fn assert_listing_parity(
+        expected: crate::models::ListObjectsResult,
+        actual: crate::models::ListObjectsResult,
+    ) {
+        assert_eq!(keys(actual.clone()), keys(expected.clone()));
+        assert_eq!(actual.common_prefixes, expected.common_prefixes);
+        assert_eq!(actual.is_truncated, expected.is_truncated);
+        assert_eq!(actual.next_marker, expected.next_marker);
+    }
+
+    #[test]
+    fn should_not_duplicate_listings_after_overwrite() {
+        let base = temp_path();
+        let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner));
+
+        storage.create_bucket("bucket".to_string()).unwrap();
+        storage
+            .put_object("bucket", "same.txt".to_string(), object("same.txt", b"one"))
+            .unwrap();
+        storage
+            .put_object("bucket", "same.txt".to_string(), object("same.txt", b"two"))
+            .unwrap();
+
+        let listed = storage
+            .list_objects("bucket", None, None, None, Some(10))
+            .unwrap();
+
+        assert_eq!(keys(listed), vec!["same.txt"]);
+        assert_eq!(
+            storage.get_object("bucket", "same.txt").unwrap().data,
+            b"two"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_match_filesystem_delimiter_common_prefix_listing() {
+        let base = temp_path();
+        let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
+
+        storage.create_bucket("bucket".to_string()).unwrap();
+        for key in ["docs/api/openapi.json", "docs/readme.txt", "image.png"] {
+            storage
+                .put_object("bucket", key.to_string(), object(key, b"payload"))
+                .unwrap();
+        }
+
+        let expected = inner
+            .list_objects("bucket", Some(""), Some("/"), None, Some(10))
+            .unwrap();
+        let actual = storage
+            .list_objects("bucket", Some(""), Some("/"), None, Some(10))
+            .unwrap();
+
+        assert_listing_parity(expected, actual);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_match_filesystem_marker_pagination() {
+        let base = temp_path();
+        let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
+
+        storage.create_bucket("bucket".to_string()).unwrap();
+        for key in ["a.txt", "b.txt", "c.txt"] {
+            storage
+                .put_object("bucket", key.to_string(), object(key, b"payload"))
+                .unwrap();
+        }
+
+        let expected_first = inner
+            .list_objects("bucket", None, None, None, Some(2))
+            .unwrap();
+        let actual_first = storage
+            .list_objects("bucket", None, None, None, Some(2))
+            .unwrap();
+        assert_listing_parity(expected_first.clone(), actual_first.clone());
+
+        let marker = actual_first
+            .next_marker
+            .as_deref()
+            .expect("first page should be truncated");
+        let expected_second = inner
+            .list_objects("bucket", None, None, Some(marker), Some(2))
+            .unwrap();
+        let actual_second = storage
+            .list_objects("bucket", None, None, Some(marker), Some(2))
+            .unwrap();
+        assert_listing_parity(expected_second, actual_second);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_rebuild_index_from_existing_inner_storage() {
+        let base = temp_path();
+        let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        inner.create_bucket("bucket".to_string()).unwrap();
+        for key in ["alpha.txt", "beta.txt"] {
+            inner
+                .put_object("bucket", key.to_string(), object(key, b"payload"))
+                .unwrap();
+        }
+
+        let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
+        let expected = inner
+            .list_objects("bucket", None, None, None, Some(10))
+            .unwrap();
+        let actual = storage
+            .list_objects("bucket", None, None, None, Some(10))
+            .unwrap();
+
+        assert_listing_parity(expected, actual);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
