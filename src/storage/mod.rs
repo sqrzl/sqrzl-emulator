@@ -324,6 +324,10 @@ pub trait ProviderStateStore: Send + Sync {
 
 /// Storage backend aggregate - synchronous operations.
 /// HTTP layers handle async/await by calling these operations on request paths.
+///
+/// Prefer the focused capability traits in new private helpers. Keep this
+/// aggregate for public compatibility and entrypoints that need to pass one
+/// backend through multiple subsystems.
 pub trait Storage: Send + Sync {
     ///
     /// # Errors
@@ -856,6 +860,264 @@ where
 
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()> {
         ProviderStateStore::delete_provider_state(self, provider, key)
+    }
+}
+
+impl BucketStore for dyn Storage + '_ {
+    fn create_bucket(&self, name: String) -> Result<()> {
+        Storage::create_bucket(self, name)
+    }
+
+    fn delete_bucket(&self, name: &str) -> Result<()> {
+        Storage::delete_bucket(self, name)
+    }
+
+    fn get_bucket(&self, name: &str) -> Result<Bucket> {
+        Storage::get_bucket(self, name)
+    }
+
+    fn list_buckets(&self) -> Result<Vec<Bucket>> {
+        Storage::list_buckets(self)
+    }
+
+    fn bucket_exists(&self, name: &str) -> Result<bool> {
+        Storage::bucket_exists(self, name)
+    }
+
+    fn update_bucket_metadata(
+        &self,
+        bucket: &str,
+        metadata: HashMap<String, String>,
+    ) -> Result<Bucket> {
+        Storage::update_bucket_metadata(self, bucket, metadata)
+    }
+}
+
+impl ObjectStore for dyn Storage + '_ {
+    fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
+        Storage::put_object(self, bucket, key, object)
+    }
+
+    fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
+        Storage::get_object(self, bucket, key)
+    }
+
+    fn get_object_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Object, Vec<u8>)> {
+        Storage::get_object_range(self, bucket, key, start, end)
+    }
+
+    fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
+        Storage::delete_object(self, bucket, key)
+    }
+
+    fn update_object_storage_class(
+        &self,
+        bucket: &str,
+        key: &str,
+        storage_class: &str,
+    ) -> Result<()> {
+        Storage::update_object_storage_class(self, bucket, key, storage_class)
+    }
+
+    fn object_exists(&self, bucket: &str, key: &str) -> Result<bool> {
+        Storage::object_exists(self, bucket, key)
+    }
+}
+
+impl ObjectListingStore for dyn Storage + '_ {
+    fn list_objects(
+        &self,
+        bucket: &str,
+        prefix: Option<&str>,
+        delimiter: Option<&str>,
+        marker: Option<&str>,
+        max_keys: Option<usize>,
+    ) -> Result<ListObjectsResult> {
+        Storage::list_objects(self, bucket, prefix, delimiter, marker, max_keys)
+    }
+}
+
+impl MultipartStore for dyn Storage + '_ {
+    fn create_multipart_upload(&self, bucket: &str, key: String) -> Result<MultipartUpload> {
+        Storage::create_multipart_upload(self, bucket, key)
+    }
+
+    fn create_multipart_upload_with_metadata(
+        &self,
+        bucket: &str,
+        key: String,
+        content_type: Option<String>,
+        metadata: HashMap<String, String>,
+        provider_metadata: HashMap<String, String>,
+    ) -> Result<MultipartUpload> {
+        Storage::create_multipart_upload_with_metadata(
+            self,
+            bucket,
+            key,
+            content_type,
+            metadata,
+            provider_metadata,
+        )
+    }
+
+    fn upload_part(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        data: Vec<u8>,
+    ) -> Result<String> {
+        Storage::upload_part(self, bucket, upload_id, part_number, data)
+    }
+
+    fn list_multipart_uploads(&self, bucket: &str) -> Result<Vec<MultipartUpload>> {
+        Storage::list_multipart_uploads(self, bucket)
+    }
+
+    fn list_parts(&self, bucket: &str, upload_id: &str) -> Result<Vec<crate::models::Part>> {
+        Storage::list_parts(self, bucket, upload_id)
+    }
+
+    fn get_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<MultipartUpload> {
+        Storage::get_multipart_upload(self, bucket, upload_id)
+    }
+
+    fn complete_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<String> {
+        Storage::complete_multipart_upload(self, bucket, upload_id)
+    }
+
+    fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {
+        Storage::abort_multipart_upload(self, bucket, upload_id)
+    }
+}
+
+impl VersionStore for dyn Storage + '_ {
+    fn enable_versioning(&self, bucket: &str) -> Result<()> {
+        Storage::enable_versioning(self, bucket)
+    }
+
+    fn suspend_versioning(&self, bucket: &str) -> Result<()> {
+        Storage::suspend_versioning(self, bucket)
+    }
+
+    fn get_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<Object> {
+        Storage::get_object_version(self, bucket, key, version_id)
+    }
+
+    fn list_object_versions(&self, bucket: &str, prefix: Option<&str>) -> Result<Vec<Object>> {
+        Storage::list_object_versions(self, bucket, prefix)
+    }
+
+    fn list_object_versions_for_key(&self, bucket: &str, key: &str) -> Result<Vec<Object>> {
+        Storage::list_object_versions_for_key(self, bucket, key)
+    }
+
+    fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
+        Storage::delete_object_version(self, bucket, key, version_id)
+    }
+}
+
+impl TagStore for dyn Storage + '_ {
+    fn get_object_tags(&self, bucket: &str, key: &str) -> Result<HashMap<String, String>> {
+        Storage::get_object_tags(self, bucket, key)
+    }
+
+    fn put_object_tags(
+        &self,
+        bucket: &str,
+        key: &str,
+        tags: HashMap<String, String>,
+    ) -> Result<()> {
+        Storage::put_object_tags(self, bucket, key, tags)
+    }
+
+    fn delete_object_tags(&self, bucket: &str, key: &str) -> Result<()> {
+        Storage::delete_object_tags(self, bucket, key)
+    }
+}
+
+impl AclStore for dyn Storage + '_ {
+    fn get_bucket_acl(&self, bucket: &str) -> Result<crate::models::policy::Acl> {
+        Storage::get_bucket_acl(self, bucket)
+    }
+
+    fn put_bucket_acl(&self, bucket: &str, acl: crate::models::policy::Acl) -> Result<()> {
+        Storage::put_bucket_acl(self, bucket, acl)
+    }
+
+    fn get_object_acl(&self, bucket: &str, key: &str) -> Result<crate::models::policy::Acl> {
+        Storage::get_object_acl(self, bucket, key)
+    }
+
+    fn put_object_acl(
+        &self,
+        bucket: &str,
+        key: &str,
+        acl: crate::models::policy::Acl,
+    ) -> Result<()> {
+        Storage::put_object_acl(self, bucket, key, acl)
+    }
+}
+
+impl LifecycleStore for dyn Storage + '_ {
+    fn get_bucket_lifecycle(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::models::lifecycle::LifecycleConfiguration> {
+        Storage::get_bucket_lifecycle(self, bucket)
+    }
+
+    fn put_bucket_lifecycle(
+        &self,
+        bucket: &str,
+        config: crate::models::lifecycle::LifecycleConfiguration,
+    ) -> Result<()> {
+        Storage::put_bucket_lifecycle(self, bucket, config)
+    }
+
+    fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()> {
+        Storage::delete_bucket_lifecycle(self, bucket)
+    }
+}
+
+impl PolicyStore for dyn Storage + '_ {
+    fn get_bucket_policy(
+        &self,
+        bucket: &str,
+    ) -> Result<crate::models::policy::BucketPolicyDocument> {
+        Storage::get_bucket_policy(self, bucket)
+    }
+
+    fn put_bucket_policy(
+        &self,
+        bucket: &str,
+        policy: crate::models::policy::BucketPolicyDocument,
+    ) -> Result<()> {
+        Storage::put_bucket_policy(self, bucket, policy)
+    }
+
+    fn delete_bucket_policy(&self, bucket: &str) -> Result<()> {
+        Storage::delete_bucket_policy(self, bucket)
+    }
+}
+
+impl ProviderStateStore for dyn Storage + '_ {
+    fn put_provider_state(&self, provider: &str, key: &str, data: Vec<u8>) -> Result<()> {
+        Storage::put_provider_state(self, provider, key, data)
+    }
+
+    fn get_provider_state(&self, provider: &str, key: &str) -> Result<Vec<u8>> {
+        Storage::get_provider_state(self, provider, key)
+    }
+
+    fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()> {
+        Storage::delete_provider_state(self, provider, key)
     }
 }
 

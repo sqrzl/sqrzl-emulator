@@ -2,7 +2,7 @@ use super::ResponseBuilder;
 use crate::body::Body;
 use crate::server::RequestExt as Request;
 use crate::services::bucket as bucket_service;
-use crate::storage::Storage;
+use crate::storage::BucketStore;
 use http::StatusCode;
 use hyper::Response;
 use quick_xml::escape::unescape;
@@ -35,7 +35,7 @@ pub(super) fn is_preflight(req: &Request) -> bool {
 }
 
 pub(super) fn apply_actual_request_headers(
-    storage: &dyn Storage,
+    storage: &(impl BucketStore + ?Sized),
     bucket: &str,
     req: &Request,
     builder: ResponseBuilder,
@@ -72,7 +72,7 @@ pub(super) fn apply_actual_request_headers_from_xml(
 }
 
 pub(super) fn preflight_response(
-    storage: &dyn Storage,
+    storage: &(impl BucketStore + ?Sized),
     bucket: &str,
     req: &Request,
     req_id: &str,
@@ -146,7 +146,7 @@ fn apply_rule_headers(
 }
 
 fn matching_rule(
-    storage: &dyn Storage,
+    storage: &(impl BucketStore + ?Sized),
     bucket: &str,
     origin: &str,
     method: &str,
@@ -233,7 +233,10 @@ fn allows_headers(rule: &CorsRule, requested_headers: Option<&str>) -> bool {
     })
 }
 
-fn load_rules(storage: &dyn Storage, bucket: &str) -> Result<Vec<CorsRule>, crate::error::Error> {
+fn load_rules(
+    storage: &(impl BucketStore + ?Sized),
+    bucket: &str,
+) -> Result<Vec<CorsRule>, crate::error::Error> {
     let bucket = bucket_service::get_bucket(storage, bucket)?;
     let Some(xml) = bucket.metadata.get(S3_CORS_XML_KEY) else {
         return Ok(Vec::new());

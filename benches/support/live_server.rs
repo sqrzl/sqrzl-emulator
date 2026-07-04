@@ -5,7 +5,7 @@ use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper_util::client::legacy::connect::HttpConnector;
 type Body = Full<Bytes>;
-use hyper::{body::Incoming, Request, Response};
+use hyper::{body::Incoming, Request, Response, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use sqrzl_emulator::server::Server;
@@ -114,19 +114,34 @@ impl LiveServer {
     }
 
     pub async fn response_bytes(&self, request: Request<Body>) -> Vec<u8> {
-        let body = self
-            .request(request)
-            .await
+        self.response_bytes_with_status(request).await.1
+    }
+
+    pub async fn response_bytes_with_status(
+        &self,
+        request: Request<Body>,
+    ) -> (StatusCode, Vec<u8>) {
+        let response = self.request(request).await;
+        let status = response.status();
+        let body = response
             .into_body()
             .collect()
             .await
             .expect("response body should read")
             .to_bytes();
-        body.to_vec()
+        (status, body.to_vec())
     }
 
     pub async fn response_text(&self, request: Request<Body>) -> String {
         String::from_utf8(self.response_bytes(request).await).expect("response body should be utf8")
+    }
+
+    pub async fn response_text_with_status(&self, request: Request<Body>) -> (StatusCode, String) {
+        let (status, body) = self.response_bytes_with_status(request).await;
+        (
+            status,
+            String::from_utf8(body).expect("response body should be utf8"),
+        )
     }
 
     async fn send_request(

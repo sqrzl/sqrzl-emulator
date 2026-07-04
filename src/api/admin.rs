@@ -11,15 +11,17 @@ use std::sync::Arc;
 
 mod dto;
 mod pagination;
+mod route;
 
 use dto::{
     bucket_to_details, bucket_to_info, common_prefix_to_folder_info, object_to_info,
     object_to_metadata,
 };
 use pagination::{
-    contains_search, decode_component, encode_next, encode_object_next, paginate,
-    parse_object_page_params, parse_page_params, ObjectPageParams, PageTokenKind,
+    contains_search, encode_next, encode_object_next, paginate, parse_object_page_params,
+    parse_page_params, ObjectPageParams, PageTokenKind,
 };
+use route::{BucketResource, ObjectResource, Route};
 
 ///
 /// # Errors
@@ -33,75 +35,87 @@ where
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
-    let admin_path = path
-        .strip_prefix("/admin/v1")
-        .ok_or_else(|| Error::RouteNotFound(path.clone()))?;
+    let route = route::parse(&path)?;
 
-    if admin_path == "/buckets" {
-        return match method {
+    match route {
+        Route::Buckets => match method {
             Method::GET => list_buckets(&storage, &query),
             Method::POST => create_bucket(storage, req).await,
             _ => Err(Error::MethodNotAllowed(path)),
-        };
-    }
-
-    if let Some(rest) = admin_path.strip_prefix("/buckets/") {
-        let (bucket, remainder) = parse_bucket_and_remainder(rest)?;
-
-        return match remainder {
-            None => match method {
+        },
+        Route::Bucket { bucket, resource } => match resource {
+            BucketResource::Root => match method {
                 Method::GET => get_bucket(&storage, &bucket),
                 Method::DELETE => delete_bucket(&storage, &bucket),
                 _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
-            Some("versioning") => match method {
+            BucketResource::Versioning => match method {
                 Method::GET => get_bucket_versioning(&storage, &bucket),
                 Method::PUT => set_bucket_versioning(storage, &bucket, req).await,
                 _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
-            Some("acl") => match method {
+            BucketResource::Acl => match method {
                 Method::GET => get_bucket_acl(&storage, &bucket),
                 Method::PUT => set_bucket_acl(storage, &bucket, req).await,
                 _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
-            Some("policy") => match method {
+            BucketResource::Policy => match method {
                 Method::GET => get_bucket_policy(&storage, &bucket),
                 Method::PUT => set_bucket_policy(storage, &bucket, req).await,
                 Method::DELETE => delete_bucket_policy(&storage, &bucket),
                 _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
-            Some("lifecycle") => match method {
+            BucketResource::Lifecycle => match method {
                 Method::GET => get_bucket_lifecycle(&storage, &bucket),
                 Method::PUT => set_bucket_lifecycle(storage, &bucket, req).await,
                 Method::DELETE => delete_bucket_lifecycle(&storage, &bucket),
                 _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
-            Some("multipart-uploads") => match method {
+            BucketResource::MultipartUploads => match method {
                 Method::GET => list_multipart_uploads(&storage, &bucket, &query),
                 _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
-            Some(remainder) if remainder.starts_with("multipart-uploads/") => {
-                handle_multipart_upload_request(&storage, &bucket, remainder, &req)
-            }
-            Some("objects") => match method {
+            BucketResource::MultipartUpload { upload_id } => match method {
+                Method::GET => get_multipart_upload(&storage, &bucket, &upload_id),
+                Method::DELETE => abort_multipart_upload(&storage, &bucket, &upload_id),
+                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
+            },
+            BucketResource::Objects => match method {
                 Method::GET => list_objects(&storage, &bucket, &query),
                 _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
             },
-            Some(remainder) if remainder.starts_with("objects/") => {
-                handle_object_request(
-                    storage,
-                    &bucket,
-                    remainder.trim_start_matches("objects/"),
-                    &query,
-                    req,
-                )
-                .await
-            }
-            _ => Err(Error::RouteNotFound(path)),
-        };
+            BucketResource::Object { key, resource } => match resource {
+                ObjectResource::Content => match method {
+                    Method::GET => download_object_content(&storage, &bucket, &key),
+                    Method::PUT => put_object_content(storage, &bucket, &key, req).await,
+                    _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
+                },
+                ObjectResource::Versions => match method {
+                    Method::GET => list_object_versions(&storage, &bucket, &key, &query),
+                    _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
+                },
+                ObjectResource::Version { version_id } => match method {
+                    Method::DELETE => delete_object_version(&storage, &bucket, &key, &version_id),
+                    _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
+                },
+                ObjectResource::Tags => match method {
+                    Method::GET => get_object_tags(&storage, &bucket, &key),
+                    Method::PUT => put_object_tags(storage, &bucket, &key, req).await,
+                    _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
+                },
+                ObjectResource::Acl => match method {
+                    Method::GET => get_object_acl(&storage, &bucket, &key),
+                    Method::PUT => set_object_acl(storage, &bucket, &key, req).await,
+                    _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
+                },
+                ObjectResource::Metadata => match method {
+                    Method::GET => get_object_metadata(&storage, &bucket, &key),
+                    Method::DELETE => delete_object(&storage, &bucket, &key),
+                    _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
+                },
+            },
+        },
     }
-
-    Err(Error::RouteNotFound(path))
 }
 
 #[must_use]
@@ -141,24 +155,6 @@ fn empty_response(status: StatusCode) -> Response<Body> {
         .status(status)
         .body(Body::default())
         .unwrap_or_else(|_| Response::new(Body::default()))
-}
-
-fn parse_bucket_and_remainder(rest: &str) -> Result<(String, Option<&str>)> {
-    let (bucket, remainder) = match rest.split_once('/') {
-        Some((bucket, remainder)) => (bucket, Some(remainder)),
-        None => (rest, None),
-    };
-
-    let bucket = decode_component(bucket);
-    if bucket.is_empty() {
-        return Err(Error::InvalidRequest("Missing bucket".into()));
-    }
-
-    if let Err(message) = validation::validate_bucket_name(&bucket) {
-        return Err(Error::InvalidRequest(message));
-    }
-
-    Ok((bucket, remainder))
 }
 
 fn list_buckets(storage: &Arc<dyn Storage>, query: &str) -> Result<Response<Body>> {
@@ -497,33 +493,6 @@ fn list_multipart_uploads(
     ))
 }
 
-fn handle_multipart_upload_request<B>(
-    storage: &Arc<dyn Storage>,
-    bucket: &str,
-    remainder: &str,
-    req: &Request<B>,
-) -> Result<Response<Body>>
-where
-    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
-    B::Error: std::fmt::Display,
-{
-    let method = req.method().clone();
-    let path = req.uri().path().to_string();
-    let upload_id = remainder
-        .strip_prefix("multipart-uploads/")
-        .ok_or_else(|| Error::RouteNotFound(path.clone()))?;
-    let upload_id = decode_component(upload_id);
-    if upload_id.is_empty() {
-        return Err(Error::InvalidRequest("Missing upload id".into()));
-    }
-
-    match method {
-        Method::GET => get_multipart_upload(storage, bucket, &upload_id),
-        Method::DELETE => abort_multipart_upload(storage, bucket, &upload_id),
-        _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
-    }
-}
-
 fn get_multipart_upload(
     storage: &Arc<dyn Storage>,
     bucket: &str,
@@ -544,78 +513,6 @@ fn abort_multipart_upload(
         object_service::abort_multipart_upload(storage.as_ref(), bucket, upload_id)
     })?;
     Ok(empty_response(StatusCode::NO_CONTENT))
-}
-
-async fn handle_object_request<B>(
-    storage: Arc<dyn Storage>,
-    bucket: &str,
-    object_rest: &str,
-    query: &str,
-    req: Request<B>,
-) -> Result<Response<Body>>
-where
-    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
-    B::Error: std::fmt::Display,
-{
-    let method = req.method().clone();
-    let path = req.uri().path().to_string();
-
-    if object_rest.is_empty() {
-        return Err(Error::InvalidRequest("Missing object key".into()));
-    }
-
-    if let Some(key) = object_rest.strip_suffix("/content") {
-        let key = decode_component(key);
-        return match method {
-            Method::GET => download_object_content(&storage, bucket, &key),
-            Method::PUT => put_object_content(storage, bucket, &key, req).await,
-            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
-        };
-    }
-
-    if let Some(key) = object_rest.strip_suffix("/versions") {
-        let key = decode_component(key);
-        return match method {
-            Method::GET => list_object_versions(&storage, bucket, &key, query),
-            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
-        };
-    }
-
-    if let Some((key, version_id)) = object_rest.rsplit_once("/versions/") {
-        let key = decode_component(key);
-        let version_id = decode_component(version_id);
-        if !key.is_empty() && !version_id.is_empty() {
-            return match method {
-                Method::DELETE => delete_object_version(&storage, bucket, &key, &version_id),
-                _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
-            };
-        }
-    }
-
-    if let Some(key) = object_rest.strip_suffix("/tags") {
-        let key = decode_component(key);
-        return match method {
-            Method::GET => get_object_tags(&storage, bucket, &key),
-            Method::PUT => put_object_tags(storage, bucket, &key, req).await,
-            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
-        };
-    }
-
-    if let Some(key) = object_rest.strip_suffix("/acl") {
-        let key = decode_component(key);
-        return match method {
-            Method::GET => get_object_acl(&storage, bucket, &key),
-            Method::PUT => set_object_acl(storage, bucket, &key, req).await,
-            _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
-        };
-    }
-
-    let key = decode_component(object_rest);
-    match method {
-        Method::GET => get_object_metadata(&storage, bucket, &key),
-        Method::DELETE => delete_object(&storage, bucket, &key),
-        _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
-    }
 }
 
 fn get_object_metadata(

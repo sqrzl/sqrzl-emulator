@@ -1,7 +1,7 @@
 use crate::server::handlers::cors;
 use crate::server::http::{Request, ResponseBuilder};
 use crate::services::bucket as bucket_service;
-use crate::storage::Storage;
+use crate::storage::BucketStore;
 use crate::utils::xml as xml_utils;
 use quick_xml::escape::unescape;
 use quick_xml::events::Event;
@@ -116,14 +116,17 @@ pub(super) fn metadata_value(xml: &str, tag: &[u8]) -> Option<String> {
     None
 }
 
-pub(super) fn bucket_cors_snapshot(storage: &dyn Storage, bucket: &str) -> Option<String> {
+pub(super) fn bucket_cors_snapshot(
+    storage: &(impl BucketStore + ?Sized),
+    bucket: &str,
+) -> Option<String> {
     bucket_service::get_bucket(storage, bucket)
         .ok()
         .and_then(|bucket_record| bucket_record.metadata.get(S3_CORS_XML_KEY).cloned())
 }
 
 pub(super) fn apply_bucket_cors_headers(
-    storage: &dyn Storage,
+    storage: &(impl BucketStore + ?Sized),
     bucket: &str,
     req: &Request,
     builder: ResponseBuilder,
@@ -226,7 +229,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 pub(super) fn with_bucket_metadata<F>(
-    storage: &dyn Storage,
+    storage: &(impl BucketStore + ?Sized),
     bucket: &str,
     update: F,
 ) -> crate::error::Result<crate::models::Bucket>

@@ -44,7 +44,7 @@ uuid = { version = "1.23", features = ["v4", "serde"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
-criterion = "0.8.2"
+cntryl-stress = { git = "https://github.com/cntryl/stress", rev = "a5deacc42275f3251455bc2d2ccaf64ec4f8b616", package = "cntryl-stress" }
 
 [[bench]]
 name = "tier1_hotpath"

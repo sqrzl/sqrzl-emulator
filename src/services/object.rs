@@ -1,6 +1,8 @@
 use crate::error::Result;
 use crate::models::{ListObjectsResult, MultipartUpload, Object, Part};
-use crate::storage::Storage;
+use crate::storage::{
+    AclStore, MultipartStore, ObjectListingStore, ObjectStore, TagStore, VersionStore,
+};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -9,7 +11,7 @@ use std::hash::BuildHasher;
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn list_objects(
-    storage: &dyn Storage,
+    storage: &(impl ObjectListingStore + ?Sized),
     bucket: &str,
     prefix: Option<&str>,
     delimiter: Option<&str>,
@@ -23,7 +25,11 @@ pub fn list_objects(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn get_object(storage: &dyn Storage, bucket: &str, key: &str) -> Result<Object> {
+pub fn get_object(
+    storage: &(impl ObjectStore + ?Sized),
+    bucket: &str,
+    key: &str,
+) -> Result<Object> {
     storage.get_object(bucket, key)
 }
 
@@ -32,7 +38,7 @@ pub fn get_object(storage: &dyn Storage, bucket: &str, key: &str) -> Result<Obje
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn get_object_version(
-    storage: &dyn Storage,
+    storage: &(impl VersionStore + ?Sized),
     bucket: &str,
     key: &str,
     version_id: &str,
@@ -45,7 +51,7 @@ pub fn get_object_version(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn get_object_range(
-    storage: &dyn Storage,
+    storage: &(impl ObjectStore + ?Sized),
     bucket: &str,
     key: &str,
     start: u64,
@@ -58,7 +64,11 @@ pub fn get_object_range(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn object_exists(storage: &dyn Storage, bucket: &str, key: &str) -> Result<bool> {
+pub fn object_exists(
+    storage: &(impl ObjectStore + ?Sized),
+    bucket: &str,
+    key: &str,
+) -> Result<bool> {
     storage.object_exists(bucket, key)
 }
 
@@ -66,7 +76,12 @@ pub fn object_exists(storage: &dyn Storage, bucket: &str, key: &str) -> Result<b
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn put_object(storage: &dyn Storage, bucket: &str, key: String, object: Object) -> Result<()> {
+pub fn put_object(
+    storage: &(impl ObjectStore + ?Sized),
+    bucket: &str,
+    key: String,
+    object: Object,
+) -> Result<()> {
     storage.put_object(bucket, key, object)
 }
 
@@ -74,7 +89,7 @@ pub fn put_object(storage: &dyn Storage, bucket: &str, key: String, object: Obje
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn delete_object(storage: &dyn Storage, bucket: &str, key: &str) -> Result<()> {
+pub fn delete_object(storage: &(impl ObjectStore + ?Sized), bucket: &str, key: &str) -> Result<()> {
     storage.delete_object(bucket, key)
 }
 
@@ -83,7 +98,7 @@ pub fn delete_object(storage: &dyn Storage, bucket: &str, key: &str) -> Result<(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn delete_object_version(
-    storage: &dyn Storage,
+    storage: &(impl VersionStore + ?Sized),
     bucket: &str,
     key: &str,
     version_id: &str,
@@ -96,7 +111,7 @@ pub fn delete_object_version(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn list_object_versions(
-    storage: &dyn Storage,
+    storage: &(impl VersionStore + ?Sized),
     bucket: &str,
     prefix: Option<&str>,
 ) -> Result<Vec<Object>> {
@@ -108,7 +123,7 @@ pub fn list_object_versions(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn list_object_versions_for_key(
-    storage: &dyn Storage,
+    storage: &(impl VersionStore + ?Sized),
     bucket: &str,
     key: &str,
 ) -> Result<Vec<Object>> {
@@ -120,7 +135,7 @@ pub fn list_object_versions_for_key(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn get_object_tags(
-    storage: &dyn Storage,
+    storage: &(impl TagStore + ?Sized),
     bucket: &str,
     key: &str,
 ) -> Result<HashMap<String, String>> {
@@ -132,7 +147,7 @@ pub fn get_object_tags(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn put_object_tags(
-    storage: &dyn Storage,
+    storage: &(impl TagStore + ?Sized),
     bucket: &str,
     key: &str,
     tags: HashMap<String, String, impl BuildHasher>,
@@ -144,7 +159,11 @@ pub fn put_object_tags(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn delete_object_tags(storage: &dyn Storage, bucket: &str, key: &str) -> Result<()> {
+pub fn delete_object_tags(
+    storage: &(impl TagStore + ?Sized),
+    bucket: &str,
+    key: &str,
+) -> Result<()> {
     storage.delete_object_tags(bucket, key)
 }
 
@@ -153,7 +172,7 @@ pub fn delete_object_tags(storage: &dyn Storage, bucket: &str, key: &str) -> Res
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn get_object_acl(
-    storage: &dyn Storage,
+    storage: &(impl AclStore + ?Sized),
     bucket: &str,
     key: &str,
 ) -> Result<crate::models::policy::Acl> {
@@ -165,7 +184,7 @@ pub fn get_object_acl(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn put_object_acl(
-    storage: &dyn Storage,
+    storage: &(impl AclStore + ?Sized),
     bucket: &str,
     key: &str,
     acl: crate::models::policy::Acl,
@@ -177,7 +196,11 @@ pub fn put_object_acl(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn list_parts(storage: &dyn Storage, bucket: &str, upload_id: &str) -> Result<Vec<Part>> {
+pub fn list_parts(
+    storage: &(impl MultipartStore + ?Sized),
+    bucket: &str,
+    upload_id: &str,
+) -> Result<Vec<Part>> {
     storage.list_parts(bucket, upload_id)
 }
 
@@ -186,7 +209,7 @@ pub fn list_parts(storage: &dyn Storage, bucket: &str, upload_id: &str) -> Resul
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn get_multipart_upload(
-    storage: &dyn Storage,
+    storage: &(impl MultipartStore + ?Sized),
     bucket: &str,
     upload_id: &str,
 ) -> Result<MultipartUpload> {
@@ -198,7 +221,7 @@ pub fn get_multipart_upload(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn upload_part(
-    storage: &dyn Storage,
+    storage: &(impl MultipartStore + ?Sized),
     bucket: &str,
     upload_id: &str,
     part_number: u32,
@@ -211,7 +234,10 @@ pub fn upload_part(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn list_multipart_uploads(storage: &dyn Storage, bucket: &str) -> Result<Vec<MultipartUpload>> {
+pub fn list_multipart_uploads(
+    storage: &(impl MultipartStore + ?Sized),
+    bucket: &str,
+) -> Result<Vec<MultipartUpload>> {
     storage.list_multipart_uploads(bucket)
 }
 
@@ -220,7 +246,7 @@ pub fn list_multipart_uploads(storage: &dyn Storage, bucket: &str) -> Result<Vec
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn create_multipart_upload(
-    storage: &dyn Storage,
+    storage: &(impl MultipartStore + ?Sized),
     bucket: &str,
     key: String,
 ) -> Result<MultipartUpload> {
@@ -232,7 +258,7 @@ pub fn create_multipart_upload(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn complete_multipart_upload(
-    storage: &dyn Storage,
+    storage: &(impl MultipartStore + ?Sized),
     bucket: &str,
     upload_id: &str,
 ) -> Result<String> {
@@ -243,14 +269,18 @@ pub fn complete_multipart_upload(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn abort_multipart_upload(storage: &dyn Storage, bucket: &str, upload_id: &str) -> Result<()> {
+pub fn abort_multipart_upload(
+    storage: &(impl MultipartStore + ?Sized),
+    bucket: &str,
+    upload_id: &str,
+) -> Result<()> {
     storage.abort_multipart_upload(bucket, upload_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::FilesystemStorage;
+    use crate::storage::{FilesystemStorage, Storage};
     use std::fs;
     use std::sync::Arc;
 

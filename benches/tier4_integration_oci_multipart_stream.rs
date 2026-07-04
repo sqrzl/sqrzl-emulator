@@ -1,14 +1,10 @@
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use cntryl_stress::prelude::*;
 use http_body_util::Full;
 type Body = Full<Bytes>;
 
 use hyper::{Request, StatusCode};
-use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
-
-#[path = "support/criterion_config.rs"]
-mod criterion_config;
 
 #[path = "support/mod.rs"]
 mod support;
@@ -24,6 +20,10 @@ fn build_runtime() -> Runtime {
         .enable_all()
         .build()
         .expect("runtime should build")
+}
+
+fn count_as_u64(count: usize) -> u64 {
+    u64::try_from(count).expect("count should fit in u64")
 }
 
 async fn create_bucket(server: &LiveServer, bucket: &str) {
@@ -95,7 +95,15 @@ async fn create_upload_session(server: &LiveServer, init_url: &str, object: &str
         .to_string()
 }
 
-fn bench_multipart_stream_upload(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(
+        component = "provider_api",
+        provider = "oci",
+        operation = "multipart_stream_upload"
+    )
+)]
+fn multipart_stream_upload(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let bucket = "tier4-oci-multipart-stream";
@@ -111,52 +119,51 @@ fn bench_multipart_stream_upload(c: &mut Criterion) {
         })
         .collect();
 
-    let mut group = c.benchmark_group("tier4_integration_oci_multipart_stream");
-    group.sampling_mode(criterion::SamplingMode::Flat);
-    group.throughput(Throughput::Bytes((PART_COUNT * PART_SIZE) as u64));
-    group.bench_function(
-        BenchmarkId::new("upload_stream", format!("{PART_COUNT}x{PART_SIZE}")),
-        |b| {
-            b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
-                for _ in 0..iters {
-                    let upload_id =
-                        runtime.block_on(create_upload_session(&server, &init_url, object));
-                    let requests: Vec<_> = parts
-                        .iter()
-                        .enumerate()
-                        .map(|(index, part)| {
-                            multipart_part_request(
-                                &multipart_url,
-                                &upload_id,
-                                u32::try_from(index + 1).expect("part number should fit in u32"),
-                                part,
-                            )
-                        })
-                        .collect();
+    ctx.parameter("part_count", PART_COUNT);
+    ctx.parameter("part_size_bytes", PART_SIZE);
+    ctx.parameter("payload_size_bytes", PART_COUNT * PART_SIZE);
 
-                    let start = Instant::now();
-                    for request in requests {
-                        let response = runtime.block_on(server.request(request));
-                        assert_eq!(response.status(), StatusCode::OK);
-                        let _ = response.headers().get("etag").cloned();
-                    }
-                    total += start.elapsed();
+    let upload_id = runtime.block_on(create_upload_session(&server, &init_url, object));
+    let requests: Vec<_> = parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| {
+            multipart_part_request(
+                &multipart_url,
+                &upload_id,
+                u32::try_from(index + 1).expect("part number should fit in u32"),
+                part,
+            )
+        })
+        .collect();
 
-                    let response =
-                        runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
-                    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-                }
-                total
-            });
-        },
+    let statuses = ctx.measure(|| {
+        requests
+            .into_iter()
+            .map(|request| {
+                let response = runtime.block_on(server.request(request));
+                let etag = response.headers().get("etag").cloned();
+                black_box(etag);
+                response.status()
+            })
+            .collect::<Vec<_>>()
+    });
+    let completed = count_as_u64(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::OK)
+            .count(),
     );
-    group.finish();
+    let attempted = count_as_u64(PART_COUNT);
+    let _ = ctx
+        .correctness()
+        .attempted(attempted)
+        .completed(completed)
+        .failures(attempted - completed);
+    assert!(statuses.iter().all(|status| *status == StatusCode::OK));
+
+    let response = runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
-criterion_group! {
-    name = benches;
-    config = criterion_config::criterion_config_for_tier4();
-    targets = bench_multipart_stream_upload
-}
-criterion_main!(benches);
+stress_main!();

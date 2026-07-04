@@ -1,16 +1,10 @@
 use bytes::Bytes;
-use criterion::{
-    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
-};
+use cntryl_stress::prelude::*;
 use http_body_util::Full;
-use std::hint::black_box;
 type Body = Full<Bytes>;
 
 use hyper::{Request, StatusCode};
 use tokio::runtime::{Builder, Runtime};
-
-#[path = "support/criterion_config.rs"]
-mod criterion_config;
 
 #[path = "support/mod.rs"]
 mod support;
@@ -24,6 +18,17 @@ fn build_runtime() -> Runtime {
         .enable_all()
         .build()
         .expect("runtime should build")
+}
+
+fn record_status(ctx: &mut StressContext, status: StatusCode, expected: StatusCode) {
+    let completed = u64::from(status == expected);
+    let failures = u64::from(status != expected);
+    let _ = ctx
+        .correctness()
+        .attempted(1)
+        .completed(completed)
+        .failures(failures);
+    assert_eq!(status, expected);
 }
 
 async fn create_container(server: &LiveServer, container: &str) {
@@ -40,7 +45,11 @@ async fn create_container(server: &LiveServer, container: &str) {
     assert_eq!(response.status(), StatusCode::CREATED);
 }
 
-fn bench_put_blob(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(component = "provider_api", provider = "azure", operation = "put_blob")
+)]
+fn put_blob(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let container = "tier4-azure-put";
@@ -51,28 +60,25 @@ fn bench_put_blob(c: &mut Criterion) {
         server.base_url, container
     );
 
-    let mut group = c.benchmark_group("tier4_integration_azure_put_blob");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Bytes(payload.len() as u64));
-    group.bench_function(BenchmarkId::new("put_blob", payload.len()), |b| {
-        b.iter(|| {
-            let request = Request::builder()
-                .method("PUT")
-                .uri(&blob_url)
-                .header("x-ms-version", AZURE_VERSION)
-                .header("x-ms-blob-type", "BlockBlob")
-                .header("content-type", "text/plain")
-                .body(Body::from(payload.clone()))
-                .expect("blob put request should build");
-            let response = runtime.block_on(server.request(request));
-            assert_eq!(response.status(), StatusCode::CREATED);
-            black_box(response.headers().get("etag").cloned());
-        });
-    });
-    group.finish();
+    ctx.parameter("payload_size_bytes", payload.len());
+    let request = Request::builder()
+        .method("PUT")
+        .uri(&blob_url)
+        .header("x-ms-version", AZURE_VERSION)
+        .header("x-ms-blob-type", "BlockBlob")
+        .header("content-type", "text/plain")
+        .body(Body::from(payload))
+        .expect("blob put request should build");
+    let response = ctx.measure(|| runtime.block_on(server.request(request)));
+    record_status(ctx, response.status(), StatusCode::CREATED);
+    black_box(response.headers().get("etag").cloned());
 }
 
-fn bench_get_blob(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(component = "provider_api", provider = "azure", operation = "get_blob")
+)]
+fn get_blob(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let container = "tier4-azure-get";
@@ -96,31 +102,29 @@ fn bench_get_blob(c: &mut Criterion) {
         assert_eq!(response.status(), StatusCode::CREATED);
     });
 
-    let mut group = c.benchmark_group("tier4_integration_azure_get_blob");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Bytes(payload.len() as u64));
-    group.bench_function(BenchmarkId::new("get_blob", payload.len()), |b| {
-        b.iter_batched(
-            || {
-                Request::builder()
-                    .method("GET")
-                    .uri(&blob_url)
-                    .header("x-ms-version", AZURE_VERSION)
-                    .body(Body::default())
-                    .expect("blob get request should build")
-            },
-            |request| {
-                let body = runtime.block_on(server.response_bytes(request));
-                assert_eq!(body.as_slice(), payload.as_ref());
-                black_box(body);
-            },
-            BatchSize::SmallInput,
-        );
-    });
-    group.finish();
+    ctx.parameter("payload_size_bytes", payload.len());
+    let request = Request::builder()
+        .method("GET")
+        .uri(&blob_url)
+        .header("x-ms-version", AZURE_VERSION)
+        .body(Body::default())
+        .expect("blob get request should build");
+    let (status, body) =
+        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
+    record_status(ctx, status, StatusCode::OK);
+    assert_eq!(body.as_slice(), payload.as_ref());
+    black_box(body);
 }
 
-fn bench_get_blob_range(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(
+        component = "provider_api",
+        provider = "azure",
+        operation = "get_blob_range"
+    )
+)]
+fn get_blob_range(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let container = "tier4-azure-range";
@@ -144,32 +148,31 @@ fn bench_get_blob_range(c: &mut Criterion) {
         assert_eq!(response.status(), StatusCode::CREATED);
     });
 
-    let mut group = c.benchmark_group("tier4_integration_azure_get_blob_range");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Bytes(4 * 1024));
-    group.bench_function(BenchmarkId::new("get_blob_range", 4 * 1024), |b| {
-        b.iter_batched(
-            || {
-                Request::builder()
-                    .method("GET")
-                    .uri(&blob_url)
-                    .header("x-ms-version", AZURE_VERSION)
-                    .header("x-ms-range", "bytes=0-4095")
-                    .body(Body::default())
-                    .expect("blob range request should build")
-            },
-            |request| {
-                let body = runtime.block_on(server.response_bytes(request));
-                assert_eq!(body.len(), 4 * 1024);
-                black_box(body);
-            },
-            BatchSize::SmallInput,
-        );
-    });
-    group.finish();
+    ctx.parameter("payload_size_bytes", payload.len());
+    ctx.parameter("range_size_bytes", 4 * 1024);
+    let request = Request::builder()
+        .method("GET")
+        .uri(&blob_url)
+        .header("x-ms-version", AZURE_VERSION)
+        .header("x-ms-range", "bytes=0-4095")
+        .body(Body::default())
+        .expect("blob range request should build");
+    let (status, body) =
+        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
+    record_status(ctx, status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(body.len(), 4 * 1024);
+    black_box(body);
 }
 
-fn bench_list_blobs(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(
+        component = "provider_api",
+        provider = "azure",
+        operation = "list_blobs"
+    )
+)]
+fn list_blobs(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let container = "tier4-azure-list";
@@ -198,33 +201,18 @@ fn bench_list_blobs(c: &mut Criterion) {
         "{}/devstoreaccount1/{}?restype=container&comp=list&prefix=item-",
         server.base_url, container
     );
-    let mut group = c.benchmark_group("tier4_integration_azure_list_blobs");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(128));
-    group.bench_function(BenchmarkId::new("list_blobs", 128), |b| {
-        b.iter_batched(
-            || {
-                Request::builder()
-                    .method("GET")
-                    .uri(&list_url)
-                    .header("x-ms-version", AZURE_VERSION)
-                    .body(Body::default())
-                    .expect("blob list request should build")
-            },
-            |request| {
-                let listing = runtime.block_on(server.response_text(request));
-                assert!(listing.contains("item-000.txt"));
-                black_box(listing);
-            },
-            BatchSize::SmallInput,
-        );
-    });
-    group.finish();
+    ctx.parameter("object_count", 128);
+    let request = Request::builder()
+        .method("GET")
+        .uri(&list_url)
+        .header("x-ms-version", AZURE_VERSION)
+        .body(Body::default())
+        .expect("blob list request should build");
+    let (status, listing) =
+        ctx.measure(|| runtime.block_on(server.response_text_with_status(request)));
+    record_status(ctx, status, StatusCode::OK);
+    assert!(listing.contains("item-000.txt"));
+    black_box(listing);
 }
 
-criterion_group! {
-    name = benches;
-    config = criterion_config::criterion_config_for_tier4();
-    targets = bench_put_blob, bench_get_blob, bench_get_blob_range, bench_list_blobs
-}
-criterion_main!(benches);
+stress_main!();

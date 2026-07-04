@@ -1,6 +1,6 @@
 use crate::body::Body;
 use crate::server::ResponseBuilder;
-use crate::storage::Storage;
+use crate::storage::BucketStore;
 use http::StatusCode;
 use serde::Serialize;
 
@@ -17,7 +17,10 @@ struct HealthResponse {
     enabled_providers: [&'static str; 4],
 }
 
-pub fn response(storage: &dyn Storage, config: &crate::Config) -> hyper::Response<Body> {
+pub fn response(
+    storage: &(impl BucketStore + ?Sized),
+    config: &crate::Config,
+) -> hyper::Response<Body> {
     let storage_ready = storage.list_buckets().is_ok();
     let body = HealthResponse {
         status: if storage_ready { "ok" } else { "degraded" },

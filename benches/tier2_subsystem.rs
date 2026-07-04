@@ -1,134 +1,181 @@
-use criterion::{
-    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
-};
+use cntryl_stress::prelude::*;
 use sqrzl_emulator::models::Object;
-use sqrzl_emulator::storage::{FilesystemStorage, Storage};
-use std::hint::black_box;
+use sqrzl_emulator::storage::{BucketStore, FilesystemStorage, ObjectListingStore, ObjectStore};
 use std::path::PathBuf;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, OnceLock,
+};
 use uuid::Uuid;
 
-#[path = "support/criterion_config.rs"]
-mod criterion_config;
+static PUT_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
+static GET_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
+static RANGE_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
+static FLAT_LIST_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
+static DIRECTORY_LIST_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
+static SKEWED_LIST_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
+static PUT_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 fn temp_path() -> PathBuf {
     std::env::temp_dir().join(format!("sqrzl_bench_tier2_{}", Uuid::new_v4()))
 }
 
-fn bench_put_object(c: &mut Criterion) {
+fn new_storage_with_bucket() -> FilesystemStorage {
     let base = temp_path();
     let storage = FilesystemStorage::new(&base);
     storage
         .create_bucket("bench".to_string())
         .expect("bucket create should succeed");
+    storage
+}
 
+fn put_storage() -> Arc<FilesystemStorage> {
+    PUT_STORAGE
+        .get_or_init(|| Arc::new(new_storage_with_bucket()))
+        .clone()
+}
+
+fn get_storage() -> Arc<FilesystemStorage> {
+    GET_STORAGE
+        .get_or_init(|| {
+            let storage = new_storage_with_bucket();
+            storage
+                .put_object(
+                    "bench",
+                    "item.txt".to_string(),
+                    Object::new(
+                        "item.txt".to_string(),
+                        vec![b'a'; 1024],
+                        "text/plain".to_string(),
+                    ),
+                )
+                .expect("seed put should succeed");
+            Arc::new(storage)
+        })
+        .clone()
+}
+
+fn range_storage() -> Arc<FilesystemStorage> {
+    RANGE_STORAGE
+        .get_or_init(|| {
+            let storage = new_storage_with_bucket();
+            storage
+                .put_object(
+                    "bench",
+                    "item.txt".to_string(),
+                    Object::new(
+                        "item.txt".to_string(),
+                        vec![b'a'; 4096],
+                        "text/plain".to_string(),
+                    ),
+                )
+                .expect("seed put should succeed");
+            Arc::new(storage)
+        })
+        .clone()
+}
+
+fn flat_list_storage() -> Arc<FilesystemStorage> {
+    FLAT_LIST_STORAGE
+        .get_or_init(|| {
+            let storage = new_storage_with_bucket();
+            seed_flat_objects(&storage, 128, 512);
+            Arc::new(storage)
+        })
+        .clone()
+}
+
+fn directory_list_storage() -> Arc<FilesystemStorage> {
+    DIRECTORY_LIST_STORAGE
+        .get_or_init(|| {
+            let storage = new_storage_with_bucket();
+            seed_directory_children(&storage);
+            Arc::new(storage)
+        })
+        .clone()
+}
+
+fn skewed_list_storage() -> Arc<FilesystemStorage> {
+    SKEWED_LIST_STORAGE
+        .get_or_init(|| {
+            let storage = new_storage_with_bucket();
+            seed_skewed_directory_children(&storage);
+            Arc::new(storage)
+        })
+        .clone()
+}
+
+#[stress_test(
+    tier = 2,
+    metadata(
+        component = "storage",
+        operation = "put_object",
+        scenario = "1k_payload"
+    )
+)]
+fn put_object_1k_payload(ctx: &mut StressContext) {
+    let storage = put_storage();
     let payload_size = 1024usize;
     let payload = vec![b'a'; payload_size];
-    let content_type = "text/plain".to_string();
+    let sequence = PUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let key = format!("item-{sequence}.txt");
+    let object = Object::new(key.clone(), payload, "text/plain".to_string());
 
-    let mut group = c.benchmark_group("tier2_subsystem_put_object");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Bytes(payload_size as u64));
-    group.bench_function(BenchmarkId::new("put_object", payload_size), |b| {
-        b.iter_batched(
-            || {
-                Object::new(
-                    "item.txt".to_string(),
-                    payload.clone(),
-                    content_type.clone(),
-                )
-            },
-            |object| {
-                storage
-                    .put_object("bench", "item.txt".to_string(), object)
-                    .expect("put should succeed");
-            },
-            BatchSize::SmallInput,
-        );
+    ctx.parameter("payload_size_bytes", payload_size);
+    ctx.measure(|| {
+        storage
+            .put_object("bench", key, object)
+            .expect("put should succeed");
     });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
-fn bench_get_object(c: &mut Criterion) {
-    let base = temp_path();
-    let storage = FilesystemStorage::new(&base);
-    storage
-        .create_bucket("bench".to_string())
-        .expect("bucket create should succeed");
-    storage
-        .put_object(
-            "bench",
-            "item.txt".to_string(),
-            Object::new(
-                "item.txt".to_string(),
-                vec![b'a'; 1024],
-                "text/plain".to_string(),
-            ),
-        )
-        .expect("seed put should succeed");
+#[stress_test(
+    tier = 2,
+    mode = "fixed_duration",
+    metadata(
+        component = "storage",
+        operation = "get_object",
+        scenario = "1k_payload"
+    )
+)]
+fn get_object_1k_payload(ctx: &mut StressContext) {
+    let storage = get_storage();
 
-    let mut group = c.benchmark_group("tier2_subsystem_get_object");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(1));
-    group.bench_function("get_object", |b| {
-        b.iter(|| {
-            black_box(
-                storage
-                    .get_object("bench", "item.txt")
-                    .expect("get should succeed"),
-            )
-        });
+    ctx.parameter("payload_size_bytes", 1024);
+    let _ = ctx.measure_workload(|| {
+        let object = storage
+            .get_object("bench", "item.txt")
+            .expect("get should succeed");
+        black_box(object);
     });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
-fn bench_get_object_range(c: &mut Criterion) {
-    let base = temp_path();
-    let storage = FilesystemStorage::new(&base);
-    storage
-        .create_bucket("bench".to_string())
-        .expect("bucket create should succeed");
-    storage
-        .put_object(
-            "bench",
-            "item.txt".to_string(),
-            Object::new(
-                "item.txt".to_string(),
-                vec![b'a'; 4096],
-                "text/plain".to_string(),
-            ),
-        )
-        .expect("seed put should succeed");
+#[stress_test(
+    tier = 2,
+    mode = "fixed_duration",
+    metadata(
+        component = "storage",
+        operation = "get_object_range",
+        scenario = "64b_range"
+    )
+)]
+fn get_object_64b_range(ctx: &mut StressContext) {
+    let storage = range_storage();
 
-    let mut group = c.benchmark_group("tier2_subsystem_get_object_range");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Bytes(64));
-    group.bench_function("get_object_range", |b| {
-        b.iter(|| {
-            black_box(
-                storage
-                    .get_object_range("bench", "item.txt", 64, Some(128))
-                    .expect("range get should succeed"),
-            )
-        });
+    ctx.parameter("payload_size_bytes", 4096);
+    ctx.parameter("range_start", 64);
+    ctx.parameter("range_end", 128);
+    let _ = ctx.measure_workload(|| {
+        let object = storage
+            .get_object_range("bench", "item.txt", 64, Some(128))
+            .expect("range get should succeed");
+        black_box(object);
     });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
-fn bench_list_objects(c: &mut Criterion) {
-    let base = temp_path();
-    let storage = FilesystemStorage::new(&base);
-    storage
-        .create_bucket("bench".to_string())
-        .expect("bucket create should succeed");
-
-    let payload = vec![b'a'; 512];
-    for index in 0..128usize {
+fn seed_flat_objects(storage: &FilesystemStorage, object_count: usize, payload_size: usize) {
+    let payload = vec![b'a'; payload_size];
+    for index in 0..object_count {
         storage
             .put_object(
                 "bench",
@@ -141,31 +188,31 @@ fn bench_list_objects(c: &mut Criterion) {
             )
             .expect("seed put should succeed");
     }
-
-    let mut group = c.benchmark_group("tier2_subsystem_list_objects");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(128));
-    group.bench_function(BenchmarkId::new("list_objects", 128), |b| {
-        b.iter(|| {
-            black_box(
-                storage
-                    .list_objects("bench", Some("item-"), None, None, Some(128))
-                    .expect("list should succeed"),
-            )
-        });
-    });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
-fn bench_list_directory_children(c: &mut Criterion) {
-    let base = temp_path();
-    let storage = FilesystemStorage::new(&base);
-    storage
-        .create_bucket("bench".to_string())
-        .expect("bucket create should succeed");
+#[stress_test(
+    tier = 2,
+    mode = "fixed_duration",
+    metadata(
+        component = "storage",
+        operation = "list_objects",
+        scenario = "flat_128"
+    )
+)]
+fn list_objects_flat_128(ctx: &mut StressContext) {
+    let storage = flat_list_storage();
 
+    ctx.parameter("object_count", 128);
+    ctx.parameter("page_size", 128);
+    let _ = ctx.measure_workload(|| {
+        let listing = storage
+            .list_objects("bench", Some("item-"), None, None, Some(128))
+            .expect("list should succeed");
+        black_box(listing);
+    });
+}
+
+fn seed_directory_children(storage: &FilesystemStorage) {
     let payload = vec![b'a'; 256];
     for dir_index in 0..100usize {
         for object_index in 0..10usize {
@@ -179,40 +226,53 @@ fn bench_list_directory_children(c: &mut Criterion) {
                 .expect("seed put should succeed");
         }
     }
-
-    let mut group = c.benchmark_group("tier2_subsystem_list_directory_children");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(100));
-    group.bench_function(BenchmarkId::new("root_children", 100), |b| {
-        b.iter(|| {
-            black_box(
-                storage
-                    .list_objects("bench", Some(""), Some("/"), None, Some(100))
-                    .expect("directory list should succeed"),
-            )
-        });
-    });
-    group.bench_function(BenchmarkId::new("nested_children", 10), |b| {
-        b.iter(|| {
-            black_box(
-                storage
-                    .list_objects("bench", Some("dir-050/"), Some("/"), None, Some(10))
-                    .expect("nested directory list should succeed"),
-            )
-        });
-    });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
-fn bench_list_skewed_directory_children(c: &mut Criterion) {
-    let base = temp_path();
-    let storage = FilesystemStorage::new(&base);
-    storage
-        .create_bucket("bench".to_string())
-        .expect("bucket create should succeed");
+#[stress_test(
+    tier = 2,
+    mode = "fixed_duration",
+    metadata(
+        component = "storage",
+        operation = "list_directory_children",
+        scenario = "root_children"
+    )
+)]
+fn list_directory_root_children(ctx: &mut StressContext) {
+    let storage = directory_list_storage();
 
+    ctx.parameter("directory_count", 100);
+    ctx.parameter("page_size", 100);
+    let _ = ctx.measure_workload(|| {
+        let listing = storage
+            .list_objects("bench", Some(""), Some("/"), None, Some(100))
+            .expect("directory list should succeed");
+        black_box(listing);
+    });
+}
+
+#[stress_test(
+    tier = 2,
+    mode = "fixed_duration",
+    metadata(
+        component = "storage",
+        operation = "list_directory_children",
+        scenario = "nested_children"
+    )
+)]
+fn list_directory_nested_children(ctx: &mut StressContext) {
+    let storage = directory_list_storage();
+
+    ctx.parameter("object_count", 10);
+    ctx.parameter("page_size", 10);
+    let _ = ctx.measure_workload(|| {
+        let listing = storage
+            .list_objects("bench", Some("dir-050/"), Some("/"), None, Some(10))
+            .expect("nested directory list should succeed");
+        black_box(listing);
+    });
+}
+
+fn seed_skewed_directory_children(storage: &FilesystemStorage) {
     let payload = vec![b'a'; 128];
     for index in 0..1_000usize {
         let key = format!("a/blob-{index:04}.txt");
@@ -231,37 +291,50 @@ fn bench_list_skewed_directory_children(c: &mut Criterion) {
             Object::new("z/blob.txt".to_string(), payload, "text/plain".to_string()),
         )
         .expect("seed put should succeed");
-
-    let mut group = c.benchmark_group("tier2_subsystem_list_skewed_directory_children");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(2));
-    group.bench_function(BenchmarkId::new("root_children", 2), |b| {
-        b.iter(|| {
-            black_box(
-                storage
-                    .list_objects("bench", Some(""), Some("/"), None, Some(50))
-                    .expect("skewed root directory list should succeed"),
-            )
-        });
-    });
-    group.throughput(Throughput::Elements(50));
-    group.bench_function(BenchmarkId::new("large_prefix_page", 50), |b| {
-        b.iter(|| {
-            black_box(
-                storage
-                    .list_objects("bench", Some("a/"), Some("/"), None, Some(50))
-                    .expect("large prefix directory list should succeed"),
-            )
-        });
-    });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
-criterion_group! {
-    name = benches;
-    config = criterion_config::criterion_config_for_tier2();
-    targets = bench_put_object, bench_get_object, bench_get_object_range, bench_list_objects, bench_list_directory_children, bench_list_skewed_directory_children
+#[stress_test(
+    tier = 2,
+    mode = "fixed_duration",
+    metadata(
+        component = "storage",
+        operation = "list_skewed_directory_children",
+        scenario = "root_children"
+    )
+)]
+fn list_skewed_directory_root_children(ctx: &mut StressContext) {
+    let storage = skewed_list_storage();
+
+    ctx.parameter("directory_count", 2);
+    ctx.parameter("page_size", 50);
+    let _ = ctx.measure_workload(|| {
+        let listing = storage
+            .list_objects("bench", Some(""), Some("/"), None, Some(50))
+            .expect("skewed root directory list should succeed");
+        black_box(listing);
+    });
 }
-criterion_main!(benches);
+
+#[stress_test(
+    tier = 2,
+    mode = "fixed_duration",
+    metadata(
+        component = "storage",
+        operation = "list_skewed_directory_children",
+        scenario = "large_prefix_page"
+    )
+)]
+fn list_skewed_directory_large_prefix_page(ctx: &mut StressContext) {
+    let storage = skewed_list_storage();
+
+    ctx.parameter("object_count", 1_000);
+    ctx.parameter("page_size", 50);
+    let _ = ctx.measure_workload(|| {
+        let listing = storage
+            .list_objects("bench", Some("a/"), Some("/"), None, Some(50))
+            .expect("large prefix directory list should succeed");
+        black_box(listing);
+    });
+}
+
+stress_main!();

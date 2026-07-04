@@ -5,7 +5,7 @@ use sqrzl_emulator::api::server::start_ui_server;
 use sqrzl_emulator::config::LogFormat;
 use sqrzl_emulator::error::Result;
 use sqrzl_emulator::server::Server;
-use sqrzl_emulator::storage::{FilesystemStorage, Storage};
+use sqrzl_emulator::storage::{BucketStore, FilesystemStorage};
 use sqrzl_emulator::utils::validation::validate_bucket_name;
 use sqrzl_emulator::{Config, Error};
 
@@ -90,7 +90,10 @@ fn init_logging(log_format: LogFormat) {
     }
 }
 
-fn ensure_startup_buckets(storage: &dyn Storage, bucket_names: &[String]) -> Result<()> {
+fn ensure_startup_buckets(
+    storage: &(impl BucketStore + ?Sized),
+    bucket_names: &[String],
+) -> Result<()> {
     for bucket_name in bucket_names {
         if let Err(message) = validate_bucket_name(bucket_name) {
             return Err(Error::InvalidRequest(format!(

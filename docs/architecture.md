@@ -383,7 +383,7 @@ flowchart LR
     Unit["Rust unit tests<br/>module-level storage, auth, routing, helpers"]
     E2E["Rust e2e and interop tests<br/>tests/e2e_*.rs<br/>tests/interop_*.rs"]
     SDK["Python SDK certification<br/>sdk-tests/test_*_sdk.py"]
-    Benches["Criterion tiers<br/>tier1 hotpath<br/>tier2 subsystem<br/>tier3 system/admin<br/>tier4 provider integration"]
+    Benches["cntryl-stress tiers and artifacts<br/>tier1 hotpath<br/>tier2 subsystem<br/>tier3 system/admin<br/>tier4 provider integration"]
     LiveServer["LiveServer harness<br/>ephemeral ports and temp storage"]
     Emulator["sqrzl-emulator runtime"]
     Matrix["compatibility-matrix.json<br/>support-certification.md"]

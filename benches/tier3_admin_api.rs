@@ -1,22 +1,18 @@
 use bytes::Bytes;
-use criterion::{
-    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
-};
+use cntryl_stress::prelude::*;
 use http_body_util::BodyExt;
 use hyper::{Method, Request};
 use sqrzl_emulator::body::Body;
 use sqrzl_emulator::models::Object;
 use sqrzl_emulator::storage::{FilesystemStorage, Storage};
-use std::hint::black_box;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::runtime::Builder;
+use std::sync::{Arc, OnceLock};
+use tokio::runtime::{Builder, Runtime};
 use uuid::Uuid;
 
-#[path = "support/criterion_config.rs"]
-mod criterion_config;
-
 const ADMIN_BUCKET: &str = "bench-objects";
+static BUCKET_LISTING_STORAGE: OnceLock<Arc<dyn Storage>> = OnceLock::new();
+static OBJECT_BROWSING_STORAGE: OnceLock<Arc<dyn Storage>> = OnceLock::new();
 
 fn temp_path() -> PathBuf {
     std::env::temp_dir().join(format!("sqrzl_bench_tier3_admin_{}", Uuid::new_v4()))
@@ -48,6 +44,15 @@ async fn admin_response_len(storage: Arc<dyn Storage>, uri: &str) -> usize {
         .len()
 }
 
+fn measure_admin_response_len(
+    ctx: &mut StressContext,
+    runtime: &Runtime,
+    storage: &Arc<dyn Storage>,
+    uri: &str,
+) -> usize {
+    ctx.measure(|| runtime.block_on(admin_response_len(storage.clone(), uri)))
+}
+
 fn put_text(storage: &Arc<dyn Storage>, bucket: &str, key: String, payload: &[u8]) {
     storage
         .put_object(
@@ -58,7 +63,19 @@ fn put_text(storage: &Arc<dyn Storage>, bucket: &str, key: String, payload: &[u8
         .expect("seed put should succeed");
 }
 
-fn seed_bucket_listing_storage(bucket_count: usize) -> (Arc<dyn Storage>, PathBuf) {
+fn bucket_listing_storage() -> Arc<dyn Storage> {
+    BUCKET_LISTING_STORAGE
+        .get_or_init(|| seed_bucket_listing_storage(500))
+        .clone()
+}
+
+fn object_browsing_storage() -> Arc<dyn Storage> {
+    OBJECT_BROWSING_STORAGE
+        .get_or_init(seed_object_browsing_storage)
+        .clone()
+}
+
+fn seed_bucket_listing_storage(bucket_count: usize) -> Arc<dyn Storage> {
     let base = temp_path();
     let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
 
@@ -68,10 +85,10 @@ fn seed_bucket_listing_storage(bucket_count: usize) -> (Arc<dyn Storage>, PathBu
             .expect("seed bucket create should succeed");
     }
 
-    (storage, base)
+    storage
 }
 
-fn seed_object_browsing_storage() -> (Arc<dyn Storage>, PathBuf) {
+fn seed_object_browsing_storage() -> Arc<dyn Storage> {
     let base = temp_path();
     let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
     storage
@@ -138,121 +155,207 @@ fn seed_object_browsing_storage() -> (Arc<dyn Storage>, PathBuf) {
         }
     }
 
-    (storage, base)
+    storage
 }
 
-fn bench_admin_list_buckets(c: &mut Criterion) {
+#[stress_test(
+    tier = 3,
+    metadata(component = "admin_api", operation = "list_buckets", scenario = "page")
+)]
+fn admin_list_buckets_page(ctx: &mut StressContext) {
     let runtime = Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("runtime should build");
-    let (storage, base) = seed_bucket_listing_storage(500);
+    let storage = bucket_listing_storage();
 
-    let mut group = c.benchmark_group("tier3_admin_api_list_buckets");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(50));
-    group.bench_function(BenchmarkId::new("page", 50), |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets?limit=50",
-            )))
-        });
-    });
-    group.bench_function(BenchmarkId::new("search", 50), |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets?limit=50&search=bucket-4",
-            )))
-        });
-    });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
+    ctx.parameter("bucket_count", 500);
+    ctx.parameter("page_size", 50);
+    let len = measure_admin_response_len(ctx, &runtime, &storage, "/admin/v1/buckets?limit=50");
+    black_box(len);
 }
 
-fn bench_admin_list_objects(c: &mut Criterion) {
+#[stress_test(
+    tier = 3,
+    metadata(
+        component = "admin_api",
+        operation = "list_buckets",
+        scenario = "search"
+    )
+)]
+fn admin_list_buckets_search(ctx: &mut StressContext) {
     let runtime = Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("runtime should build");
-    let (storage, base) = seed_object_browsing_storage();
+    let storage = bucket_listing_storage();
 
-    let mut group = c.benchmark_group("tier3_admin_api_list_objects");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(50));
-    group.bench_function(BenchmarkId::new("root_directory", 50), |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets/bench-objects/objects?limit=50",
-            )))
-        });
-    });
-    group.bench_function(BenchmarkId::new("nested_directory", 10), |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=dir-050/",
-            )))
-        });
-    });
-    group.bench_function(BenchmarkId::new("skewed_root_directory", 2), |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=skew/",
-            )))
-        });
-    });
-    group.bench_function(BenchmarkId::new("search_flat_objects", 50), |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=flat/&search=object-09",
-            )))
-        });
-    });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
+    ctx.parameter("bucket_count", 500);
+    ctx.parameter("page_size", 50);
+    ctx.parameter("search", "bucket-4");
+    let len = measure_admin_response_len(
+        ctx,
+        &runtime,
+        &storage,
+        "/admin/v1/buckets?limit=50&search=bucket-4",
+    );
+    black_box(len);
 }
 
-fn bench_admin_object_detail(c: &mut Criterion) {
+#[stress_test(
+    tier = 3,
+    metadata(
+        component = "admin_api",
+        operation = "list_objects",
+        scenario = "root_directory"
+    )
+)]
+fn admin_list_objects_root_directory(ctx: &mut StressContext) {
     let runtime = Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("runtime should build");
-    let (storage, base) = seed_object_browsing_storage();
+    let storage = object_browsing_storage();
 
-    let mut group = c.benchmark_group("tier3_admin_api_object_detail");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(1));
-    group.bench_function("metadata", |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets/bench-objects/objects/flat%2Fobject-0500.txt",
-            )))
-        });
-    });
-    group.bench_function(BenchmarkId::new("versions", 25), |b| {
-        b.iter(|| {
-            black_box(runtime.block_on(admin_response_len(
-                storage.clone(),
-                "/admin/v1/buckets/bench-objects/objects/versioned-target.txt/versions?limit=25",
-            )))
-        });
-    });
-    group.finish();
-
-    let _ = std::fs::remove_dir_all(&base);
+    ctx.parameter("object_count", 3_001);
+    ctx.parameter("page_size", 50);
+    let len = measure_admin_response_len(
+        ctx,
+        &runtime,
+        &storage,
+        "/admin/v1/buckets/bench-objects/objects?limit=50",
+    );
+    black_box(len);
 }
 
-criterion_group! {
-    name = benches;
-    config = criterion_config::criterion_config_for_tier3();
-    targets = bench_admin_list_buckets, bench_admin_list_objects, bench_admin_object_detail
+#[stress_test(
+    tier = 3,
+    metadata(
+        component = "admin_api",
+        operation = "list_objects",
+        scenario = "nested_directory"
+    )
+)]
+fn admin_list_objects_nested_directory(ctx: &mut StressContext) {
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let storage = object_browsing_storage();
+
+    ctx.parameter("object_count", 10);
+    ctx.parameter("page_size", 50);
+    let len = measure_admin_response_len(
+        ctx,
+        &runtime,
+        &storage,
+        "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=dir-050/",
+    );
+    black_box(len);
 }
-criterion_main!(benches);
+
+#[stress_test(
+    tier = 3,
+    metadata(
+        component = "admin_api",
+        operation = "list_objects",
+        scenario = "skewed_root_directory"
+    )
+)]
+fn admin_list_objects_skewed_root_directory(ctx: &mut StressContext) {
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let storage = object_browsing_storage();
+
+    ctx.parameter("directory_count", 2);
+    ctx.parameter("page_size", 50);
+    let len = measure_admin_response_len(
+        ctx,
+        &runtime,
+        &storage,
+        "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=skew/",
+    );
+    black_box(len);
+}
+
+#[stress_test(
+    tier = 3,
+    metadata(
+        component = "admin_api",
+        operation = "list_objects",
+        scenario = "search_flat_objects"
+    )
+)]
+fn admin_list_objects_search_flat_objects(ctx: &mut StressContext) {
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let storage = object_browsing_storage();
+
+    ctx.parameter("object_count", 1_000);
+    ctx.parameter("page_size", 50);
+    ctx.parameter("search", "object-09");
+    let len = measure_admin_response_len(
+        ctx,
+        &runtime,
+        &storage,
+        "/admin/v1/buckets/bench-objects/objects?limit=50&prefix=flat/&search=object-09",
+    );
+    black_box(len);
+}
+
+#[stress_test(
+    tier = 3,
+    metadata(
+        component = "admin_api",
+        operation = "object_detail",
+        scenario = "metadata"
+    )
+)]
+fn admin_object_detail_metadata(ctx: &mut StressContext) {
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let storage = object_browsing_storage();
+
+    ctx.parameter("object_count", 1);
+    let len = measure_admin_response_len(
+        ctx,
+        &runtime,
+        &storage,
+        "/admin/v1/buckets/bench-objects/objects/flat%2Fobject-0500.txt",
+    );
+    black_box(len);
+}
+
+#[stress_test(
+    tier = 3,
+    metadata(
+        component = "admin_api",
+        operation = "object_detail",
+        scenario = "versions"
+    )
+)]
+fn admin_object_detail_versions(ctx: &mut StressContext) {
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let storage = object_browsing_storage();
+
+    ctx.parameter("version_count", 40);
+    ctx.parameter("page_size", 25);
+    let len = measure_admin_response_len(
+        ctx,
+        &runtime,
+        &storage,
+        "/admin/v1/buckets/bench-objects/objects/versioned-target.txt/versions?limit=25",
+    );
+    black_box(len);
+}
+
+stress_main!();

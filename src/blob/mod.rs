@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::models::{MultipartUpload, Object};
-use crate::storage::Storage;
+use crate::storage::{BucketStore, MultipartStore, ObjectListingStore, ObjectStore, VersionStore};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -188,7 +188,10 @@ pub trait BlobBackend: Send + Sync {
     fn complete_upload_session(&self, namespace: &str, upload_id: &str) -> Result<String>;
 }
 
-impl<T: Storage + ?Sized> BlobBackend for T {
+impl<T> BlobBackend for T
+where
+    T: BucketStore + ObjectStore + ObjectListingStore + MultipartStore + VersionStore + ?Sized,
+{
     fn create_namespace(&self, name: String) -> Result<Namespace> {
         self.create_bucket(name.clone())?;
         self.get_namespace(&name)
@@ -333,7 +336,7 @@ impl<T: Storage + ?Sized> BlobBackend for T {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::FilesystemStorage;
+    use crate::storage::{FilesystemStorage, ObjectStore, VersionStore};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use uuid::Uuid;

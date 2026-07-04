@@ -1,7 +1,9 @@
 use crate::error::Result;
 use crate::models::Bucket;
 use crate::models::{LifecycleConfiguration, MultipartUpload};
-use crate::storage::Storage;
+use crate::storage::{
+    AclStore, BucketStore, LifecycleStore, MultipartStore, PolicyStore, VersionStore,
+};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
@@ -9,7 +11,7 @@ use std::hash::BuildHasher;
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn list_buckets(storage: &dyn Storage) -> Result<Vec<Bucket>> {
+pub fn list_buckets(storage: &(impl BucketStore + ?Sized)) -> Result<Vec<Bucket>> {
     storage.list_buckets()
 }
 
@@ -17,7 +19,7 @@ pub fn list_buckets(storage: &dyn Storage) -> Result<Vec<Bucket>> {
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn create_bucket(storage: &dyn Storage, name: String) -> Result<()> {
+pub fn create_bucket(storage: &(impl BucketStore + ?Sized), name: String) -> Result<()> {
     storage.create_bucket(name)
 }
 
@@ -25,7 +27,7 @@ pub fn create_bucket(storage: &dyn Storage, name: String) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn get_bucket(storage: &dyn Storage, name: &str) -> Result<Bucket> {
+pub fn get_bucket(storage: &(impl BucketStore + ?Sized), name: &str) -> Result<Bucket> {
     storage.get_bucket(name)
 }
 
@@ -33,7 +35,7 @@ pub fn get_bucket(storage: &dyn Storage, name: &str) -> Result<Bucket> {
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn delete_bucket(storage: &dyn Storage, name: &str) -> Result<()> {
+pub fn delete_bucket(storage: &(impl BucketStore + ?Sized), name: &str) -> Result<()> {
     storage.delete_bucket(name)
 }
 
@@ -41,7 +43,7 @@ pub fn delete_bucket(storage: &dyn Storage, name: &str) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn bucket_exists(storage: &dyn Storage, name: &str) -> Result<bool> {
+pub fn bucket_exists(storage: &(impl BucketStore + ?Sized), name: &str) -> Result<bool> {
     storage.bucket_exists(name)
 }
 
@@ -50,7 +52,7 @@ pub fn bucket_exists(storage: &dyn Storage, name: &str) -> Result<bool> {
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn update_bucket_metadata(
-    storage: &dyn Storage,
+    storage: &(impl BucketStore + ?Sized),
     bucket: &str,
     metadata: HashMap<String, String, impl BuildHasher>,
 ) -> Result<Bucket> {
@@ -61,7 +63,11 @@ pub fn update_bucket_metadata(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn set_versioning(storage: &dyn Storage, bucket: &str, enabled: bool) -> Result<()> {
+pub fn set_versioning(
+    storage: &(impl VersionStore + ?Sized),
+    bucket: &str,
+    enabled: bool,
+) -> Result<()> {
     if enabled {
         storage.enable_versioning(bucket)
     } else {
@@ -78,7 +84,10 @@ pub fn versioning_enabled(bucket: &Bucket) -> bool {
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn delete_bucket_lifecycle(storage: &dyn Storage, bucket: &str) -> Result<()> {
+pub fn delete_bucket_lifecycle(
+    storage: &(impl LifecycleStore + ?Sized),
+    bucket: &str,
+) -> Result<()> {
     storage.delete_bucket_lifecycle(bucket)
 }
 
@@ -86,7 +95,7 @@ pub fn delete_bucket_lifecycle(storage: &dyn Storage, bucket: &str) -> Result<()
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn delete_bucket_policy(storage: &dyn Storage, bucket: &str) -> Result<()> {
+pub fn delete_bucket_policy(storage: &(impl PolicyStore + ?Sized), bucket: &str) -> Result<()> {
     storage.delete_bucket_policy(bucket)
 }
 
@@ -94,7 +103,10 @@ pub fn delete_bucket_policy(storage: &dyn Storage, bucket: &str) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn get_bucket_lifecycle(storage: &dyn Storage, bucket: &str) -> Result<LifecycleConfiguration> {
+pub fn get_bucket_lifecycle(
+    storage: &(impl LifecycleStore + ?Sized),
+    bucket: &str,
+) -> Result<LifecycleConfiguration> {
     storage.get_bucket_lifecycle(bucket)
 }
 
@@ -103,7 +115,7 @@ pub fn get_bucket_lifecycle(storage: &dyn Storage, bucket: &str) -> Result<Lifec
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn put_bucket_lifecycle(
-    storage: &dyn Storage,
+    storage: &(impl LifecycleStore + ?Sized),
     bucket: &str,
     config: LifecycleConfiguration,
 ) -> Result<()> {
@@ -115,7 +127,7 @@ pub fn put_bucket_lifecycle(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn get_bucket_policy(
-    storage: &dyn Storage,
+    storage: &(impl PolicyStore + ?Sized),
     bucket: &str,
 ) -> Result<crate::models::policy::BucketPolicyDocument> {
     storage.get_bucket_policy(bucket)
@@ -126,7 +138,7 @@ pub fn get_bucket_policy(
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn put_bucket_policy(
-    storage: &dyn Storage,
+    storage: &(impl PolicyStore + ?Sized),
     bucket: &str,
     policy: crate::models::policy::BucketPolicyDocument,
 ) -> Result<()> {
@@ -137,7 +149,10 @@ pub fn put_bucket_policy(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn get_bucket_acl(storage: &dyn Storage, bucket: &str) -> Result<crate::models::policy::Acl> {
+pub fn get_bucket_acl(
+    storage: &(impl AclStore + ?Sized),
+    bucket: &str,
+) -> Result<crate::models::policy::Acl> {
     storage.get_bucket_acl(bucket)
 }
 
@@ -146,7 +161,7 @@ pub fn get_bucket_acl(storage: &dyn Storage, bucket: &str) -> Result<crate::mode
 ///
 /// Returns an error when the underlying emulator operation fails.
 pub fn put_bucket_acl(
-    storage: &dyn Storage,
+    storage: &(impl AclStore + ?Sized),
     bucket: &str,
     acl: crate::models::policy::Acl,
 ) -> Result<()> {
@@ -157,14 +172,17 @@ pub fn put_bucket_acl(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
-pub fn list_multipart_uploads(storage: &dyn Storage, bucket: &str) -> Result<Vec<MultipartUpload>> {
+pub fn list_multipart_uploads(
+    storage: &(impl MultipartStore + ?Sized),
+    bucket: &str,
+) -> Result<Vec<MultipartUpload>> {
     storage.list_multipart_uploads(bucket)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::FilesystemStorage;
+    use crate::storage::{FilesystemStorage, Storage};
     use std::fs;
     use std::sync::Arc;
 

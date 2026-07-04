@@ -1,17 +1,10 @@
 use bytes::Bytes;
-use criterion::{
-    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput,
-};
+use cntryl_stress::prelude::*;
 use http_body_util::Full;
-use std::hint::black_box;
 type Body = Full<Bytes>;
 
 use hyper::{Request, StatusCode};
-use std::time::{Duration, Instant};
 use tokio::runtime::{Builder, Runtime};
-
-#[path = "support/criterion_config.rs"]
-mod criterion_config;
 
 #[path = "support/mod.rs"]
 mod support;
@@ -25,6 +18,17 @@ fn build_runtime() -> Runtime {
         .enable_all()
         .build()
         .expect("runtime should build")
+}
+
+fn record_status(ctx: &mut StressContext, status: StatusCode, expected: StatusCode) {
+    let completed = u64::from(status == expected);
+    let failures = u64::from(status != expected);
+    let _ = ctx
+        .correctness()
+        .attempted(1)
+        .completed(completed)
+        .failures(failures);
+    assert_eq!(status, expected);
 }
 
 async fn create_bucket(server: &LiveServer, bucket: &str) {
@@ -160,7 +164,15 @@ async fn prepare_commit_state(
     }
 }
 
-fn bench_multipart_init(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(
+        component = "provider_api",
+        provider = "oci",
+        operation = "multipart_init"
+    )
+)]
+fn multipart_init(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let bucket = "tier4-oci-multipart-init";
@@ -168,37 +180,32 @@ fn bench_multipart_init(c: &mut Criterion) {
     let object = "multi.txt";
     let init_url = format!("{}/n/{}/b/{}/u", server.base_url, TENANT, bucket);
 
-    let mut group = c.benchmark_group("tier4_integration_oci_multipart_init");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Elements(1));
     let multipart_url = format!("{}/n/{}/b/{}/u/{}", server.base_url, TENANT, bucket, object);
-    group.bench_function(BenchmarkId::new("init", 1), |b| {
-        b.iter_custom(|iters| {
-            let mut total = Duration::ZERO;
-            for _ in 0..iters {
-                let request = multipart_init_request(&init_url, object);
-                let start = Instant::now();
-                let body = runtime.block_on(server.response_bytes(request));
-                total += start.elapsed();
-                let init_json: serde_json::Value =
-                    serde_json::from_slice(&body).expect("multipart init body should parse");
-                let upload_id = init_json
-                    .get("uploadId")
-                    .and_then(|value| value.as_str())
-                    .expect("multipart upload id should exist")
-                    .to_string();
-                let response =
-                    runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
-                assert_eq!(response.status(), StatusCode::NO_CONTENT);
-                black_box(body);
-            }
-            total
-        });
-    });
-    group.finish();
+    let request = multipart_init_request(&init_url, object);
+    let (status, body) =
+        ctx.measure(|| runtime.block_on(server.response_bytes_with_status(request)));
+    record_status(ctx, status, StatusCode::OK);
+    let init_json: serde_json::Value =
+        serde_json::from_slice(&body).expect("multipart init body should parse");
+    let upload_id = init_json
+        .get("uploadId")
+        .and_then(|value| value.as_str())
+        .expect("multipart upload id should exist")
+        .to_string();
+    let response = runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    black_box(body);
 }
 
-fn bench_multipart_part_upload(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(
+        component = "provider_api",
+        provider = "oci",
+        operation = "multipart_part_upload"
+    )
+)]
+fn multipart_part_upload(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let bucket = "tier4-oci-multipart-part";
@@ -209,26 +216,25 @@ fn bench_multipart_part_upload(c: &mut Criterion) {
     let part = Bytes::from(vec![b'a'; 4096]);
     let upload_id = runtime.block_on(create_upload_session(&server, &init_url, object));
 
-    let mut group = c.benchmark_group("tier4_integration_oci_multipart_part_upload");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Bytes(part.len() as u64));
-    group.bench_function(BenchmarkId::new("upload_part", part.len()), |b| {
-        b.iter_batched(
-            || multipart_part_request(&multipart_url, &upload_id, 1, &part),
-            |request| {
-                let response = runtime.block_on(server.request(request));
-                assert_eq!(response.status(), StatusCode::OK);
-                black_box(response.headers().get("etag").cloned());
-            },
-            BatchSize::SmallInput,
-        );
-    });
-    group.finish();
+    ctx.parameter("payload_size_bytes", part.len());
+    let request = multipart_part_request(&multipart_url, &upload_id, 1, &part);
+    let response = ctx.measure(|| runtime.block_on(server.request(request)));
+    record_status(ctx, response.status(), StatusCode::OK);
+    black_box(response.headers().get("etag").cloned());
+
     let response = runtime.block_on(server.request(abort_request(&multipart_url, &upload_id)));
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
-fn bench_multipart_commit(c: &mut Criterion) {
+#[stress_test(
+    tier = 4,
+    metadata(
+        component = "provider_api",
+        provider = "oci",
+        operation = "multipart_commit"
+    )
+)]
+fn multipart_commit(ctx: &mut StressContext) {
     let runtime = build_runtime();
     let server = runtime.block_on(LiveServer::start_api(auth_disabled()));
     let bucket = "tier4-oci-multipart-commit";
@@ -239,47 +245,27 @@ fn bench_multipart_commit(c: &mut Criterion) {
     let part_one = Bytes::from(vec![b'a'; 4096]);
     let part_two = Bytes::from(vec![b'b'; 4096]);
 
-    let mut group = c.benchmark_group("tier4_integration_oci_multipart_commit");
-    group.sampling_mode(SamplingMode::Flat);
-    group.throughput(Throughput::Bytes((part_one.len() + part_two.len()) as u64));
-    group.bench_function(
-        BenchmarkId::new("commit", part_one.len() + part_two.len()),
-        |b| {
-            b.iter_batched(
-                || {
-                    runtime.block_on(async {
-                        let state = prepare_commit_state(
-                            &server,
-                            &init_url,
-                            &multipart_url,
-                            object,
-                            &part_one,
-                            &part_two,
-                        )
-                        .await;
-                        multipart_commit_request(
-                            &multipart_url,
-                            &state.upload_id,
-                            &state.etag_one,
-                            &state.etag_two,
-                        )
-                    })
-                },
-                |request| {
-                    let response = runtime.block_on(server.request(request));
-                    assert_eq!(response.status(), StatusCode::OK);
-                    black_box(response.headers().get("etag").cloned());
-                },
-                BatchSize::SmallInput,
-            );
-        },
+    ctx.parameter("payload_size_bytes", part_one.len() + part_two.len());
+    let state = runtime.block_on(async {
+        prepare_commit_state(
+            &server,
+            &init_url,
+            &multipart_url,
+            object,
+            &part_one,
+            &part_two,
+        )
+        .await
+    });
+    let request = multipart_commit_request(
+        &multipart_url,
+        &state.upload_id,
+        &state.etag_one,
+        &state.etag_two,
     );
-    group.finish();
+    let response = ctx.measure(|| runtime.block_on(server.request(request)));
+    record_status(ctx, response.status(), StatusCode::OK);
+    black_box(response.headers().get("etag").cloned());
 }
 
-criterion_group! {
-    name = benches;
-    config = criterion_config::criterion_config_for_tier4();
-    targets = bench_multipart_init, bench_multipart_part_upload, bench_multipart_commit
-}
-criterion_main!(benches);
+stress_main!();

@@ -10,6 +10,8 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      STRESS_PROFILE: smoke
 
     steps:
       - name: Checkout repository

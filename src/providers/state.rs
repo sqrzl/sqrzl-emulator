@@ -1,9 +1,9 @@
-use crate::storage::Storage;
+use crate::storage::ProviderStateStore;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 pub(super) fn load_json<T>(
-    storage: &dyn Storage,
+    storage: &(impl ProviderStateStore + ?Sized),
     provider: &str,
     key: &str,
 ) -> Result<Option<T>, String>
@@ -20,7 +20,7 @@ where
 }
 
 pub(super) fn save_json<T>(
-    storage: &dyn Storage,
+    storage: &(impl ProviderStateStore + ?Sized),
     provider: &str,
     key: &str,
     value: &T,
