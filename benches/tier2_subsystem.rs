@@ -16,6 +16,9 @@ static FLAT_LIST_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
 static DIRECTORY_LIST_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
 static SKEWED_LIST_STORAGE: OnceLock<Arc<FilesystemStorage>> = OnceLock::new();
 static PUT_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+const READ_BATCH_OPS: u64 = 64;
+const LIST_BATCH_OPS: u64 = 16;
+const WRITE_BATCH_OPS: u64 = 8;
 
 fn temp_path() -> PathBuf {
     std::env::temp_dir().join(format!("sqrzl_bench_tier2_{}", Uuid::new_v4()))
@@ -106,6 +109,20 @@ fn skewed_list_storage() -> Arc<FilesystemStorage> {
         .clone()
 }
 
+fn measure_counted_batch<F>(ctx: &mut StressContext, operations: u64, mut operation: F) -> u64
+where
+    F: FnMut(),
+{
+    ctx.parameter("operations_per_sample", operations);
+    let completed = ctx.measure_counted(|| {
+        for _ in 0..operations {
+            operation();
+        }
+        operations
+    });
+    black_box(completed)
+}
+
 #[stress_test(
     tier = 2,
     metadata(
@@ -128,7 +145,7 @@ fn put_object_1k_payload(ctx: &mut StressContext) {
     );
 
     ctx.parameter("payload_size_bytes", payload_size);
-    let completed = ctx.measure_workload(|| {
+    let completed = measure_counted_batch(ctx, WRITE_BATCH_OPS, || {
         let sequence = PUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let key = format!("item-{sequence}.txt");
         let mut object = base_object.clone();
@@ -152,7 +169,7 @@ fn get_object_1k_payload(ctx: &mut StressContext) {
     let storage = get_storage();
 
     ctx.parameter("payload_size_bytes", 1024);
-    let _ = ctx.measure_workload(|| {
+    let _ = measure_counted_batch(ctx, READ_BATCH_OPS, || {
         let object = storage
             .get_object("bench", "item.txt")
             .expect("get should succeed");
@@ -174,7 +191,7 @@ fn get_object_64b_range(ctx: &mut StressContext) {
     ctx.parameter("payload_size_bytes", 4096);
     ctx.parameter("range_start", 64);
     ctx.parameter("range_end", 128);
-    let _ = ctx.measure_workload(|| {
+    let _ = measure_counted_batch(ctx, READ_BATCH_OPS, || {
         let object = storage
             .get_object_range("bench", "item.txt", 64, Some(128))
             .expect("range get should succeed");
@@ -212,7 +229,7 @@ fn list_objects_flat_128(ctx: &mut StressContext) {
 
     ctx.parameter("object_count", 128);
     ctx.parameter("page_size", 128);
-    let _ = ctx.measure_workload(|| {
+    let _ = measure_counted_batch(ctx, LIST_BATCH_OPS, || {
         let listing = storage
             .list_objects("bench", Some("item-"), None, None, Some(128))
             .expect("list should succeed");
@@ -249,7 +266,7 @@ fn list_directory_root_children(ctx: &mut StressContext) {
 
     ctx.parameter("directory_count", 100);
     ctx.parameter("page_size", 100);
-    let _ = ctx.measure_workload(|| {
+    let _ = measure_counted_batch(ctx, LIST_BATCH_OPS, || {
         let listing = storage
             .list_objects("bench", Some(""), Some("/"), None, Some(100))
             .expect("directory list should succeed");
@@ -270,7 +287,7 @@ fn list_directory_nested_children(ctx: &mut StressContext) {
 
     ctx.parameter("object_count", 10);
     ctx.parameter("page_size", 10);
-    let _ = ctx.measure_workload(|| {
+    let _ = measure_counted_batch(ctx, LIST_BATCH_OPS, || {
         let listing = storage
             .list_objects("bench", Some("dir-050/"), Some("/"), None, Some(10))
             .expect("nested directory list should succeed");
@@ -312,7 +329,7 @@ fn list_skewed_directory_root_children(ctx: &mut StressContext) {
 
     ctx.parameter("directory_count", 2);
     ctx.parameter("page_size", 50);
-    let _ = ctx.measure_workload(|| {
+    let _ = measure_counted_batch(ctx, LIST_BATCH_OPS, || {
         let listing = storage
             .list_objects("bench", Some(""), Some("/"), None, Some(50))
             .expect("skewed root directory list should succeed");
@@ -333,7 +350,7 @@ fn list_skewed_directory_large_prefix_page(ctx: &mut StressContext) {
 
     ctx.parameter("object_count", 1_000);
     ctx.parameter("page_size", 50);
-    let _ = ctx.measure_workload(|| {
+    let _ = measure_counted_batch(ctx, LIST_BATCH_OPS, || {
         let listing = storage
             .list_objects("bench", Some("a/"), Some("/"), None, Some(50))
             .expect("large prefix directory list should succeed");

@@ -11,6 +11,7 @@ use tokio::runtime::{Builder, Runtime};
 use uuid::Uuid;
 
 const ADMIN_BUCKET: &str = "bench-objects";
+const ADMIN_BATCH_OPS: u64 = 8;
 static BUCKET_LISTING_STORAGE: OnceLock<Arc<dyn Storage>> = OnceLock::new();
 static OBJECT_BROWSING_STORAGE: OnceLock<Arc<dyn Storage>> = OnceLock::new();
 
@@ -50,9 +51,12 @@ fn measure_admin_response_len_workload(
     storage: &Arc<dyn Storage>,
     uri: &str,
 ) -> u64 {
-    let completed = ctx.measure_workload(|| {
-        let len = runtime.block_on(admin_response_len(storage.clone(), uri));
-        black_box(len);
+    ctx.parameter("operations_per_batch", ADMIN_BATCH_OPS);
+    let completed = ctx.measure_batch(ADMIN_BATCH_OPS, || {
+        for _ in 0..ADMIN_BATCH_OPS {
+            let len = runtime.block_on(admin_response_len(storage.clone(), uri));
+            black_box(len);
+        }
     });
     let _ = ctx.correctness().attempted(completed).completed(completed);
     completed

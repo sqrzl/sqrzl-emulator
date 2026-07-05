@@ -17,6 +17,8 @@ mod support;
 
 use support::live_server::auth_disabled;
 
+const DIRECT_GET_BATCH_OPS: u64 = 8;
+
 fn temp_path() -> PathBuf {
     std::env::temp_dir().join(format!("sqrzl_bench_tier3_{}", Uuid::new_v4()))
 }
@@ -135,12 +137,15 @@ fn direct_get_object(ctx: &mut StressContext) {
     let registry = Arc::new(AdapterRegistry::default());
 
     ctx.parameter("payload_size_bytes", 1024);
-    let completed = ctx.measure_workload(|| {
-        let request = direct_request(Method::GET, "http://localhost/bench/item.txt", &[]);
-        let response = runtime
-            .block_on(registry.handle(storage.clone(), auth_config.clone(), request))
-            .expect("direct get should succeed");
-        black_box(response);
+    ctx.parameter("operations_per_batch", DIRECT_GET_BATCH_OPS);
+    let completed = ctx.measure_batch(DIRECT_GET_BATCH_OPS, || {
+        for _ in 0..DIRECT_GET_BATCH_OPS {
+            let request = direct_request(Method::GET, "http://localhost/bench/item.txt", &[]);
+            let response = runtime
+                .block_on(registry.handle(storage.clone(), auth_config.clone(), request))
+                .expect("direct get should succeed");
+            black_box(response);
+        }
     });
     let _ = ctx.correctness().attempted(completed).completed(completed);
     black_box(completed);

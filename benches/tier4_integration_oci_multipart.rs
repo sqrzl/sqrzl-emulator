@@ -13,6 +13,8 @@ mod support;
 use support::live_server::{auth_disabled, LiveServer};
 
 const TENANT: &str = "tenant";
+const PART_UPLOAD_BATCH_OPS: u64 = 4;
+const COMMIT_BATCH_OPS: u64 = 8;
 
 fn build_runtime() -> Runtime {
     Builder::new_multi_thread()
@@ -216,11 +218,14 @@ fn multipart_part_upload(ctx: &mut StressContext) {
     let upload_id = runtime.block_on(create_upload_session(&server, &init_url, object));
 
     ctx.parameter("payload_size_bytes", part.len());
-    let operations = ctx.measure_workload(|| {
-        let request = multipart_part_request(&multipart_url, &upload_id, 1, &part);
-        let response = runtime.block_on(server.request(request));
-        assert_eq!(response.status(), StatusCode::OK);
-        black_box(response.headers().get("etag").cloned());
+    ctx.parameter("operations_per_batch", PART_UPLOAD_BATCH_OPS);
+    let operations = ctx.measure_batch(PART_UPLOAD_BATCH_OPS, || {
+        for _ in 0..PART_UPLOAD_BATCH_OPS {
+            let request = multipart_part_request(&multipart_url, &upload_id, 1, &part);
+            let response = runtime.block_on(server.request(request));
+            assert_eq!(response.status(), StatusCode::OK);
+            black_box(response.headers().get("etag").cloned());
+        }
     });
     let _ = ctx
         .correctness()
@@ -251,29 +256,38 @@ fn multipart_commit(ctx: &mut StressContext) {
     let part_two = Bytes::from(vec![b'b'; 4096]);
 
     ctx.parameter("payload_size_bytes", part_one.len() + part_two.len());
-    let state = runtime.block_on(async {
-        prepare_commit_state(
-            &server,
-            &init_url,
-            &multipart_url,
-            object,
-            &part_one,
-            &part_two,
-        )
-        .await
+    ctx.parameter("operations_per_batch", COMMIT_BATCH_OPS);
+    let states = runtime.block_on(async {
+        let mut states = Vec::new();
+        for _ in 0..COMMIT_BATCH_OPS {
+            states.push(
+                prepare_commit_state(
+                    &server,
+                    &init_url,
+                    &multipart_url,
+                    object,
+                    &part_one,
+                    &part_two,
+                )
+                .await,
+            );
+        }
+        states
     });
-    let request = multipart_commit_request(
-        &multipart_url,
-        &state.upload_id,
-        &state.etag_one,
-        &state.etag_two,
-    );
     let start = Instant::now();
-    let response = runtime.block_on(server.request(request));
+    for state in states {
+        let request = multipart_commit_request(
+            &multipart_url,
+            &state.upload_id,
+            &state.etag_one,
+            &state.etag_two,
+        );
+        let response = runtime.block_on(server.request(request));
+        assert_eq!(response.status(), StatusCode::OK);
+        black_box(response.headers().get("etag").cloned());
+    }
     let elapsed = start.elapsed();
-    assert_eq!(response.status(), StatusCode::OK);
-    ctx.record_external(elapsed, 1);
-    black_box(response.headers().get("etag").cloned());
+    ctx.record_external(elapsed, COMMIT_BATCH_OPS);
 }
 
 stress_main!();

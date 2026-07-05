@@ -12,6 +12,7 @@ mod support;
 use support::live_server::{auth_disabled, LiveServer};
 
 const TENANT: &str = "tenant";
+const WRITE_BATCH_OPS: u64 = 8;
 
 fn build_runtime() -> Runtime {
     Builder::new_multi_thread()
@@ -47,19 +48,25 @@ fn put_object(ctx: &mut StressContext) {
     let bucket = "tier4-oci-put";
     runtime.block_on(create_bucket(&server, bucket));
     let payload = Bytes::from_static(b"tier4 oci payload");
-    let object_url = format!("{}/n/{}/b/{}/o/hello.txt", server.base_url, TENANT, bucket);
+    let object_url_prefix = format!("{}/n/{}/b/{}/o", server.base_url, TENANT, bucket);
+    let mut sequence = 0usize;
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
-        let request = Request::builder()
-            .method("PUT")
-            .uri(&object_url)
-            .header("content-type", "text/plain")
-            .body(Body::from(payload.clone()))
-            .expect("object put request should build");
-        let response = runtime.block_on(server.request(request));
-        assert_eq!(response.status(), StatusCode::OK);
-        black_box(response.headers().get("etag").cloned());
+    ctx.parameter("operations_per_batch", WRITE_BATCH_OPS);
+    let operations = ctx.measure_batch(WRITE_BATCH_OPS, || {
+        for _ in 0..WRITE_BATCH_OPS {
+            let object_url = format!("{object_url_prefix}/hello-{sequence}.txt");
+            sequence += 1;
+            let request = Request::builder()
+                .method("PUT")
+                .uri(&object_url)
+                .header("content-type", "text/plain")
+                .body(Body::from(payload.clone()))
+                .expect("object put request should build");
+            let response = runtime.block_on(server.request(request));
+            assert_eq!(response.status(), StatusCode::OK);
+            black_box(response.headers().get("etag").cloned());
+        }
     });
     let _ = ctx
         .correctness()

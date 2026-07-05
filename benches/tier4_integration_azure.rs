@@ -12,6 +12,9 @@ mod support;
 use support::live_server::{auth_disabled, LiveServer};
 
 const AZURE_VERSION: &str = "2023-11-03";
+const GET_BATCH_OPS: u64 = 8;
+const LIST_BATCH_OPS: u64 = 4;
+const WRITE_BATCH_OPS: u64 = 8;
 
 fn build_runtime() -> Runtime {
     Builder::new_multi_thread()
@@ -45,24 +48,27 @@ fn put_blob(ctx: &mut StressContext) {
     let container = "tier4-azure-put";
     runtime.block_on(create_container(&server, container));
     let payload = Bytes::from_static(b"tier4 azure payload");
-    let blob_url = format!(
-        "{}/devstoreaccount1/{}/hello.txt",
-        server.base_url, container
-    );
+    let container_url = format!("{}/devstoreaccount1/{}", server.base_url, container);
+    let mut sequence = 0usize;
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
-        let request = Request::builder()
-            .method("PUT")
-            .uri(&blob_url)
-            .header("x-ms-version", AZURE_VERSION)
-            .header("x-ms-blob-type", "BlockBlob")
-            .header("content-type", "text/plain")
-            .body(Body::from(payload.clone()))
-            .expect("blob put request should build");
-        let response = runtime.block_on(server.request(request));
-        assert_eq!(response.status(), StatusCode::CREATED);
-        black_box(response.headers().get("etag").cloned());
+    ctx.parameter("operations_per_batch", WRITE_BATCH_OPS);
+    let operations = ctx.measure_batch(WRITE_BATCH_OPS, || {
+        for _ in 0..WRITE_BATCH_OPS {
+            let blob_url = format!("{container_url}/hello-{sequence}.txt");
+            sequence += 1;
+            let request = Request::builder()
+                .method("PUT")
+                .uri(&blob_url)
+                .header("x-ms-version", AZURE_VERSION)
+                .header("x-ms-blob-type", "BlockBlob")
+                .header("content-type", "text/plain")
+                .body(Body::from(payload.clone()))
+                .expect("blob put request should build");
+            let response = runtime.block_on(server.request(request));
+            assert_eq!(response.status(), StatusCode::CREATED);
+            black_box(response.headers().get("etag").cloned());
+        }
     });
     let _ = ctx
         .correctness()
@@ -100,17 +106,20 @@ fn get_blob(ctx: &mut StressContext) {
     });
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
-        let request = Request::builder()
-            .method("GET")
-            .uri(&blob_url)
-            .header("x-ms-version", AZURE_VERSION)
-            .body(Body::default())
-            .expect("blob get request should build");
-        let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.as_slice(), payload.as_ref());
-        black_box(body);
+    ctx.parameter("operations_per_batch", GET_BATCH_OPS);
+    let operations = ctx.measure_batch(GET_BATCH_OPS, || {
+        for _ in 0..GET_BATCH_OPS {
+            let request = Request::builder()
+                .method("GET")
+                .uri(&blob_url)
+                .header("x-ms-version", AZURE_VERSION)
+                .body(Body::default())
+                .expect("blob get request should build");
+            let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body.as_slice(), payload.as_ref());
+            black_box(body);
+        }
     });
     let _ = ctx
         .correctness()
@@ -211,17 +220,20 @@ fn list_blobs(ctx: &mut StressContext) {
         server.base_url, container
     );
     ctx.parameter("object_count", 128);
-    let operations = ctx.measure_workload(|| {
-        let request = Request::builder()
-            .method("GET")
-            .uri(&list_url)
-            .header("x-ms-version", AZURE_VERSION)
-            .body(Body::default())
-            .expect("blob list request should build");
-        let (status, listing) = runtime.block_on(server.response_text_with_status(request));
-        assert_eq!(status, StatusCode::OK);
-        assert!(listing.contains("item-000.txt"));
-        black_box(listing);
+    ctx.parameter("operations_per_batch", LIST_BATCH_OPS);
+    let operations = ctx.measure_batch(LIST_BATCH_OPS, || {
+        for _ in 0..LIST_BATCH_OPS {
+            let request = Request::builder()
+                .method("GET")
+                .uri(&list_url)
+                .header("x-ms-version", AZURE_VERSION)
+                .body(Body::default())
+                .expect("blob list request should build");
+            let (status, listing) = runtime.block_on(server.response_text_with_status(request));
+            assert_eq!(status, StatusCode::OK);
+            assert!(listing.contains("item-000.txt"));
+            black_box(listing);
+        }
     });
     let _ = ctx
         .correctness()

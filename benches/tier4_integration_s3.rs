@@ -15,6 +15,8 @@ const VERSIONING_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Status>Enabled</Status>
 </VersioningConfiguration>"#;
+const GET_BATCH_OPS: u64 = 8;
+const LIST_BATCH_OPS: u64 = 4;
 
 fn build_runtime() -> Runtime {
     Builder::new_multi_thread()
@@ -102,16 +104,19 @@ fn get_object(ctx: &mut StressContext) {
     });
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
-        let request = Request::builder()
-            .method("GET")
-            .uri(&object_url)
-            .body(Body::default())
-            .expect("object get request should build");
-        let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.as_slice(), payload.as_ref());
-        black_box(body);
+    ctx.parameter("operations_per_batch", GET_BATCH_OPS);
+    let operations = ctx.measure_batch(GET_BATCH_OPS, || {
+        for _ in 0..GET_BATCH_OPS {
+            let request = Request::builder()
+                .method("GET")
+                .uri(&object_url)
+                .body(Body::default())
+                .expect("object get request should build");
+            let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body.as_slice(), payload.as_ref());
+            black_box(body);
+        }
     });
     let _ = ctx
         .correctness()
@@ -153,16 +158,19 @@ fn list_objects(ctx: &mut StressContext) {
 
     let list_url = format!("{}/{}?list-type=2", server.base_url, bucket);
     ctx.parameter("object_count", 128);
-    let operations = ctx.measure_workload(|| {
-        let request = Request::builder()
-            .method("GET")
-            .uri(&list_url)
-            .body(Body::default())
-            .expect("object list request should build");
-        let (status, listing) = runtime.block_on(server.response_text_with_status(request));
-        assert_eq!(status, StatusCode::OK);
-        assert!(listing.contains("item-000.txt"));
-        black_box(listing);
+    ctx.parameter("operations_per_batch", LIST_BATCH_OPS);
+    let operations = ctx.measure_batch(LIST_BATCH_OPS, || {
+        for _ in 0..LIST_BATCH_OPS {
+            let request = Request::builder()
+                .method("GET")
+                .uri(&list_url)
+                .body(Body::default())
+                .expect("object list request should build");
+            let (status, listing) = runtime.block_on(server.response_text_with_status(request));
+            assert_eq!(status, StatusCode::OK);
+            assert!(listing.contains("item-000.txt"));
+            black_box(listing);
+        }
     });
     let _ = ctx
         .correctness()
