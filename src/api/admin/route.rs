@@ -165,9 +165,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_bucket_control_plane_route() {
-        let route = parse("/admin/v1/buckets/demo/versioning").unwrap();
+    fn should_parse_bucket_control_plane_route() {
+        // Arrange
+        let path = "/admin/v1/buckets/demo/versioning";
 
+        // Act
+        let route = parse(path).unwrap();
+
+        // Assert
         let Route::Bucket { bucket, resource } = route else {
             panic!("expected bucket route");
         };
@@ -176,9 +181,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_object_content_route_with_decoded_key() {
-        let route = parse("/admin/v1/buckets/demo/objects/folder%2Ffile.txt/content").unwrap();
+    fn should_parse_object_content_route_with_decoded_key() {
+        // Arrange
+        let path = "/admin/v1/buckets/demo/objects/folder%2Ffile.txt/content";
 
+        // Act
+        let route = parse(path).unwrap();
+
+        // Assert
         let Route::Bucket {
             bucket,
             resource:
@@ -195,9 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_multipart_upload_id() {
-        let err = parse("/admin/v1/buckets/demo/multipart-uploads/").unwrap_err();
+    fn should_reject_missing_multipart_upload_id() {
+        // Arrange
+        let path = "/admin/v1/buckets/demo/multipart-uploads/";
 
+        // Act
+        let err = parse(path).unwrap_err();
+
+        // Assert
         assert!(matches!(err, Error::InvalidRequest(message) if message == "Missing upload id"));
     }
 }

@@ -1133,7 +1133,8 @@ mod tests {
     }
 
     #[test]
-    fn focused_traits_can_drive_basic_bucket_object_listing_flow() {
+    fn should_drive_basic_bucket_object_listing_flow_with_focused_traits() {
+        // Arrange
         let base = temp_path();
         let storage = FilesystemStorage::new(&base);
 
@@ -1153,11 +1154,13 @@ mod tests {
             )
             .unwrap();
 
+        // Act
         let listing: &dyn ObjectListingStore = &storage;
         let result = listing
             .list_objects("capability", Some("docs/"), None, None, Some(10))
             .unwrap();
 
+        // Assert
         assert_eq!(result.objects.len(), 1);
         assert_eq!(result.objects[0].key, "docs/readme.txt");
 

@@ -470,6 +470,7 @@ mod tests {
 
     #[test]
     fn should_not_duplicate_listings_after_overwrite() {
+        // Arrange
         let base = temp_path();
         let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
         let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner));
@@ -482,10 +483,12 @@ mod tests {
             .put_object("bucket", "same.txt".to_string(), object("same.txt", b"two"))
             .unwrap();
 
+        // Act
         let listed = storage
             .list_objects("bucket", None, None, None, Some(10))
             .unwrap();
 
+        // Assert
         assert_eq!(keys(&listed), vec!["same.txt"]);
         assert_eq!(
             storage.get_object("bucket", "same.txt").unwrap().data,
@@ -497,6 +500,7 @@ mod tests {
 
     #[test]
     fn should_match_filesystem_delimiter_common_prefix_listing() {
+        // Arrange
         let base = temp_path();
         let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
         let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
@@ -508,6 +512,7 @@ mod tests {
                 .unwrap();
         }
 
+        // Act
         let expected = inner
             .list_objects("bucket", Some(""), Some("/"), None, Some(10))
             .unwrap();
@@ -515,6 +520,7 @@ mod tests {
             .list_objects("bucket", Some(""), Some("/"), None, Some(10))
             .unwrap();
 
+        // Assert
         assert_listing_parity(&expected, &actual);
 
         let _ = std::fs::remove_dir_all(&base);
@@ -522,6 +528,7 @@ mod tests {
 
     #[test]
     fn should_match_filesystem_marker_pagination() {
+        // Arrange
         let base = temp_path();
         let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
         let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
@@ -533,6 +540,7 @@ mod tests {
                 .unwrap();
         }
 
+        // Act
         let expected_first = inner
             .list_objects("bucket", None, None, None, Some(2))
             .unwrap();
@@ -551,6 +559,8 @@ mod tests {
         let actual_second = storage
             .list_objects("bucket", None, None, Some(marker), Some(2))
             .unwrap();
+
+        // Assert
         assert_listing_parity(&expected_second, &actual_second);
 
         let _ = std::fs::remove_dir_all(&base);
@@ -558,6 +568,7 @@ mod tests {
 
     #[test]
     fn should_rebuild_index_from_existing_inner_storage() {
+        // Arrange
         let base = temp_path();
         let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
         inner.create_bucket("bucket".to_string()).unwrap();
@@ -567,6 +578,7 @@ mod tests {
                 .unwrap();
         }
 
+        // Act
         let storage: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
         let expected = inner
             .list_objects("bucket", None, None, None, Some(10))
@@ -575,6 +587,7 @@ mod tests {
             .list_objects("bucket", None, None, None, Some(10))
             .unwrap();
 
+        // Assert
         assert_listing_parity(&expected, &actual);
 
         let _ = std::fs::remove_dir_all(&base);
