@@ -25,6 +25,9 @@ jobs:
         with:
           shared-key: "ci"
 
+      - name: Verify rename cleanup
+        run: .github/scripts/check-no-peas-refs.sh
+
       - name: Install cntryl-tools
         run: cargo install --git https://github.com/cntryl/tools --locked
 
