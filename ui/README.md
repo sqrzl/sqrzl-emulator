@@ -15,7 +15,6 @@ npm run type-check
 npm run lint
 npm run lint:fix
 npm run fmt
-npm run seed:sample # Populate local demo buckets through /admin/v1
 npm run dev      # Start dev server at http://localhost:5173
 npm run build    # Build for production
 npm run preview  # Preview production build
@@ -23,11 +22,6 @@ npm test         # Run tests with Vitest
 ```
 
 Node 24 or newer is required.
-
-`npm run seed:sample` expects Sqrzl to be running on
-`http://127.0.0.1:9001/admin/v1`. Set `SQRZL_ADMIN_URL`,
-`SQRZL_ADMIN_USERNAME`, or `SQRZL_ADMIN_PASSWORD` when using a different local
-server or admin credentials.
 
 ## Routes
 

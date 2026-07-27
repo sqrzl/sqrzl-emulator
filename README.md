@@ -169,18 +169,12 @@ npm test
 npm run lint
 npm run lint:fix
 npm run fmt
-npm run seed:sample
 npm run build
 ```
 
 Node 24 or newer is required. The console supports login/logout, bucket search,
 bucket create/delete, folder-like bucket browsing, blob upload/delete, blob
 details, and blob download.
-
-Run `npm run seed:sample` after Sqrzl is running to populate `sqrzl-demo`,
-`sqrzl-logs`, and `sqrzl-archive` with synthetic local objects for UI review. The
-script uses the existing `/admin/v1` API, is safe to rerun, and accepts
-`SQRZL_ADMIN_URL`, `SQRZL_ADMIN_USERNAME`, and `SQRZL_ADMIN_PASSWORD` overrides.
 
 ## Docker
 
