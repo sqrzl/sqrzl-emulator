@@ -14,7 +14,7 @@ declare -a patterns=(
 found_match=0
 
 for pattern in "${patterns[@]}"; do
-  if git grep -n -I -F "$pattern" -- .; then
+  if git grep -n -I -F "$pattern" -- . ':(exclude).github/scripts/check-no-peas-refs.sh'; then
     found_match=1
   fi
 done
