@@ -1,5 +1,6 @@
-import { cleanupApp, createIsland } from '@askrjs/askr/boot';
+import { cleanupApp, createSPA } from '@askrjs/askr/boot';
 import { createQuery } from '@askrjs/askr/data';
+import { createRouteRegistry, route } from '@askrjs/askr/router';
 import { describe, expect, it } from 'vite-plus/test';
 
 declare global {
@@ -18,6 +19,15 @@ function App() {
   return <Child />;
 }
 
+const probeRegistry = createRouteRegistry(() => {
+  route('/', App);
+});
+
+async function mount(root: HTMLDivElement): Promise<void> {
+  window.history.pushState(null, '', '/');
+  await createSPA({ root, registry: probeRegistry });
+}
+
 async function flush() {
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
@@ -28,7 +38,7 @@ describe('probe', () => {
     (globalThis as any).__probeValue = 'A';
     const root = document.createElement('div');
     document.body.appendChild(root);
-    createIsland({ root, component: App });
+    await mount(root);
     await flush();
     expect(root.textContent).toBe('A');
     cleanupApp(root);
@@ -39,7 +49,7 @@ describe('probe', () => {
     (globalThis as any).__probeValue = 'B';
     const root = document.createElement('div');
     document.body.appendChild(root);
-    createIsland({ root, component: App });
+    await mount(root);
     await flush();
     expect(root.textContent).toBe('B');
     cleanupApp(root);

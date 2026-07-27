@@ -77,20 +77,6 @@ export default function BlobDetails({
     }
   }
 
-  if (metadata.error && !metadata.value) {
-    return (
-      <EmptyState
-        title="Blob details could not load"
-        description="Retry the admin API call to see the blob details."
-        actions={<Button onPress={() => metadata.refresh()}>Retry</Button>}
-      />
-    );
-  }
-
-  const customMetadata: Array<[string, string]> = metadata.value
-    ? Object.entries(metadata.value.metadata)
-    : [];
-
   return (
     <Stack gap="4">
       <Inline
@@ -117,103 +103,121 @@ export default function BlobDetails({
         <FieldError role="alert">{downloadError()}</FieldError>
       </Show>
 
+      <Show when={metadata.error && !metadata.value}>
+        <EmptyState
+          title="Blob details could not load"
+          description="Retry the admin API call to see the blob details."
+          actions={<Button onPress={() => metadata.refresh()}>Retry</Button>}
+        />
+      </Show>
+
       <Show when={metadata.pending && !metadata.value}>
         <p>Loading blob details...</p>
       </Show>
 
       <Show when={metadata.value}>
-        {(blob: BlobMetadata) => (
-          <Stack gap="4">
-            <section aria-labelledby="blob-details-title">
-              <Stack gap="3">
-                <Toolbar title={<span id="blob-details-title">Details</span>} />
-                <DataTable
-                  data-sqrzl-slot="storage-table-scroll"
-                  data-sqrzl-table-width="detail"
-                >
-                  <Table>
-                    <TableBody>
-                      <TableRow>
-                        <TableHeaderCell>Bucket</TableHeaderCell>
-                        <TableCell>{bucketName}</TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHeaderCell>Key</TableHeaderCell>
-                        <TableCell>{blobKey}</TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHeaderCell>Size</TableHeaderCell>
-                        <TableCell>{formatByteCount(blob.size)}</TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHeaderCell>Content type</TableHeaderCell>
-                        <TableCell>
-                          {blob.content_type ?? 'application/octet-stream'}
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHeaderCell>ETag</TableHeaderCell>
-                        <TableCell>{blob.etag}</TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHeaderCell>Version ID</TableHeaderCell>
-                        <TableCell>
-                          {blob.version_id ?? 'unversioned'}
-                        </TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHeaderCell>Storage class</TableHeaderCell>
-                        <TableCell>{blob.storage_class}</TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableHeaderCell>Last modified</TableHeaderCell>
-                        <TableCell>
-                          {formatRelativeTime(blob.last_modified)}
-                        </TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </DataTable>
-              </Stack>
-            </section>
+        {(blob: BlobMetadata) => {
+          const customMetadata: Array<[string, string]> = Object.entries(
+            blob.metadata
+          );
 
-            <section aria-labelledby="blob-metadata-title">
-              <Stack gap="3">
-                <Toolbar
-                  title={<span id="blob-metadata-title">Custom metadata</span>}
-                />
-                <Show
-                  when={customMetadata.length > 0}
-                  fallback={<p>No custom metadata recorded.</p>}
-                >
+          return (
+            <Stack gap="4">
+              <section aria-labelledby="blob-details-title">
+                <Stack gap="3">
+                  <Toolbar
+                    title={<span id="blob-details-title">Details</span>}
+                  />
                   <DataTable
                     data-sqrzl-slot="storage-table-scroll"
                     data-sqrzl-table-width="detail"
                   >
                     <Table>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeaderCell>Name</TableHeaderCell>
-                          <TableHeaderCell>Value</TableHeaderCell>
-                        </TableRow>
-                      </TableHead>
                       <TableBody>
-                        <For each={customMetadata} by={([name]) => name}>
-                          {([name, value]) => (
-                            <TableRow key={name}>
-                              <TableCell>{name}</TableCell>
-                              <TableCell>{value}</TableCell>
-                            </TableRow>
-                          )}
-                        </For>
+                        <TableRow>
+                          <TableHeaderCell>Bucket</TableHeaderCell>
+                          <TableCell>{bucketName}</TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableHeaderCell>Key</TableHeaderCell>
+                          <TableCell>{blobKey}</TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableHeaderCell>Size</TableHeaderCell>
+                          <TableCell>{formatByteCount(blob.size)}</TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableHeaderCell>Content type</TableHeaderCell>
+                          <TableCell>
+                            {blob.content_type ?? 'application/octet-stream'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableHeaderCell>ETag</TableHeaderCell>
+                          <TableCell>{blob.etag}</TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableHeaderCell>Version ID</TableHeaderCell>
+                          <TableCell>
+                            {blob.version_id ?? 'unversioned'}
+                          </TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableHeaderCell>Storage class</TableHeaderCell>
+                          <TableCell>{blob.storage_class}</TableCell>
+                        </TableRow>
+                        <TableRow>
+                          <TableHeaderCell>Last modified</TableHeaderCell>
+                          <TableCell>
+                            {formatRelativeTime(blob.last_modified)}
+                          </TableCell>
+                        </TableRow>
                       </TableBody>
                     </Table>
                   </DataTable>
-                </Show>
-              </Stack>
-            </section>
-          </Stack>
-        )}
+                </Stack>
+              </section>
+
+              <section aria-labelledby="blob-metadata-title">
+                <Stack gap="3">
+                  <Toolbar
+                    title={
+                      <span id="blob-metadata-title">Custom metadata</span>
+                    }
+                  />
+                  <Show
+                    when={customMetadata.length > 0}
+                    fallback={<p>No custom metadata recorded.</p>}
+                  >
+                    <DataTable
+                      data-sqrzl-slot="storage-table-scroll"
+                      data-sqrzl-table-width="detail"
+                    >
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Name</TableHeaderCell>
+                            <TableHeaderCell>Value</TableHeaderCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          <For each={customMetadata} by={([name]) => name}>
+                            {([name, value]) => (
+                              <TableRow key={name}>
+                                <TableCell>{name}</TableCell>
+                                <TableCell>{value}</TableCell>
+                              </TableRow>
+                            )}
+                          </For>
+                        </TableBody>
+                      </Table>
+                    </DataTable>
+                  </Show>
+                </Stack>
+              </section>
+            </Stack>
+          );
+        }}
       </Show>
     </Stack>
   );

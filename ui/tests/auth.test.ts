@@ -1,4 +1,3 @@
-import { getManifest } from '@askrjs/askr/router';
 import { describe, expect, it } from 'vite-plus/test';
 import {
   loginAdminSession,
@@ -6,6 +5,7 @@ import {
   resolveAdminSession,
 } from '../src/features/auth/admin-session';
 import '../src/pages/_routes';
+import { routeRegistry } from '../src/pages/_routes';
 
 const originalFetch = globalThis.fetch;
 
@@ -68,7 +68,7 @@ describe('admin authentication', () => {
       const resolved = await resolveAdminSession({
         signal: new AbortController().signal,
       });
-      const manifest = getManifest();
+      const manifest = routeRegistry.manifest;
       const app = manifest.records.find(
         (record) => record.path === '/admin/buckets'
       );
@@ -87,10 +87,10 @@ describe('admin authentication', () => {
       );
 
       expect(resolved.session).toBe(null);
-      expect(app?.options.policies?.length).toBeGreaterThan(0);
-      expect(bucket?.options.policies?.length).toBeGreaterThan(0);
-      expect(deepBucket?.options.policies?.length).toBeGreaterThan(0);
-      expect(blob?.options.policies?.length).toBeGreaterThan(0);
+      expect(typeof app?.options.auth).toBe('function');
+      expect(typeof bucket?.options.auth).toBe('function');
+      expect(typeof deepBucket?.options.auth).toBe('function');
+      expect(typeof blob?.options.auth).toBe('function');
       expect(login).toBeDefined();
       expect(logout?.options.policies).toBeUndefined();
     } finally {

@@ -1,7 +1,14 @@
 import { cleanupApp, createSPA } from '@askrjs/askr/boot';
-import { getManifest, getRoutes } from '@askrjs/askr/router';
 import { describe, expect, it } from 'vite-plus/test';
-import '../src/pages/_routes';
+import {
+  createRouteRegistry,
+  route,
+  resolveRouteRequest,
+  type RouteComponent,
+} from '@askrjs/askr/router';
+import type { AuthContext } from '@askrjs/auth';
+import { routeRegistry } from '../src/pages/_routes';
+import BucketPage from '../src/pages/app/bucket';
 import {
   adminBucketsPath,
   blobIdFromBlobKey,
@@ -26,12 +33,43 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function resolveRouteRequest(pathname: string) {
-  const router =
-    await import('../node_modules/@askrjs/askr/dist/router/route.js');
-  return (router as any).resolveRouteRequest(pathname, {
-    manifest: getManifest(),
+async function resolvePathname(pathname: string) {
+  const authContext: AuthContext = {
+    authenticated: true,
+    principal: {
+      id: 'admin',
+      name: 'admin',
+      mode: 'password',
+    },
+    session: {
+      id: 'admin',
+      subject: 'admin',
+      mode: 'password',
+    },
+    tenant: null,
+  };
+
+  return resolveRouteRequest(pathname, {
+    registry: routeRegistry,
+    authContext,
   });
+}
+
+type RouteComponentRoute = RouteComponent<Record<string, string>>;
+
+async function mount(
+  component: RouteComponentRoute,
+  path: string
+): Promise<HTMLDivElement> {
+  const root = document.createElement('div');
+  const registry = createRouteRegistry(() => {
+    route(path, component);
+  });
+
+  document.body.appendChild(root);
+  window.history.pushState(null, '', path);
+  await createSPA({ root, registry });
+  return root;
 }
 
 function normalizeWildcardParam(value: string | undefined): string | undefined {
@@ -79,7 +117,7 @@ describe('shared route helpers', () => {
   });
 
   it('registers the reserved blob route and catch-all bucket fallback', () => {
-    const paths = getRoutes().map((route) => route.path);
+    const paths = routeRegistry.routes.map((route) => route.path);
 
     expect(paths).toContain('/admin/blobs/{bucketName}/{blobId}');
     expect(paths).toContain('/admin/buckets/{bucketName}');
@@ -138,14 +176,15 @@ describe('shared route helpers', () => {
     };
 
     try {
-      const resolved = await resolveRouteRequest(
+      const resolved = await resolvePathname(
         bucketFolderPath('demo', deepPrefix)
       );
-
       expect(resolved?.kind).toBe('render');
-      expect(normalizeWildcardParam(resolved?.params['*'])).toBe(
-        `${deepPrefix}`
-      );
+      if (resolved?.kind === 'render') {
+        expect(normalizeWildcardParam(resolved?.params['*'])).toBe(
+          `${deepPrefix}`
+        );
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -205,20 +244,19 @@ describe('shared route helpers', () => {
     };
 
     const originalUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    const root = document.createElement('div');
-    document.body.appendChild(root);
+    let mounted: HTMLDivElement | undefined;
 
     try {
-      const routes = getRoutes();
-      window.history.pushState(null, '', '/admin/buckets/demo');
+      const component: RouteComponentRoute = () =>
+        BucketPage({ bucketName: 'demo' });
+      mounted = await mount(component, '/admin/buckets/demo');
 
-      await createSPA({ root, routes });
       await flush();
 
-      expect(root.textContent).toContain('image.png');
-      expect(root.textContent).toContain('Next');
+      expect(mounted.textContent).toContain('image.png');
+      expect(mounted.textContent).toContain('Next');
 
-      const searchInput = root.querySelector(
+      const searchInput = mounted.querySelector(
         '#blob-search'
       ) as HTMLInputElement;
       searchInput.focus();
@@ -239,11 +277,13 @@ describe('shared route helpers', () => {
       expect(
         searchRequests.some((entry) => entry.includes('search=notes'))
       ).toBe(true);
-      expect(root.textContent).toContain('notes.txt');
-      expect(root.textContent).not.toContain('image.png');
+      expect(mounted.textContent).toContain('notes.txt');
+      expect(mounted.textContent).not.toContain('image.png');
     } finally {
-      cleanupApp(root);
-      root.remove();
+      if (mounted) {
+        cleanupApp(mounted);
+        mounted.remove();
+      }
       window.history.pushState(null, '', originalUrl || '/');
       globalThis.fetch = originalFetch;
     }
@@ -295,12 +335,16 @@ describe('shared route helpers', () => {
     };
 
     try {
-      const resolved = await resolveRouteRequest(
+      const resolved = await resolvePathname(
         bucketFolderPath('demo', folderPrefix)
       );
 
       expect(resolved?.kind).toBe('render');
-      expect(normalizeWildcardParam(resolved?.params['*'])).toBe('blob/notes');
+      if (resolved?.kind === 'render') {
+        expect(normalizeWildcardParam(resolved?.params['*'])).toBe(
+          'blob/notes'
+        );
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -308,13 +352,15 @@ describe('shared route helpers', () => {
 
   it('does not treat legacy blob-looking bucket keys as blob routes', async () => {
     const blobId = blobIdFromBlobKey('blob/notes.txt');
-    const resolved = await resolveRouteRequest(
+    const resolved = await resolvePathname(
       bucketFolderPath('demo', `blob/${blobId}`)
     );
 
     expect(resolved?.kind).toBe('render');
-    expect(normalizeWildcardParam(resolved?.params['*'])).toBe(
-      `blob/${blobId}`
-    );
+    if (resolved?.kind === 'render') {
+      expect(normalizeWildcardParam(resolved?.params['*'])).toBe(
+        `blob/${blobId}`
+      );
+    }
   });
 });

@@ -14,16 +14,16 @@ keywords = ["s3", "azure", "gcs", "oci", "storage", "emulator"]
 
 [dependencies]
 aes-gcm = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 crossbeam-skiplist = "0.1"
 hex = "0.4"
 hmac = "0.13"
 http = "1.4"
-hyper = { version = "1.10.1", features = ["full"] }
+hyper = { version = "1.11.0", features = ["full"] }
 hyper-util = { version = "0.1.20", features = ["client", "client-legacy", "http1", "http2"] }
-jsonwebtoken = { version = "10.4.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.0.0", features = ["rust_crypto"] }
 md5 = "0.8"
 mime_guess = "2"
 quick-xml = "0.41.0"
@@ -32,7 +32,7 @@ sha1 = "0.11.0"
 sha2 = "0.11.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0.18"
+thiserror = "2.0.19"
 getrandom = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util"] }
 tower = "0.5.3"
@@ -40,7 +40,7 @@ tower-http = { version = "0.7.0", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 urlencoding = "2"
-uuid = { version = "1.23", features = ["v4", "serde"] }
+uuid = { version = "1.24", features = ["v4", "serde"] }
 http-body-util = "0.1"
 
 [dev-dependencies]

@@ -1,5 +1,6 @@
-import { cleanupApp, createIsland } from '@askrjs/askr/boot';
+import { cleanupApp, createSPA } from '@askrjs/askr/boot';
 import { describe, expect, it } from 'vite-plus/test';
+import { createRouteRegistry, route } from '@askrjs/askr/router';
 import AppLayout from '../src/pages/app/_layout';
 import LoginPage from '../src/pages/auth/login';
 import Home from '../src/pages/app/buckets';
@@ -21,10 +22,19 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function mount(component: any): HTMLDivElement {
+async function mount(
+  component: any,
+  routePath = '/',
+  initialPath = '/'
+): Promise<HTMLDivElement> {
+  const rootRegistry = createRouteRegistry(() => {
+    route(routePath, component);
+  });
   const root = document.createElement('div');
   document.body.appendChild(root);
-  createIsland({ root, component });
+
+  window.history.pushState(null, '', initialPath);
+  await createSPA({ root, registry: rootRegistry });
   return root;
 }
 
@@ -85,7 +95,7 @@ function storageDialogFormSequence(): string[] {
 
 describe('simplified page flows', () => {
   it('renders the app header with nav links and theme toggle', async () => {
-    const root = mount(() => (
+    const root = await mount(() => (
       <AppLayout>
         <p>content</p>
       </AppLayout>
@@ -121,7 +131,7 @@ describe('simplified page flows', () => {
       throw new Error(`Unexpected request: ${request.method} ${url.pathname}`);
     };
 
-    const root = mount(() => <LoginPage />);
+    const root = await mount(() => <LoginPage />);
 
     try {
       await flush();
@@ -195,7 +205,7 @@ describe('simplified page flows', () => {
       throw new Error(`Unexpected request: ${request.method} ${url.pathname}`);
     };
 
-    const root = mount(() => <Home />);
+    const root = await mount(() => <Home />);
 
     try {
       await flush();
@@ -368,7 +378,7 @@ describe('simplified page flows', () => {
       );
     };
 
-    const root = mount(() => <Home />);
+    const root = await mount(() => <Home />);
 
     try {
       await flush();
@@ -473,7 +483,7 @@ describe('simplified page flows', () => {
       throw new Error(`Unexpected request: ${request.method} ${url.pathname}`);
     };
 
-    const root = mount(() => <BucketPage bucketName="alpha" />);
+    const root = await mount(() => <BucketPage bucketName="alpha" />);
 
     try {
       await flush();
@@ -601,7 +611,7 @@ describe('simplified page flows', () => {
       throw new Error(`Unexpected request: ${request.method} ${url.pathname}`);
     };
 
-    const root = mount(() => <BucketPage bucketName="foldered" />);
+    const root = await mount(() => <BucketPage bucketName="foldered" />);
 
     try {
       await flush();
@@ -617,7 +627,7 @@ describe('simplified page flows', () => {
       root.remove();
     }
 
-    const nestedRoot = mount(() => (
+    const nestedRoot = await mount(() => (
       <BucketPage bucketName="foldered" pathPrefix="docs" />
     ));
 
@@ -634,7 +644,7 @@ describe('simplified page flows', () => {
       nestedRoot.remove();
     }
 
-    const deepRoot = mount(() => (
+    const deepRoot = await mount(() => (
       <BucketPage bucketName="foldered" pathPrefix="docs/api" />
     ));
 
@@ -694,7 +704,7 @@ describe('simplified page flows', () => {
       throw new Error(`Unexpected request: ${request.method} ${url.pathname}`);
     };
 
-    const root = mount(() => (
+    const root = await mount(() => (
       <BucketPage bucketName="nested" pathPrefix="docs" />
     ));
 
@@ -813,7 +823,7 @@ describe('simplified page flows', () => {
       );
     };
 
-    const root = mount(() => <BucketPage bucketName="alpha" />);
+    const root = await mount(() => <BucketPage bucketName="alpha" />);
 
     try {
       await flush();
@@ -906,7 +916,7 @@ describe('simplified page flows', () => {
       );
     };
 
-    const root = mount(() => <BucketPage bucketName="alpha" />);
+    const root = await mount(() => <BucketPage bucketName="alpha" />);
 
     try {
       await flush();
@@ -986,7 +996,7 @@ describe('simplified page flows', () => {
       throw new Error(`Unexpected request: ${request.method} ${url.pathname}`);
     };
 
-    const root = mount(() => (
+    const root = await mount(() => (
       <BlobPage
         bucketName="alpha"
         blobId={blobIdFromBlobKey('docs/readme.txt')}
@@ -1048,13 +1058,11 @@ describe('simplified page flows', () => {
     };
 
     const originalUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    window.history.pushState(
-      null,
-      '',
+    const root = await mount(
+      () => <BlobPage bucketName="alpha" blobId={blobId} />,
+      '/admin/blobs/{bucketName}/{blobId}',
       `/admin/blobs/alpha/${blobId}?key=${encodeURIComponent(blobKey)}`
     );
-
-    const root = mount(() => <BlobPage bucketName="alpha" blobId={blobId} />);
 
     try {
       await flush();
@@ -1072,6 +1080,7 @@ describe('simplified page flows', () => {
   it('downloads a blob from the detail page', async () => {
     const originalCreateObjectURL = URL.createObjectURL;
     const originalRevokeObjectURL = URL.revokeObjectURL;
+    const originalAnchorClick = HTMLAnchorElement.prototype.click;
     const createdUrls: string[] = [];
 
     URL.createObjectURL = ((blob: Blob) => {
@@ -1080,6 +1089,8 @@ describe('simplified page flows', () => {
       return 'blob:download';
     }) as typeof URL.createObjectURL;
     URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+    HTMLAnchorElement.prototype.click = (() =>
+      undefined) as typeof HTMLAnchorElement.prototype.click;
 
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const request =
@@ -1137,7 +1148,7 @@ describe('simplified page flows', () => {
       throw new Error(`Unexpected request: ${request.method} ${url.pathname}`);
     };
 
-    const root = mount(() => (
+    const root = await mount(() => (
       <BlobPage
         bucketName="alpha"
         blobId={blobIdFromBlobKey('docs/readme.txt')}
@@ -1159,6 +1170,7 @@ describe('simplified page flows', () => {
       root.remove();
       URL.createObjectURL = originalCreateObjectURL;
       URL.revokeObjectURL = originalRevokeObjectURL;
+      HTMLAnchorElement.prototype.click = originalAnchorClick;
       globalThis.fetch = originalFetch;
     }
   });

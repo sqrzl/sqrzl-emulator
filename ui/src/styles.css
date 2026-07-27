@@ -26,12 +26,16 @@
   min-inline-size: 64rem;
 }
 
-:where([data-sqrzl-slot='storage-table-scroll'][data-sqrzl-table-width='detail'])
+:where(
+    [data-sqrzl-slot='storage-table-scroll'][data-sqrzl-table-width='detail']
+  )
   > :where([data-slot='table']) {
   min-inline-size: 36rem;
 }
 
-:where([data-sqrzl-slot='storage-table-scroll'][data-sqrzl-table-width='detail'])
+:where(
+    [data-sqrzl-slot='storage-table-scroll'][data-sqrzl-table-width='detail']
+  )
   :where([data-slot='table-header-cell']) {
   min-inline-size: 8rem;
   white-space: nowrap;

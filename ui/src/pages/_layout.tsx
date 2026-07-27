@@ -1,9 +1,9 @@
-import { ThemeProvider } from '@askrjs/themes/theme';
+import { ThemeScope } from '@askrjs/themes/theme';
 
 export default function RootLayout({ children }: { children?: unknown }) {
   return (
-    <ThemeProvider>
+    <ThemeScope>
       <main>{children}</main>
-    </ThemeProvider>
+    </ThemeScope>
   );
 }

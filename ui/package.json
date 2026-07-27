@@ -15,20 +15,20 @@
     "seed:sample": "node ./scripts/seed-sample-data.js"
   },
   "dependencies": {
-    "@askrjs/askr": "^0.0.48",
-    "@askrjs/charts": ">=0.0.1 <0.1.0",
-    "@askrjs/lucide": "^0.0.3",
-    "@askrjs/themes": "^0.0.10",
-    "@askrjs/ui": "^0.0.12",
+    "@askrjs/askr": "^0.0.77",
+    "@askrjs/charts": ">=0.1.4 <0.2.0",
+    "@askrjs/lucide": "^0.0.5",
+    "@askrjs/themes": "^0.0.16",
+    "@askrjs/ui": "^0.0.20",
     "@fgrzl/fetch": "^2.0.0"
   },
   "devDependencies": {
-    "@askrjs/vite": "^0.0.5",
-    "@types/node": "^26.0.1",
+    "@askrjs/vite": "^0.0.8",
+    "@types/node": "^26.1.2",
     "jiti": "^2.7.0",
-    "jsdom": "^29.1.1",
-    "typescript": "^6.0.3",
-    "vite-plus": "^0.2.1"
+    "jsdom": "^30.0.0",
+    "typescript": "^7.0.2",
+    "vite-plus": "^0.2.6"
   },
   "engines": {
     "node": ">=24"
