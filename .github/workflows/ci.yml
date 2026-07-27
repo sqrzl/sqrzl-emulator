@@ -26,7 +26,34 @@ jobs:
           shared-key: "ci"
 
       - name: Verify rename cleanup
-        run: .github/scripts/check-no-peas-refs.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$(git rev-parse --show-toplevel)"
+
+          declare -a patterns=(
+            "peas-emulator"
+            "peas_emulator"
+            "PeasEmulator"
+            "PEAS_EMULATOR"
+            "https://github.com/sqrzl/peas-emulator"
+          )
+
+          found_match=0
+
+          for pattern in "${patterns[@]}"; do
+            if git grep -n -I -F "$pattern" -- .; then
+              found_match=1
+            fi
+          done
+
+          if [[ "$found_match" -ne 0 ]]; then
+            echo "Legacy Peas references remain in tracked files."
+            exit 1
+          fi
+
+          echo "No legacy Peas references found in tracked files."
 
       - name: Install cntryl-tools
         run: cargo install --git https://github.com/cntryl/tools --locked
