@@ -452,14 +452,12 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
         snapshot: Option<&str>,
-    ) -> Result<crate::models::Object, String> {
+    ) -> crate::error::Result<crate::models::Object> {
         let key = snapshot.map_or_else(
             || blob_key.to_string(),
             |value| Self::snapshot_storage_key(blob_key, value),
         );
-        storage
-            .get_object(container, &key)
-            .map_err(|err| err.to_string())
+        storage.get_object(container, &key)
     }
 
     fn set_blob_type(blob: &mut crate::models::Object, blob_type: &str) {
@@ -1627,7 +1625,8 @@ impl AzureBlobAdapter {
         blob_key: &str,
         snapshot: Option<&str>,
     ) -> Result<Response<Body>, String> {
-        let blob = Self::lookup_blob(storage, container, blob_key, snapshot)?;
+        let blob = Self::lookup_blob(storage, container, blob_key, snapshot)
+            .map_err(|err| err.to_string())?;
         if let Some(range_header) = Self::requested_range(req) {
             return Self::get_blob_range(
                 storage,
@@ -1694,7 +1693,15 @@ impl AzureBlobAdapter {
         blob_key: &str,
         snapshot: Option<&str>,
     ) -> Result<Response<Body>, String> {
-        let blob = Self::lookup_blob(storage, container, blob_key, snapshot)?;
+        let blob = match Self::lookup_blob(storage, container, blob_key, snapshot) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => {
+                return Ok(Self::response(StatusCode::NOT_FOUND)
+                    .header("x-ms-error-code", "BlobNotFound")
+                    .empty());
+            }
+            Err(err) => return Err(err.to_string()),
+        };
         let body_len = Self::response_body_len(blob.size)?;
         Ok(Self::blob_response(StatusCode::OK, &blob, body_len, None).empty())
     }
