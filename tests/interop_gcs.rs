@@ -133,6 +133,36 @@ async fn should_return_not_found_given_missing_lease_object_when_requesting_obje
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn should_return_not_found_given_missing_lease_object_when_requesting_object_get() {
+    let storage = temp_storage();
+    call(
+        storage.clone(),
+        auth_disabled(),
+        request(
+            "PUT",
+            "http://localhost/cassie",
+            &[("host", "storage.googleapis.com")],
+            b"",
+        ),
+    )
+    .await;
+    let response = call(
+        storage,
+        auth_disabled(),
+        request(
+            "GET",
+            "http://localhost/cassie/midge_primary_lease.json",
+            &[("host", "storage.googleapis.com")],
+            b"",
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(body_bytes(response).await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn should_return_requested_slice_given_range_header_when_reading_gcs_object_content() {
     let storage = temp_storage();
     call(

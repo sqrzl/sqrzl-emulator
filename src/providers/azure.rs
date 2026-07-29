@@ -1655,8 +1655,15 @@ impl AzureBlobAdapter {
         blob_key: &str,
         snapshot: Option<&str>,
     ) -> Result<Response<Body>, String> {
-        let blob = Self::lookup_blob(storage, container, blob_key, snapshot)
-            .map_err(|err| err.to_string())?;
+        let blob = match Self::lookup_blob(storage, container, blob_key, snapshot) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => {
+                return Ok(Self::response(StatusCode::NOT_FOUND)
+                    .header("x-ms-error-code", "BlobNotFound")
+                    .empty());
+            }
+            Err(err) => return Err(err.to_string()),
+        };
         if let Some(range_header) = Self::requested_range(req) {
             return Self::get_blob_range(
                 storage,
