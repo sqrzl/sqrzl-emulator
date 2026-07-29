@@ -1709,6 +1709,7 @@ mod tests {
 
     #[test]
     fn should_keep_bucket_names_outside_filesystem_paths() {
+        // Arrange
         let base = temp_path();
         let storage = FilesystemStorage::new(&base);
         let escaped = base
@@ -1717,8 +1718,10 @@ mod tests {
             .join(format!("escaped-{}", Uuid::new_v4()));
         let bucket = format!("../{}", escaped.file_name().unwrap().to_string_lossy());
 
+        // Act
         storage.create_bucket(bucket.clone()).unwrap();
 
+        // Assert
         assert!(storage.bucket_exists(&bucket).unwrap());
         assert!(!escaped.exists());
         assert_eq!(storage.list_buckets().unwrap()[0].name, bucket);
@@ -1727,12 +1730,14 @@ mod tests {
 
     #[test]
     fn should_list_buckets_in_logical_name_order_after_restart() {
+        // Arrange
         let base = temp_path();
         let storage = FilesystemStorage::new(&base);
         for name in ["zebra-bucket", "alpha-bucket", "middle-bucket"] {
             storage.create_bucket(name.to_string()).unwrap();
         }
 
+        // Act
         let reopened = FilesystemStorage::new(&base);
         let names: Vec<_> = reopened
             .list_buckets()
@@ -1741,21 +1746,25 @@ mod tests {
             .map(|bucket| bucket.name)
             .collect();
 
+        // Assert
         assert_eq!(names, ["alpha-bucket", "middle-bucket", "zebra-bucket"]);
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn should_refuse_nonempty_legacy_storage_without_deleting_it() {
+        // Arrange
         let base = temp_path();
         std::fs::create_dir_all(&base).unwrap();
         let legacy = base.join("legacy-data");
         std::fs::write(&legacy, b"keep me").unwrap();
 
+        // Act
         let error = FilesystemStorage::open(&base)
             .err()
             .expect("legacy storage should be rejected");
 
+        // Assert
         assert!(matches!(
             error,
             Error::InvalidRequest(message) if message.contains("Legacy nonempty storage")
