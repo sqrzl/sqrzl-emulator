@@ -105,6 +105,51 @@ async fn should_return_custom_metadata_given_blob_metadata_headers_when_requesti
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn should_return_blob_not_found_given_missing_lease_blob_when_requesting_blob_head() {
+    let storage = temp_storage();
+    call(
+        storage.clone(),
+        auth_disabled(),
+        request(
+            "PUT",
+            "http://localhost/sqrzl-access/cassie?restype=container",
+            &[("x-ms-version", AZURE_VERSION)],
+            b"",
+        ),
+    )
+    .await;
+    let response = call(
+        storage,
+        auth_disabled(),
+        request(
+            "HEAD",
+            "http://localhost/sqrzl-access/cassie/midge_primary_lease.json",
+            &[("x-ms-version", AZURE_VERSION)],
+            b"",
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-ms-error-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("BlobNotFound")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-ms-version")
+            .and_then(|value| value.to_str().ok()),
+        Some(AZURE_VERSION)
+    );
+    assert!(response.headers().get("x-ms-request-id").is_some());
+    assert!(body_bytes(response).await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn should_return_requested_slice_given_range_header_when_reading_blob_content() {
     let storage = temp_storage();
     call(
