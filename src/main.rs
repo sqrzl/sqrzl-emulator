@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
 
     // Initialize storage
     tracing::info!(path = %config.blobs_path, "Using filesystem storage");
-    let storage = Arc::new(FilesystemStorage::new(&config.blobs_path));
+    let storage = Arc::new(FilesystemStorage::open(&config.blobs_path)?);
     let startup_buckets = Config::startup_bucket_names_from_env();
 
     ensure_startup_buckets(storage.as_ref(), &startup_buckets)?;

@@ -202,7 +202,7 @@ mod tests {
         };
 
         let allowed_req = parsed_request(
-            "http://localhost/bucket/notes.txt?X-Amz-Credential=integration-tester%2F20240101%2Fus-east-1%2Fs3%2Faws4_request",
+            "http://localhost/bucket/notes.txt?X-Amz-Credential=integration-tester%2F20240101%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=test-signature",
             &[],
         )
         .await;

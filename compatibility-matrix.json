@@ -2,35 +2,35 @@
   "providers": {
     "s3-family": {
       "bucket_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "api::server::tests::bucket_crud_json",
           "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "object_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "api::server::tests::object_upload_download",
           "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "virtual_hosted_style": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "server::http::tests::should_route_virtual_hosted_style_bucket_requests"
         ],
@@ -41,51 +41,51 @@
         ]
       },
       "sigv4": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "auth::sigv4::tests::should_verify_valid_sigv4_signature",
           "server::handlers::auth::tests::should_build_standard_sigv4_canonical_request_with_sorted_query",
           "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "multipart": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "services::object::tests::should_roundtrip_object_through_service",
           "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "versioning": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "services::object::tests::should_list_object_versions_through_service",
           "server::handlers::bucket::tests::should_list_version_history_when_versions_query_is_requested",
           "interop_s3::should_list_multiple_versions_given_versioning_enabled_when_object_is_overwritten"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "requester_pays": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "server::handlers::bucket::tests::should_round_trip_request_payment_website_and_cors_bucket_configs"
         ],
@@ -96,7 +96,7 @@
         ]
       },
       "website_hosting": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "server::handlers::bucket::tests::should_round_trip_request_payment_website_and_cors_bucket_configs"
         ],
@@ -107,7 +107,7 @@
         ]
       },
       "cors_admin": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "server::handlers::bucket::tests::should_round_trip_request_payment_website_and_cors_bucket_configs"
         ],
@@ -118,7 +118,7 @@
         ]
       },
       "object_lock_retention": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "server::handlers::object::s3_contract_tests::should_block_mutation_when_object_lock_headers_are_active"
         ],
@@ -129,7 +129,7 @@
         ]
       },
       "sse_request_contracts": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "server::handlers::object::s3_contract_tests::should_round_trip_sse_headers_and_require_matching_sse_c_reads"
         ],
@@ -140,7 +140,7 @@
         ]
       },
       "bucket_post_ops": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "server::handlers::bucket::tests::should_accept_browser_post_uploads"
         ],
@@ -153,105 +153,105 @@
     },
     "azure-blob": {
       "container_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
           "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "blob_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
           "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "metadata_headers": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
           "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "range_reads": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
           "interop_azure::should_return_requested_slice_given_range_header_when_reading_blob_content"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "list_containers": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
           "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "list_blobs": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
           "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "shared_key_auth": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
           "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "sas_auth": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization"
         ],
@@ -262,23 +262,23 @@
         ]
       },
       "block_blob_upload": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_commit_block_blob_from_put_block_list",
           "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
           "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations",
           "providers::azure::tests::should_commit_and_list_blocks_after_adapter_restart"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "append_blob": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_support_append_and_page_blob_writes",
           "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content"
@@ -290,7 +290,7 @@
         ]
       },
       "page_blob": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_support_append_and_page_blob_writes",
           "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content"
@@ -302,7 +302,7 @@
         ]
       },
       "lease_management": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
           "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob"
@@ -314,7 +314,7 @@
         ]
       },
       "snapshots": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
           "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob"
@@ -326,7 +326,7 @@
         ]
       },
       "immutability_retention": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
           "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob"
@@ -340,77 +340,77 @@
     },
     "gcs": {
       "bucket_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
           "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "object_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
           "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "metadata_headers": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
           "interop_gcs::should_return_custom_metadata_given_gcs_metadata_headers_when_requesting_object_head"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "range_reads": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
           "interop_gcs::should_return_requested_slice_given_range_header_when_reading_gcs_object_content"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "list_objects": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
           "interop_gcs::should_list_matching_objects_given_existing_keys_when_querying_gcs_bucket_contents"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "signed_url_v2": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access"
         ],
@@ -421,134 +421,134 @@
         ]
       },
       "resumable_upload": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access",
           "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
           "providers::gcs::tests::should_complete_resumable_upload_after_adapter_restart"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "json_api_breadth": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
           "providers::gcs::tests::should_increment_generation_on_overwrite_and_patch_metageneration",
           "providers::gcs::tests::should_enforce_gcs_generation_and_metageneration_preconditions",
           "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       }
     },
     "oci-object": {
       "namespace_discovery": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_support_oci_namespace_bucket_and_object_flows",
           "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "bucket_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_support_oci_namespace_bucket_and_object_flows",
           "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "object_crud": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_support_oci_namespace_bucket_and_object_flows",
           "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "metadata_headers": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_round_trip_oci_metadata_and_prefix_listing",
           "interop_oci::should_return_custom_metadata_given_oci_metadata_headers_when_requesting_object_head"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "list_objects": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_round_trip_oci_metadata_and_prefix_listing",
           "interop_oci::should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket_contents"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "request_signing": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_validate_oci_signature_authorization",
           "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "multipart": {
-        "status": "pass",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_support_oci_multipart_upload_lifecycle",
           "interop_oci::should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci_upload"
         ],
-        "support_tier": "certified",
+        "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
         ],
         "limitations": [
-          "Certified for documented local emulator workflows; full production cloud-provider control-plane parity remains out of scope."
+          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       }
     }

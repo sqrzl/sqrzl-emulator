@@ -30,6 +30,8 @@ impl BucketStore for FilesystemStorage {
 
         fs::create_dir(&bucket_dir)
             .map_err(|e| Error::InternalError(format!("Failed to create bucket: {e}")))?;
+        fs::write(bucket_dir.join(".bucket.name"), name.as_bytes())
+            .map_err(|e| Error::InternalError(format!("Failed to persist bucket identity: {e}")))?;
 
         // Update index
         self.index.get_or_create_bucket(name);
@@ -92,19 +94,16 @@ impl BucketStore for FilesystemStorage {
                 .map_err(|e| Error::InternalError(format!("Failed to get metadata: {e}")))?;
 
             if metadata.is_dir() {
-                let name = entry.file_name();
-                if let Some(bucket_name) = name.to_str() {
-                    if bucket_name.starts_with('.') {
-                        continue;
-                    }
-                    let mut bucket = Bucket::new(bucket_name.to_string());
-                    bucket.versioning_enabled = self.versioning_enabled(bucket_name);
-                    bucket.metadata = self.read_bucket_metadata(bucket_name)?;
+                if let Ok(bucket_name) = fs::read_to_string(entry.path().join(".bucket.name")) {
+                    let mut bucket = Bucket::new(bucket_name.clone());
+                    bucket.versioning_enabled = self.versioning_enabled(&bucket_name);
+                    bucket.metadata = self.read_bucket_metadata(&bucket_name)?;
                     buckets.push(bucket);
                 }
             }
         }
 
+        buckets.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(buckets)
     }
 
@@ -375,7 +374,7 @@ impl LifecycleStore for FilesystemStorage {
         &self,
         bucket: &str,
     ) -> Result<crate::models::lifecycle::LifecycleConfiguration> {
-        let bucket_path = self.base_path.join(bucket);
+        let bucket_path = self.bucket_dir(bucket);
         if !bucket_path.exists() {
             return Err(Error::BucketNotFound);
         }
@@ -396,7 +395,7 @@ impl LifecycleStore for FilesystemStorage {
         bucket: &str,
         config: crate::models::lifecycle::LifecycleConfiguration,
     ) -> Result<()> {
-        let bucket_path = self.base_path.join(bucket);
+        let bucket_path = self.bucket_dir(bucket);
         if !bucket_path.exists() {
             return Err(Error::BucketNotFound);
         }
@@ -409,7 +408,7 @@ impl LifecycleStore for FilesystemStorage {
     }
 
     fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()> {
-        let bucket_path = self.base_path.join(bucket);
+        let bucket_path = self.bucket_dir(bucket);
         if !bucket_path.exists() {
             return Err(Error::BucketNotFound);
         }
@@ -429,7 +428,7 @@ impl PolicyStore for FilesystemStorage {
         &self,
         bucket: &str,
     ) -> Result<crate::models::policy::BucketPolicyDocument> {
-        let bucket_path = self.base_path.join(bucket);
+        let bucket_path = self.bucket_dir(bucket);
         if !bucket_path.exists() {
             return Err(Error::BucketNotFound);
         }
@@ -451,7 +450,7 @@ impl PolicyStore for FilesystemStorage {
         bucket: &str,
         policy: crate::models::policy::BucketPolicyDocument,
     ) -> Result<()> {
-        let bucket_path = self.base_path.join(bucket);
+        let bucket_path = self.bucket_dir(bucket);
         if !bucket_path.exists() {
             return Err(Error::BucketNotFound);
         }
@@ -464,7 +463,7 @@ impl PolicyStore for FilesystemStorage {
     }
 
     fn delete_bucket_policy(&self, bucket: &str) -> Result<()> {
-        let bucket_path = self.base_path.join(bucket);
+        let bucket_path = self.bucket_dir(bucket);
         if !bucket_path.exists() {
             return Err(Error::BucketNotFound);
         }
@@ -1705,6 +1704,63 @@ mod tests {
         assert!(payload.starts_with("payload-"));
         assert_eq!(stored.size, payload.len() as u64);
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_keep_bucket_names_outside_filesystem_paths() {
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let escaped = base
+            .parent()
+            .unwrap()
+            .join(format!("escaped-{}", Uuid::new_v4()));
+        let bucket = format!("../{}", escaped.file_name().unwrap().to_string_lossy());
+
+        storage.create_bucket(bucket.clone()).unwrap();
+
+        assert!(storage.bucket_exists(&bucket).unwrap());
+        assert!(!escaped.exists());
+        assert_eq!(storage.list_buckets().unwrap()[0].name, bucket);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_list_buckets_in_logical_name_order_after_restart() {
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        for name in ["zebra-bucket", "alpha-bucket", "middle-bucket"] {
+            storage.create_bucket(name.to_string()).unwrap();
+        }
+
+        let reopened = FilesystemStorage::new(&base);
+        let names: Vec<_> = reopened
+            .list_buckets()
+            .unwrap()
+            .into_iter()
+            .map(|bucket| bucket.name)
+            .collect();
+
+        assert_eq!(names, ["alpha-bucket", "middle-bucket", "zebra-bucket"]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_refuse_nonempty_legacy_storage_without_deleting_it() {
+        let base = temp_path();
+        std::fs::create_dir_all(&base).unwrap();
+        let legacy = base.join("legacy-data");
+        std::fs::write(&legacy, b"keep me").unwrap();
+
+        let error = FilesystemStorage::open(&base)
+            .err()
+            .expect("legacy storage should be rejected");
+
+        assert!(matches!(
+            error,
+            Error::InvalidRequest(message) if message.contains("Legacy nonempty storage")
+        ));
+        assert_eq!(std::fs::read(&legacy).unwrap(), b"keep me");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

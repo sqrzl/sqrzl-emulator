@@ -663,6 +663,36 @@ impl AzureBlobAdapter {
         if Utc::now() > expiry {
             return Err("SAS token has expired".to_string());
         }
+        if !starts_on.is_empty() {
+            let start = DateTime::parse_from_rfc3339(starts_on)
+                .or_else(|_| DateTime::parse_from_str(starts_on, "%Y-%m-%dT%H:%M:%SZ"))
+                .map_err(|_| "Invalid SAS start time".to_string())?
+                .with_timezone(&Utc);
+            if Utc::now() < start {
+                return Err("SAS token is not valid yet".to_string());
+            }
+        }
+        if req.query_param("spr") == Some("https")
+            && req.uri.scheme_str().is_some_and(|scheme| scheme != "https")
+        {
+            return Err("SAS token requires HTTPS".to_string());
+        }
+
+        let required_permission = match *req.method() {
+            Method::GET | Method::HEAD => 'r',
+            Method::DELETE => 'd',
+            Method::PUT | Method::POST => 'w',
+            _ => return Err("SAS token does not permit this method".to_string()),
+        };
+        if !permissions.contains(required_permission) {
+            return Err(format!(
+                "SAS token lacks required '{required_permission}' permission"
+            ));
+        }
+        let expected_resource_type = if resource.blob.is_some() { "b" } else { "c" };
+        if resource_type != expected_resource_type {
+            return Err("SAS resource scope does not match the request".to_string());
+        }
 
         let canonical_resource = if let Some(container) = &resource.container {
             if let Some(blob) = &resource.blob {

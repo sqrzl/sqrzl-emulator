@@ -19,6 +19,23 @@ async fn should_reject_unsigned_s3_request_given_auth_enforced_when_request_is_m
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn should_reject_credential_only_s3_request_given_auth_enforced() {
+    let storage = temp_storage();
+    let response = call(
+        storage,
+        auth_enabled("test", "test-secret"),
+        request(
+            "GET",
+            "http://localhost/?X-Amz-Credential=test%2F20260729%2Fus-east-1%2Fs3%2Faws4_request",
+            &[],
+            b"",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn should_reject_unauthorized_azure_request_given_auth_enforced_when_listing_containers() {
     let storage = temp_storage();
     let response = call(

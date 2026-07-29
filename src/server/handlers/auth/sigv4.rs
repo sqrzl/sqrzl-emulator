@@ -20,11 +20,32 @@ pub(crate) fn verify_sigv4_signature(
     }
 
     let Some(auth_header) = req.header("authorization") else {
-        return Ok(true);
+        let query = req.query().unwrap_or_default();
+        let has_credential =
+            query.contains("X-Amz-Credential=") || query.contains("AWSAccessKeyId=");
+        let complete_presign = (query.contains("X-Amz-Credential=")
+            && query.contains("X-Amz-Signature="))
+            || (query.contains("AWSAccessKeyId=") && query.contains("Signature="));
+        if complete_presign || !has_credential {
+            return Ok(true);
+        }
+        let req_id = header_utils::generate_request_id();
+        return Err(xml_error_response(
+            StatusCode::FORBIDDEN,
+            "AccessDenied",
+            "A complete request signature is required",
+            &req_id,
+        ));
     };
 
     if !auth_header.starts_with("AWS4-HMAC-SHA256") {
-        return Ok(true);
+        let req_id = header_utils::generate_request_id();
+        return Err(xml_error_response(
+            StatusCode::FORBIDDEN,
+            "InvalidRequest",
+            "Only AWS Signature Version 4 is accepted when authentication is enforced",
+            &req_id,
+        ));
     }
 
     let req_id = header_utils::generate_request_id();

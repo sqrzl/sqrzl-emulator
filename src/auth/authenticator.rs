@@ -77,13 +77,16 @@ impl AuthInfo {
         // Try to extract credentials from Authorization header
         if let Some(auth_str) = req.header("authorization") {
             // Check for AWS4-HMAC-SHA256 (SigV4)
-            if auth_str.starts_with("AWS4-HMAC-SHA256") {
+            if auth_str.starts_with("AWS4-HMAC-SHA256")
+                && auth_str.contains("Signature=")
+                && auth_str.contains("SignedHeaders=")
+            {
                 if let Some(principal) = Self::extract_sigv4_principal(auth_str, config) {
                     return Self::authenticated(principal);
                 }
             }
             // Check for AWS Signature Version 2
-            else if auth_str.starts_with("AWS ") {
+            else if auth_str.starts_with("AWS ") && auth_str.split_once(':').is_some() {
                 if let Some(principal) = Self::extract_v2_principal(auth_str, config) {
                     return Self::authenticated(principal);
                 }
@@ -92,7 +95,10 @@ impl AuthInfo {
 
         // Check query parameters for presigned URLs
         if let Some(query) = req.query() {
-            if query.contains("X-Amz-Credential") || query.contains("AWSAccessKeyId") {
+            let has_v4_signature =
+                query.contains("X-Amz-Credential") && query.contains("X-Amz-Signature");
+            let has_v2_signature = query.contains("AWSAccessKeyId") && query.contains("Signature=");
+            if has_v4_signature || has_v2_signature {
                 if let Some(principal) = Self::extract_presigned_principal(query, config) {
                     return Self::authenticated(principal);
                 }

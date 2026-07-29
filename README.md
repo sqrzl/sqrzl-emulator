@@ -87,7 +87,9 @@ Sqrzl reads all runtime configuration from environment variables.
   values are set.
 - `SQRZL_ADMIN_AUTH_DISABLED`: set to `true` to keep the admin API open for local
   development while provider auth remains enabled.
-- `SQRZL_BLOBS_PATH`: filesystem storage root, defaulting to `./blobs`.
+- `SQRZL_BLOBS_PATH`: storage format v2 filesystem root, defaulting to
+  `./blobs`. Nonempty legacy roots are refused at startup; archive or clear the
+  directory first. Sqrzl never deletes legacy data automatically.
 - `SQRZL_LIFECYCLE_HOURS`: hours between lifecycle rule executions, defaulting to `1`.
 - `SQRZL_API_PORT`: API listener port, defaulting to `9000`.
 - `SQRZL_UI_PORT`: UI listener port, defaulting to `9001`.
@@ -136,10 +138,10 @@ SQRZL_API_URL=http://127.0.0.1:9000 python -m pytest
 ```
 
 The harness builds and starts `target/debug/sqrzl-emulator` by default with
-temporary storage and auth disabled. Use `SQRZL_SDK_PROVIDERS=s3,azure` to run a
-subset. The CI gate runs the full SDK test matrix against a live Sqrzl process,
-and the container smoke gate builds the Docker image, verifies `/healthz`, and
-runs the S3 core SDK flow against the container.
+temporary storage and auth disabled. Those runs are functional smoke tests, not
+authenticated certification evidence. Current certification claims are
+suspended and affected matrix entries are partial. Use
+`SQRZL_SDK_PROVIDERS=s3,azure` to run a subset.
 
 ## Admin API
 

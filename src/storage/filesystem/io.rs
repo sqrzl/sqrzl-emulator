@@ -2,6 +2,7 @@ use super::FilesystemStorage;
 use crate::error::{Error, Result};
 use crate::models::{MultipartUpload, Object};
 use crate::storage::LockFreeIndex;
+use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
@@ -12,6 +13,43 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 impl FilesystemStorage {
+    const FORMAT_MARKER: &'static str = ".sqrzl-storage-format-v2";
+
+    /// Opens a process storage root, initializing an empty root as format v2.
+    ///
+    /// Legacy nonempty roots are never modified automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an actionable error when the root is nonempty and unmarked, or
+    /// when the storage root or format marker cannot be read or written.
+    pub fn open(base_path: impl AsRef<Path>) -> Result<Self> {
+        let base_path = base_path.as_ref();
+        fs::create_dir_all(base_path)
+            .map_err(|err| Error::InternalError(format!("Failed to create storage root: {err}")))?;
+        let marker = base_path.join(Self::FORMAT_MARKER);
+        if !marker.exists() {
+            let nonempty = fs::read_dir(base_path)
+                .map_err(|err| {
+                    Error::InternalError(format!("Failed to inspect storage root: {err}"))
+                })?
+                .next()
+                .is_some();
+            if nonempty {
+                return Err(Error::InvalidRequest(format!(
+                    "Legacy nonempty storage detected at '{}'. Sqrzl storage format v2 is \
+                     intentionally incompatible. Archive or clear SQRZL_BLOBS_PATH, then restart; \
+                     no data was deleted.",
+                    base_path.display()
+                )));
+            }
+            fs::write(&marker, b"2\n").map_err(|err| {
+                Error::InternalError(format!("Failed to write storage format marker: {err}"))
+            })?;
+        }
+        Ok(Self::new(base_path))
+    }
+
     pub fn new(base_path: impl AsRef<Path>) -> Self {
         let base_path = base_path.as_ref().to_path_buf();
         // Ensure base directory exists
@@ -34,11 +72,7 @@ impl FilesystemStorage {
                     {
                         continue;
                     }
-                    if let Some(bucket_name) = entry
-                        .file_name()
-                        .to_str()
-                        .map(std::string::ToString::to_string)
-                    {
+                    if let Ok(bucket_name) = fs::read_to_string(entry.path().join(".bucket.name")) {
                         index.get_or_create_bucket(bucket_name.clone());
 
                         // Scan bucket for object_id directories
@@ -84,7 +118,8 @@ impl FilesystemStorage {
     }
 
     pub(super) fn bucket_dir(&self, bucket: &str) -> PathBuf {
-        self.base_path.join(bucket)
+        let digest = Sha256::digest(bucket.as_bytes());
+        self.base_path.join(format!("b-{}", hex::encode(digest)))
     }
 
     pub(super) fn provider_state_path(&self, provider: &str, key: &str) -> PathBuf {
@@ -105,6 +140,7 @@ impl FilesystemStorage {
 
         match name.as_ref() {
             ".bucket.meta.json"
+            | ".bucket.name"
             | ".versioning-enabled"
             | ".lifecycle.json"
             | ".policy.json"

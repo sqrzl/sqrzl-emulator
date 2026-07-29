@@ -11,6 +11,7 @@ struct HealthResponse {
     api_port: u16,
     ui_port: u16,
     auth_enforced: bool,
+    auth_enforced_providers: Vec<&'static str>,
     admin_auth_enforced: bool,
     max_request_bytes: usize,
     storage_ready: bool,
@@ -28,6 +29,11 @@ pub fn response(
         api_port: config.api_port,
         ui_port: config.ui_port,
         auth_enforced: config.enforce_auth,
+        auth_enforced_providers: if config.enforce_auth {
+            vec!["s3-family", "azure-blob", "gcs", "oci-object"]
+        } else {
+            Vec::new()
+        },
         admin_auth_enforced: config.admin_auth_enforced(),
         max_request_bytes: config.max_request_bytes,
         storage_ready,

@@ -24,16 +24,16 @@ Allowed support tiers:
 - `unsupported`: intentionally not implemented.
 - `deferred`: planned or under evaluation, but not supportable yet.
 
-Certified workflow families include:
+No workflow family is currently certified. Previous claims relied partly on
+auth-disabled functional smoke tests and are demoted to `partial` while
+authenticated positive and negative contracts, pagination, restart durability,
+and provider error responses are remediated.
 
-- S3-compatible APIs: bucket CRUD, object put/get/head/delete/list/range,
-  metadata, SigV4 SDK requests, multipart upload, and versioning.
-- Azure Blob Storage: container CRUD, blob upload/download/properties/delete/list/range,
-  metadata, Shared Key-shaped SDK requests, and block blob staging/commit.
-- Google Cloud Storage: JSON API bucket/object CRUD, object metadata/list/range/media
-  download, and resumable uploads.
-- OCI Object Storage: namespace discovery, bucket CRUD, object put/get/head/delete/list/range,
-  metadata, request signing-shaped SDK requests, and multipart upload.
+Certification requires an official SDK request using the provider's documented
+authentication scheme. Auth-disabled SDK runs are functional smoke tests, not
+certification evidence. GCS JSON SDK coverage remains explicitly auth-disabled;
+enforced GCS authentication is covered separately by negative and
+signed-request contract tests.
 
 ## Health And Diagnostics
 
@@ -53,6 +53,8 @@ The response includes:
 - `version`: Sqrzl package version.
 - `api_port` and `ui_port`: configured listener ports.
 - `auth_enforced` and `admin_auth_enforced`: current auth mode.
+- `auth_enforced_providers`: provider contracts protected by configured
+  credentials.
 - `max_request_bytes`: current request body cap.
 - `storage_ready`: whether the configured storage path is readable.
 - `enabled_providers`: provider adapters compiled into this Sqrzl build
@@ -85,8 +87,8 @@ python -m pytest
 ```
 
 By default the harness builds and starts `target/debug/sqrzl-emulator` with
-temporary storage and authentication disabled. To target an existing Sqrzl
-process:
+temporary storage and authentication disabled. This is functional smoke
+coverage, not authenticated certification. To target an existing Sqrzl process:
 
 ```bash
 SQRZL_API_URL=http://127.0.0.1:9000 python -m pytest
@@ -117,8 +119,13 @@ design.
 
 ## Restart And Durability Expectations
 
-Certified workflows must survive a normal Sqrzl restart when `SQRZL_BLOBS_PATH` points
-to the same filesystem path.
+Any workflow proposed for certification must survive a normal Sqrzl restart
+when `SQRZL_BLOBS_PATH` points to the same filesystem path.
+
+Sqrzl uses storage format v2. An empty root receives a
+`.sqrzl-storage-format-v2` marker. A nonempty root without that marker is
+treated as legacy storage: startup fails without modifying or deleting data.
+Archive the root or clear `SQRZL_BLOBS_PATH` before restarting.
 
 Durability hardening covers:
 
