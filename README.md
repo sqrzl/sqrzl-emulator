@@ -1,199 +1,294 @@
-# Sqrzl
+# Sqrzl Emulator
 
-Sqrzl is a local object and blob storage emulator for development, CI, and
-compatibility testing.
+Sqrzl is a Docker-ready object and blob storage emulator for local development
+and CI. One persistent filesystem-backed store is available through
+S3-compatible, Azure Blob Storage, Google Cloud Storage, and OCI Object Storage
+HTTP APIs. A browser UI is included for inspecting buckets and objects.
 
-It gives you one shared filesystem-backed storage core behind S3-compatible,
-Azure Blob Storage, Google Cloud Storage, and OCI Object Storage APIs, plus a
-versioned admin API and an Askr admin UI for browsing buckets, navigating
-folder-like blob keys, uploading and deleting blobs, viewing metadata, and
-downloading content.
+Sqrzl is a development tool, not a production storage service. Provider
+compatibility is intentionally scoped; see the
+[compatibility matrix](compatibility-matrix.json) for current coverage.
 
-## Quick Start
+## Start with Docker Compose
 
-### Local
-
-```bash
-cargo run
-```
-
-### Docker
+The repository includes a working [`compose.yml`](compose.yml):
 
 ```bash
+git clone https://github.com/sqrzl/sqrzl-emulator.git
+cd sqrzl-emulator
 docker compose up --build
 ```
 
-Docker and Compose both default to readable text logs. Set `SQRZL_LOG_FORMAT=json`
-only when you want structured tracing output.
+When the health check succeeds, open:
 
-The Compose example uses `admin` / `sqrzl-secret` credentials so the admin UI can
-authenticate. The bare `docker run` example below keeps auth disabled.
+| Surface | URL | Purpose |
+| --- | --- | --- |
+| Storage APIs | <http://localhost:9000> | S3, Azure, GCS, and OCI endpoints |
+| Admin UI | <http://localhost:9001> | Browse and manage local storage |
+| API health | <http://localhost:9000/healthz> | Runtime and storage readiness |
+| UI health | <http://localhost:9001/healthz> | UI listener readiness |
 
-If you want the bare container instead of Compose:
+The checked-in Compose configuration enables authentication with:
+
+```text
+username/access key: admin
+password/secret key: sqrzl-secret
+```
+
+Use those values on the UI login page. To run an open local instance, remove
+`SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY` from `compose.yml`; both must
+be absent. Setting only one also leaves authentication disabled.
+
+Stop the container while retaining data:
+
+```bash
+docker compose down
+```
+
+Stop it and permanently delete the named storage volume:
+
+```bash
+docker compose down --volumes
+```
+
+## Copy-paste Compose setup
+
+This minimal configuration keeps authentication disabled so provider SDKs can
+be connected with the least setup:
+
+```yaml
+services:
+  sqrzl:
+    build: .
+    container_name: sqrzl
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      SQRZL_BLOBS_PATH: /app/blobs
+      SQRZL_LOG_FORMAT: text
+    volumes:
+      - sqrzl-blobs:/app/blobs
+
+volumes:
+  sqrzl-blobs:
+```
+
+To protect the storage APIs and require UI login, add both credentials:
+
+```yaml
+    environment:
+      SQRZL_BLOBS_PATH: /app/blobs
+      SQRZL_LOG_FORMAT: text
+      SQRZL_ACCESS_KEY_ID: admin
+      SQRZL_SECRET_ACCESS_KEY: change-this-local-secret
+```
+
+To keep the UI and `/admin/v1` open while provider API authentication remains
+enabled, also set:
+
+```yaml
+      SQRZL_ADMIN_AUTH_DISABLED: "true"
+```
+
+## Run the container directly
+
+Build the image from this repository:
+
+```bash
+docker build -t sqrzl-emulator:local .
+```
+
+Run it with a persistent named volume and authentication disabled:
 
 ```bash
 docker run --rm \
+  --name sqrzl \
   -p 9000:9000 \
   -p 9001:9001 \
   -v sqrzl-blobs:/app/blobs \
-  sqrzl/sqrzl-emulator
+  sqrzl-emulator:local
 ```
 
-That container path starts with auth disabled unless you set
+Pass configuration with repeated `--env` flags or an env file:
+
+```bash
+docker run --rm \
+  --name sqrzl \
+  -p 9000:9000 \
+  -p 9001:9001 \
+  -v sqrzl-blobs:/app/blobs \
+  --env SQRZL_ACCESS_KEY_ID=admin \
+  --env SQRZL_SECRET_ACCESS_KEY=change-this-local-secret \
+  --env SQRZL_BUCKET_LIST=uploads,fixtures \
+  sqrzl-emulator:local
+```
+
+## Environment variables
+
+The table below is the complete runtime configuration surface.
+
+| Variable | Accepted values | Default | Description |
+| --- | --- | --- | --- |
+| `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | Access key and admin username. Provider and admin authentication are enabled only when both credential variables are present. |
+| `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | Signing secret and admin password. Azure Shared Key treats valid Base64 as decoded key bytes; otherwise the literal bytes are used. |
+| `SQRZL_ADMIN_AUTH_DISABLED` | `1`, `true`, `yes`, or `on` (case-insensitive) enable it; every other value is false | `false` | Keeps the UI and `/admin/v1` in open mode while provider API authentication remains enabled. |
+| `SQRZL_BLOBS_PATH` | Writable container path | `/app/blobs` in Docker; `./blobs` natively | Storage format v2 root. Mount a volume here for persistence. |
+| `SQRZL_LIFECYCLE_HOURS` | Unsigned integer hours | `1` | Interval between lifecycle-rule passes. Invalid values use the default. Avoid `0`, which requests a continuous interval. |
+| `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
+| `SQRZL_UI_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9001` | Admin UI listener inside the container. Normally keep this at `9001`. |
+| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum buffered HTTP request body. Oversized provider requests receive a provider-shaped `413 Payload Too Large`. Zero and invalid values use the default. |
+| `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names must be 3–63 characters using lowercase ASCII letters, digits, and single hyphens; they cannot start or end with a hyphen. |
+| `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
+
+Docker port mappings are `HOST:CONTAINER`. For example, to expose Sqrzl on
+host ports 19000 and 19001 without changing its internal configuration:
+
+```yaml
+ports:
+  - "19000:9000"
+  - "19001:9001"
+```
+
+## Persistence and storage format v2
+
+Mount `/app/blobs` to a named volume or bind mount. Without a mount, data is
+lost when the container is removed.
+
+An empty root is initialized with `.sqrzl-storage-format-v2`. Sqrzl refuses to
+start when the configured root is nonempty but lacks that marker. This prevents
+an older on-disk layout from being silently misread. Sqrzl never migrates or
+deletes legacy data automatically.
+
+For a disposable named volume, reset with:
+
+```bash
+docker compose down --volumes
+docker compose up --build
+```
+
+For a bind mount, archive or clear the host directory yourself before
+restarting. Never delete a directory containing data you intend to keep.
+
+## Connect provider clients
+
+All provider APIs use the storage listener, normally
+`http://localhost:9000`.
+
+| Provider | Endpoint/client setting | Local notes |
+| --- | --- | --- |
+| S3-compatible | Endpoint URL `http://localhost:9000` | Use region `us-east-1`, SigV4, and path-style addressing. |
+| Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. For the simplest smoke setup, use no credential and leave Sqrzl auth disabled. |
+| GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials for the auth-disabled development flow. |
+| GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
+| OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/<namespace>/b/<bucket>/...`; the default namespace response is `sqrzl-emulator`. |
+
+### S3 example with boto3
+
+```python
+import boto3
+from botocore.config import Config
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://localhost:9000",
+    aws_access_key_id="local",
+    aws_secret_access_key="local",
+    region_name="us-east-1",
+    config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+)
+
+s3.create_bucket(Bucket="example-bucket")
+s3.put_object(Bucket="example-bucket", Key="hello.txt", Body=b"hello")
+print(s3.get_object(Bucket="example-bucket", Key="hello.txt")["Body"].read())
+```
+
+With Sqrzl authentication disabled, the SDK may use any local placeholder
+credentials. With authentication enabled, use the configured
 `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`.
 
-### Native Executables
+### Azure example
 
-You can build a native release binary directly with Cargo:
+```python
+from azure.storage.blob import BlobServiceClient
 
-```bash
-cargo build --release --locked --bin sqrzl-emulator
+service = BlobServiceClient(
+    account_url="http://localhost:9000/devstoreaccount1",
+    credential=None,
+)
+container = service.create_container("example-container")
+container.upload_blob("hello.txt", b"hello")
 ```
 
-For packaged Linux artifacts, use the GitHub Actions `Executables` workflow
-and download the per-target build artifacts. The workflow runs on a single
-Ubuntu runner and uses Dockerized cross-compilers to produce Linux binaries.
+This example expects Sqrzl authentication to be disabled.
 
-## What Sqrzl Covers
+### GCS example
 
-- S3-compatible, Azure Blob Storage, Google Cloud Storage, and OCI Object Storage
-  API endpoints
-- Shared filesystem-backed storage core
-- Bucket/container and object/blob CRUD workflows
-- Object listing, range reads, metadata, tags, and version-oriented workflows
-  where supported
-- Multipart, block, resumable, and provider-compatible upload flows
-- Provider-compatible request signing and auth validation for supported SDK flows
-- Versioned admin API and Askr admin UI for local inspection and storage
-  operations
-- Docker-ready local development and CI support
+```python
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import storage
 
-## Docs Map
+gcs = storage.Client(
+    project="sqrzl",
+    credentials=AnonymousCredentials(),
+    client_options={"api_endpoint": "http://localhost:9000"},
+)
+bucket = gcs.bucket("example-bucket")
+bucket.create()
+bucket.blob("hello.txt").upload_from_string("hello")
+```
+
+This example expects Sqrzl authentication to be disabled.
+
+## Health checks and troubleshooting
+
+Check readiness:
+
+```bash
+curl --fail http://localhost:9000/healthz
+docker compose ps
+docker compose logs --follow sqrzl
+```
+
+`/healthz` reports listener ports, storage readiness, request-size limit,
+enabled providers, and authentication state. A healthy instance returns
+`200 OK`; unreadable storage returns `503 Service Unavailable`.
+
+Common problems:
+
+| Symptom | Resolution |
+| --- | --- |
+| UI login fails | Use the exact two configured credential values. If neither is configured, refresh the UI; admin mode is open. |
+| Provider SDK receives `401` or `403` | Either unset both credential variables for an open dev instance or configure the SDK to sign with the matching values and supported provider scheme. |
+| Container exits with “Legacy nonempty storage” | The mounted root predates format v2 or contains unrelated files. Archive it, point `SQRZL_BLOBS_PATH` at an empty mount, or reset a disposable volume. |
+| Data disappears after restart | Mount a named volume or bind mount at `/app/blobs`; container-local writable layers are disposable. |
+| Host port is already in use | Change the host side of the Compose mapping, such as `"19000:9000"`. |
+| Upload receives `413` | Increase `SQRZL_MAX_REQUEST_BYTES` to a positive byte count and recreate the container. |
+| Startup bucket is rejected | Use the common 3–63 character lowercase letter/digit/hyphen naming subset described in the environment table. |
+
+## Development and contract references
+
+Docker users should not need these files to get started, but they provide
+deeper implementation and support detail:
 
 - [Support certification](docs/support-certification.md)
-- [Architecture diagrams](docs/architecture.md)
-- [Storage UI guidelines](docs/sqrzl-storage-ui-guidelines.md)
-- [Askr bug log](askr-bug.md)
-- [UI quick start and architecture](ui/README.md)
-- [UI contributor policy](ui/AGENTS.md)
 - [Compatibility matrix](compatibility-matrix.json)
-- [Admin API contract](public/openapi.yml)
+- [Admin API OpenAPI contract](public/openapi.yml)
+- [Architecture](docs/architecture.md)
+- [Release notes](RELEASE_NOTES.md)
+- [UI contributor guide](ui/README.md)
 
-## Configuration
-
-Sqrzl reads all runtime configuration from environment variables.
-
-- `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`: enable provider auth only when both
-  values are set.
-- `SQRZL_ADMIN_AUTH_DISABLED`: set to `true` to keep the admin API open for local
-  development while provider auth remains enabled.
-- `SQRZL_BLOBS_PATH`: storage format v2 filesystem root, defaulting to
-  `./blobs`. Nonempty legacy roots are refused at startup; archive or clear the
-  directory first. Sqrzl never deletes legacy data automatically.
-- `SQRZL_LIFECYCLE_HOURS`: hours between lifecycle rule executions, defaulting to `1`.
-- `SQRZL_API_PORT`: API listener port, defaulting to `9000`.
-- `SQRZL_UI_PORT`: UI listener port, defaulting to `9001`.
-- `SQRZL_MAX_REQUEST_BYTES`: buffered request body cap, defaulting to 128 MiB.
-  Requests above the limit fail with provider-compatible `413 Payload Too Large`
-  responses.
-- `SQRZL_BUCKET_LIST`: comma-delimited bucket names to create on startup.
-  Existing buckets are left alone, and invalid bucket names abort startup.
-- `SQRZL_LOG_FORMAT`: `text` by default for human-readable logs; set to `json`
-  for structured tracing output. The Docker image and Compose file set `text`
-  explicitly.
-
-If you set `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`, the storage endpoints
-enforce auth. The admin API at `/admin/v1` also requires auth with those same
-values unless `SQRZL_ADMIN_AUTH_DISABLED=true`. The browser UI exchanges credentials
-for an HttpOnly admin session cookie.
-
-## Health And Support
-
-Both the API and UI ports expose `GET /healthz`.
+To run the repository’s complete local validation:
 
 ```bash
-curl http://127.0.0.1:9000/healthz
-curl http://127.0.0.1:9001/healthz
+cntryl-tools validate-tests
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- \
+  -D warnings -D clippy::pedantic
+STRESS_PROFILE=smoke cargo test --workspace --all-targets --all-features
+.venv/bin/python -m pytest
 ```
-
-The health response reports the current status, package version, configured
-listener ports, auth mode, `SQRZL_MAX_REQUEST_BYTES`, storage readiness, and the
-compiled provider list. See
-[Support certification](docs/support-certification.md) for the full support and
-diagnostics workflow.
-
-## SDK Certification
-
-```bash
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e ".[sdk-tests]"
-python -m pytest
-```
-
-To run against an existing Sqrzl process:
-
-```bash
-SQRZL_API_URL=http://127.0.0.1:9000 python -m pytest
-```
-
-The harness builds and starts `target/debug/sqrzl-emulator` by default with
-temporary storage and auth disabled. Those runs are functional smoke tests, not
-authenticated certification evidence. Current certification claims are
-suspended and affected matrix entries are partial. Use
-`SQRZL_SDK_PROVIDERS=s3,azure` to run a subset.
-
-## Admin API
-
-The versioned OpenAPI 3.1 contract for the admin storage API lives at
-[`public/openapi.yml`](public/openapi.yml).
-
-The contract targets the `/admin/v1` surface for session inspection, bucket
-lifecycle and versioning, object browsing, binary upload/download, metadata,
-tags, and version listing. It is intentionally separate from the
-protocol-compatible storage endpoints.
-
-Run `cd ui && npm run gen` after any contract change so the generated client in
-`ui/src/adapters/api.g.ts` stays in sync.
-
-## Admin UI
-
-The Askr-based UI lives in `ui/`. It uses `@fgrzl/fetch` with the generated
-client from `public/openapi.yml`; `ui/src/adapters/api.g.ts` is the only
-endpoint transport surface.
-
-```bash
-cd ui
-npm install
-npm run gen
-npm run type-check
-npm test
-npm run lint
-npm run lint:fix
-npm run fmt
-npm run build
-```
-
-Node 24 or newer is required. The console supports login/logout, bucket search,
-bucket create/delete, folder-like bucket browsing, blob upload/delete, blob
-details, and blob download.
-
-## Docker
-
-```bash
-docker build -t sqrzl/sqrzl-emulator .
-docker run --rm \
-  -p 9000:9000 \
-  -p 9001:9001 \
-  -v sqrzl-blobs:/app/blobs \
-  sqrzl/sqrzl-emulator
-docker compose up --build
-```
-
-The image and Compose stack default to readable text logs. Set
-`SQRZL_LOG_FORMAT=json` only when you want structured tracing output.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the LICENSE file for
-details.
+Sqrzl is licensed under the [Apache License 2.0](LICENSE).
