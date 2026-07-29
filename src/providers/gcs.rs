@@ -1579,10 +1579,13 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = storage
-            .as_ref()
-            .get_blob(bucket, object)
-            .map_err(|err| err.to_string())?;
+        let blob = match storage.as_ref().get_blob(bucket, object) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => {
+                return Ok(Self::empty_response(StatusCode::NOT_FOUND));
+            }
+            Err(err) => return Err(err.to_string()),
+        };
         let body_len = Self::response_body_len(blob.size)?;
         Ok(Self::object_response(StatusCode::OK, &blob, body_len, None).empty())
     }

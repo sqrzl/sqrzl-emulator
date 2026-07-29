@@ -3,6 +3,7 @@ mod common;
 use common::interop::{
     auth_disabled, body_bytes, body_text, call, call_with_registry, request, temp_storage,
 };
+use hyper::StatusCode;
 use sqrzl_emulator::providers::AdapterRegistry;
 use std::sync::Arc;
 
@@ -99,6 +100,36 @@ async fn should_return_custom_metadata_given_gcs_metadata_headers_when_requestin
             .and_then(|value| value.to_str().ok()),
         Some("sdk")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_return_not_found_given_missing_lease_object_when_requesting_object_head() {
+    let storage = temp_storage();
+    call(
+        storage.clone(),
+        auth_disabled(),
+        request(
+            "PUT",
+            "http://localhost/cassie",
+            &[("host", "storage.googleapis.com")],
+            b"",
+        ),
+    )
+    .await;
+    let response = call(
+        storage,
+        auth_disabled(),
+        request(
+            "HEAD",
+            "http://localhost/cassie/midge_primary_lease.json",
+            &[("host", "storage.googleapis.com")],
+            b"",
+        ),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(body_bytes(response).await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
