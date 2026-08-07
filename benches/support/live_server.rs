@@ -8,6 +8,7 @@ type Body = Full<Bytes>;
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use sqrzl_emulator::mail::FilesystemMailStore;
 use sqrzl_emulator::server::Server;
 use sqrzl_emulator::storage::{FilesystemStorage, Storage};
 use sqrzl_emulator::Config;
@@ -45,6 +46,7 @@ pub fn auth_disabled() -> Config {
         api_port: 9000,
         ui_port: 9001,
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+        smtp_port: sqrzl_emulator::config::DEFAULT_SQRZL_SMTP_PORT,
     }
 }
 
@@ -61,6 +63,8 @@ impl LiveServer {
         let api_port = reserve_port();
         let storage_dir = temp_storage_dir("sqrzl-bench-api");
         let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&storage_dir));
+        let mail =
+            Arc::new(FilesystemMailStore::open(&storage_dir).expect("mail store should open"));
         let config = Arc::new(Config {
             api_port,
             ui_port: reserve_port(),
@@ -68,7 +72,7 @@ impl LiveServer {
             ..auth_config
         });
 
-        let task = tokio::spawn(Server::new(storage, config, api_port).start());
+        let task = tokio::spawn(Server::new(storage, mail, config, api_port).start());
         let server = Self {
             base_url: format!("http://127.0.0.1:{api_port}"),
             client: Client::builder(TokioExecutor::new()).build_http(),

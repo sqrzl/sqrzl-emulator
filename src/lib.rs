@@ -9,10 +9,12 @@ pub mod error;
 pub mod health;
 pub mod hyper_compat;
 pub mod lifecycle;
+pub mod mail;
 pub mod models;
 pub mod providers;
 pub mod server;
 pub mod services;
+pub mod sms;
 pub mod storage;
 pub mod utils;
 

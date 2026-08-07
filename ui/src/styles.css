@@ -45,6 +45,16 @@
   white-space: nowrap;
 }
 
+:where([data-sqrzl-slot='text-payload']) {
+  max-inline-size: 100%;
+  overflow: auto;
+  padding: var(--ak-space-sm);
+  border: 1px solid var(--ak-color-border);
+  border-radius: var(--ak-radius-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 39.999rem) {
   :where([data-sqrzl-slot='storage-detail-actions']) {
     inline-size: 100%;

@@ -6,6 +6,17 @@ mod tests {
         HashSet::from([
             "api::server::tests::bucket_crud_json",
             "api::server::tests::object_upload_download",
+            "interop_email::should_capture_message_when_sending_over_a_smtp_session",
+            "interop_email::should_capture_sendgrid_send_and_fan_out_recipients",
+            "interop_email::should_capture_ses_send_with_signature_authorization",
+            "interop_email::should_capture_acs_send_with_recipients_and_attachments",
+            "e2e_email::should_capture_message_when_sending_over_a_real_smtp_socket",
+            "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api",
+            "sms::providers::tests::should_capture_twilio_repeated_media_and_return_sdk_resource",
+            "sms::providers::tests::should_distinguish_sns_publish_and_sms_voice_from_ordinary_root_requests",
+            "sms::providers::tests::should_store_each_acs_recipient_with_one_shared_batch_id",
+            "sms::simulator::tests::should_render_aws_sns_and_acs_event_batches",
+            "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
             "auth::sigv4::tests::should_verify_valid_sigv4_signature",
             "interop_auth::should_reject_invalid_signed_gcs_request_given_auth_enforced_when_signature_is_bad",
             "interop_auth::should_reject_unauthorized_azure_request_given_auth_enforced_when_listing_containers",
@@ -61,6 +72,10 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message",
+            "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send",
+            "sdk-tests/test_email_sdk.py::test_ses_sdk_send",
+            "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send",
             "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
@@ -69,6 +84,10 @@ mod tests {
             "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
             "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
+            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk",
+            "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish",
+            "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2",
+            "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk",
         ])
     }
 

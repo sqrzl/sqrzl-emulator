@@ -6,6 +6,7 @@ import LoginPage from '../src/pages/auth/login';
 import Home from '../src/pages/app/buckets';
 import BucketPage from '../src/pages/app/bucket';
 import BlobPage from '../src/pages/app/blob';
+import MailboxPage from '../src/pages/app/mailbox';
 import { blobIdFromBlobKey } from '../src/shared/routes';
 
 const originalFetch = globalThis.fetch;
@@ -94,6 +95,32 @@ function storageDialogFormSequence(): string[] {
 }
 
 describe('simplified page flows', () => {
+  it('renders an already-decoded mailbox route parameter containing percent', async () => {
+    let requestedPath = '';
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request =
+        typeof input === 'string' || input instanceof URL
+          ? new Request(input, init)
+          : input;
+      requestedPath = new URL(request.url, 'http://localhost').pathname;
+      return jsonResponse({ items: [], next: null });
+    };
+    const mailboxName = 'team%ops@example.com';
+    const root = await mount(() => <MailboxPage mailboxName={mailboxName} />);
+
+    try {
+      await flush();
+      expect(root.textContent).toContain(`Mailbox ${mailboxName}`);
+      expect(requestedPath).toBe(
+        '/admin/v1/mailboxes/team%25ops%40example.com/messages'
+      );
+    } finally {
+      cleanupApp(root);
+      root.remove();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('renders the app header with nav links and theme toggle', async () => {
     const root = await mount(() => (
       <AppLayout>
@@ -104,7 +131,10 @@ describe('simplified page flows', () => {
     try {
       await flush();
       expect(root.textContent).toContain('Sqrzl');
-      expect(root.textContent).not.toContain('Buckets');
+      expect(root.textContent).toContain('Buckets');
+      expect(root.textContent).toContain('Mailboxes');
+      expect(root.textContent).toContain('Texts');
+      expect(root.querySelector('a[href="/admin/texts"]')).toBeTruthy();
       expect(root.querySelector('[aria-label="Toggle theme"]')).toBeTruthy();
       expect(root.querySelector('a[href="/logout"]')).toBeTruthy();
     } finally {

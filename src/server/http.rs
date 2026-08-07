@@ -9,6 +9,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Parsed HTTP request with extracted components
+#[derive(Clone)]
 pub struct Request {
     pub method: Method,
     pub uri: Uri,

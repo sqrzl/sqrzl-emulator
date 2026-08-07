@@ -1,10 +1,12 @@
 use std::io::IsTerminal;
 use std::sync::Arc;
 
-use sqrzl_emulator::api::server::start_ui_server;
+use sqrzl_emulator::api::server::start_ui_server_with_sms;
 use sqrzl_emulator::config::LogFormat;
 use sqrzl_emulator::error::Result;
+use sqrzl_emulator::mail::{FilesystemMailStore, SmtpServer};
 use sqrzl_emulator::server::Server;
+use sqrzl_emulator::sms::FilesystemSmsStore;
 use sqrzl_emulator::storage::{BucketStore, FilesystemStorage};
 use sqrzl_emulator::utils::validation::validate_bucket_name;
 use sqrzl_emulator::{Config, Error};
@@ -33,6 +35,8 @@ async fn main() -> Result<()> {
     // Initialize storage
     tracing::info!(path = %config.blobs_path, "Using filesystem storage");
     let storage = Arc::new(FilesystemStorage::open(&config.blobs_path)?);
+    let mail = Arc::new(FilesystemMailStore::open(&config.blobs_path)?);
+    let sms = Arc::new(FilesystemSmsStore::open(&config.blobs_path)?);
     let startup_buckets = Config::startup_bucket_names_from_env();
 
     ensure_startup_buckets(storage.as_ref(), &startup_buckets)?;
@@ -43,21 +47,49 @@ async fn main() -> Result<()> {
     let _lifecycle_handle = lifecycle_executor.start();
     tracing::info!("Lifecycle executor started");
 
-    // Start both servers
+    // Start all three listeners
     tracing::info!("S3 API listening on http://127.0.0.1:{}", config.api_port);
     tracing::info!("UI listening on http://127.0.0.1:{}", config.ui_port);
+    tracing::info!(
+        "SMTP capture listening on smtp://127.0.0.1:{}",
+        config.smtp_port
+    );
 
-    let api_server =
-        Server::new(storage.clone(), Arc::new(config.clone()), config.api_port).start();
-    let ui_server = start_ui_server(storage, Arc::new(config.clone()));
+    let config = Arc::new(config);
+    let mut listeners = tokio::task::JoinSet::new();
+    listeners.spawn({
+        let storage = storage.clone();
+        let mail = mail.clone();
+        let config = config.clone();
+        let sms = sms.clone();
+        async move {
+            Server::new_with_sms(storage, mail, sms, config.clone(), config.api_port)
+                .start()
+                .await
+        }
+    });
+    listeners.spawn({
+        let storage = storage.clone();
+        let config = config.clone();
+        let mail = mail.clone();
+        let sms = sms.clone();
+        async move { start_ui_server_with_sms(storage, config, mail, sms).await }
+    });
+    listeners.spawn({
+        let mail = mail.clone();
+        let port = config.smtp_port;
+        async move { SmtpServer::new(mail, port).start().await }
+    });
 
-    // Run both servers concurrently
-    let result = tokio::select! {
-        result = api_server => result,
-        result = ui_server => result,
+    let Some(result) = listeners.join_next().await else {
+        return Ok(());
     };
-    result?;
-    Ok(())
+
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => Err(Error::InternalError(err.to_string())),
+        Err(err) => Err(Error::InternalError(err.to_string())),
+    }
 }
 
 fn init_logging(log_format: LogFormat) {

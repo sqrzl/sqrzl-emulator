@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 pub struct S3Adapter;
 
-pub(super) fn payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
+pub(crate) fn payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
     let message =
         format!("Request body exceeds SQRZL_MAX_REQUEST_BYTES ({max_request_bytes} bytes)");
     let req_id = crate::utils::headers::generate_request_id();

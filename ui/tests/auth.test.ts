@@ -81,6 +81,15 @@ describe('admin authentication', () => {
       const blob = manifest.records.find(
         (record) => record.path === '/admin/blobs/{bucketName}/{blobId}'
       );
+      const mailboxes = manifest.records.find(
+        (record) => record.path === '/admin/mailboxes'
+      );
+      const mailbox = manifest.records.find(
+        (record) => record.path === '/admin/mailboxes/{mailboxName}'
+      );
+      const mailMessage = manifest.records.find(
+        (record) => record.path === '/admin/mail/{mailboxName}/{messageId}'
+      );
       const login = manifest.records.find((record) => record.path === '/login');
       const logout = manifest.records.find(
         (record) => record.path === '/logout'
@@ -91,6 +100,9 @@ describe('admin authentication', () => {
       expect(typeof bucket?.options.auth).toBe('function');
       expect(typeof deepBucket?.options.auth).toBe('function');
       expect(typeof blob?.options.auth).toBe('function');
+      expect(typeof mailboxes?.options.auth).toBe('function');
+      expect(typeof mailbox?.options.auth).toBe('function');
+      expect(typeof mailMessage?.options.auth).toBe('function');
       expect(login).toBeDefined();
       expect(logout?.options.policies).toBeUndefined();
     } finally {

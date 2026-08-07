@@ -6,6 +6,7 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+      - "2525:2525"
     environment:
       SQRZL_BLOBS_PATH: /app/blobs
       SQRZL_LOG_FORMAT: text

@@ -551,6 +551,140 @@
           "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       }
+    },
+    "smtp": {
+      "capture": {
+        "status": "partial",
+        "verified_by": [
+          "interop_email::should_capture_message_when_sending_over_a_smtp_session",
+          "e2e_email::should_capture_message_when_sending_over_a_real_smtp_socket"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
+        ],
+        "limitations": [
+          "SMTP capture currently supports EHLO/HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP, QUIT and stores per-recipient copies for local inspection only."
+        ]
+      }
+    },
+    "sendgrid": {
+      "email_send": {
+        "status": "partial",
+        "verified_by": [
+          "interop_email::should_capture_sendgrid_send_and_fan_out_recipients"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send"
+        ],
+        "limitations": [
+          "SendGrid emulation is currently limited to Send API v3 JSON shape and local-only capture semantics."
+        ]
+      }
+    },
+    "twilio": {
+      "messages": {
+        "status": "partial",
+        "verified_by": [
+          "sms::providers::tests::should_capture_twilio_repeated_media_and_return_sdk_resource",
+          "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
+          "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
+        ],
+        "limitations": [
+          "Supports outbound SMS/MMS URL capture, inbound SMS/MMS simulation, authenticated local media, explicit delivery callbacks, and signed inbound forms. TwiML execution, remote media fetching, WhatsApp, RCS, voice, automatic delivery timing, and full provider management APIs are unsupported."
+        ]
+      }
+    },
+    "sns": {
+      "direct_phone_publish": {
+        "status": "partial",
+        "verified_by": [
+          "sms::providers::tests::should_distinguish_sns_publish_and_sms_voice_from_ordinary_root_requests"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish"
+        ],
+        "limitations": [
+          "Only direct PhoneNumber Publish is supported. Topic fan-out, subscriptions, production certificate signing, remote media fetching, and full SNS management APIs are unsupported."
+        ]
+      }
+    },
+    "aws-sms-voice-v2": {
+      "send_and_two_way_events": {
+        "status": "partial",
+        "verified_by": [
+          "sms::providers::tests::should_distinguish_sns_publish_and_sms_voice_from_ordinary_root_requests",
+          "sms::simulator::tests::should_render_aws_sns_and_acs_event_batches"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2"
+        ],
+        "limitations": [
+          "Supports SendTextMessage, SendMediaMessage S3 URI capture, inbound SMS simulation, and SNS-shaped event envelopes. Inbound MMS, automatic delivery timing, remote media fetching, voice, and full provider management APIs are unsupported."
+        ]
+      }
+    },
+    "ses": {
+      "email_send": {
+        "status": "partial",
+        "verified_by": [
+          "interop_email::should_capture_ses_send_with_signature_authorization"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_email_sdk.py::test_ses_sdk_send"
+        ],
+        "limitations": [
+          "SES emulation validates SigV4 but does not yet parity all edge-case request signing failure modes."
+        ]
+      }
+    },
+    "acs": {
+      "email_send": {
+        "status": "partial",
+        "verified_by": [
+          "interop_email::should_capture_acs_send_with_recipients_and_attachments"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send"
+        ],
+        "limitations": [
+          "Azure Communication Services emulation supports POST /emails:send JSON with HMAC-SHA256 auth, but does not yet cover all ACS feature channels."
+        ]
+      },
+      "sms_send_and_events": {
+        "status": "partial",
+        "verified_by": [
+          "sms::providers::tests::should_store_each_acs_recipient_with_one_shared_batch_id",
+          "sms::simulator::tests::should_render_aws_sns_and_acs_event_batches"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk"
+        ],
+        "limitations": [
+          "Supports one-to-many outbound SMS, inbound SMS simulation, delivery reports, and Event Grid batches. MMS, automatic delivery timing, and full provider management APIs are unsupported."
+        ]
+      }
+    },
+    "gmail": {
+      "email_send": {
+        "status": "deferred",
+        "verified_by": [],
+        "support_tier": "deferred",
+        "sdk_verified_by": [],
+        "limitations": [
+          "Gmail is deferred because its OAuth2 and user-consent delivery model does not align with this SMTP/provider API-focused emulator in v1."
+        ]
+      }
     }
   }
 }

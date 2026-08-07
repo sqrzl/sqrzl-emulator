@@ -1,9 +1,10 @@
 # Sqrzl Emulator
 
 Sqrzl is a Docker-ready object and blob storage emulator for local development
-and CI. One persistent filesystem-backed store is available through
+and CI. Persistent filesystem-backed stores are available through
 S3-compatible, Azure Blob Storage, Google Cloud Storage, and OCI Object Storage
-HTTP APIs. A browser UI is included for inspecting buckets and objects.
+HTTP APIs, outbound email capture, and bidirectional SMS/MMS provider adapters.
+A browser UI is included for inspecting buckets, mailboxes, and texts.
 
 Sqrzl is a development tool, not a production storage service. Provider
 compatibility is intentionally scoped; see the
@@ -140,6 +141,12 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum buffered HTTP request body. Oversized provider requests receive a provider-shaped `413 Payload Too Large`. Zero and invalid values use the default. |
 | `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names must be 3–63 characters using lowercase ASCII letters, digits, and single hyphens; they cannot start or end with a hyphen. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
+| `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
+| `SQRZL_TWILIO_ACCOUNT_SID` | Twilio account SID; set with `SQRZL_TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication only when both Twilio values are present. |
+| `SQRZL_TWILIO_AUTH_TOKEN` | Twilio auth token; set with `SQRZL_TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
+| `SQRZL_ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
+| `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
+| `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each inbound or delivery callback attempt. |
 
 Docker port mappings are `HOST:CONTAINER`. For example, to expose Sqrzl on
 host ports 19000 and 19001 without changing its internal configuration:
@@ -182,6 +189,13 @@ All provider APIs use the storage listener, normally
 | GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials for the auth-disabled development flow. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
 | OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/<namespace>/b/<bucket>/...`; the default namespace response is `sqrzl-emulator`. |
+| Twilio Messages | API base `http://localhost:9000` | Supports outbound SMS/MMS references plus admin-driven inbound and delivery simulation. |
+| Amazon SNS | Endpoint URL `http://localhost:9000` | Supports direct `PhoneNumber` SMS `Publish` only. |
+| AWS SMS Voice v2 | Endpoint URL `http://localhost:9000` | Supports `SendTextMessage` and `SendMediaMessage`. |
+| ACS SMS | Connection-string endpoint `http://localhost:9000` | Supports one-to-many SMS and admin-driven Event Grid callbacks. |
+
+See [SMS and MMS emulation](docs/text-emulation.md) for callback security,
+simulation behavior, media handling, and explicit unsupported scope.
 
 ### S3 example with boto3
 

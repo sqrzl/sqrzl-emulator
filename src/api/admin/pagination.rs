@@ -5,26 +5,30 @@ use std::collections::HashMap;
 use urlencoding::decode;
 
 #[derive(Clone, Debug)]
-pub(super) struct PageParams {
-    pub(super) next: usize,
-    pub(super) limit: usize,
-    pub(super) search: Option<String>,
+pub(crate) struct PageParams {
+    pub(crate) next: usize,
+    pub(crate) limit: usize,
+    pub(crate) search: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ObjectPageParams {
-    pub(super) next: Option<String>,
-    pub(super) limit: usize,
-    pub(super) prefix: Option<String>,
-    pub(super) search: Option<String>,
+pub(crate) struct ObjectPageParams {
+    pub(crate) next: Option<String>,
+    pub(crate) limit: usize,
+    pub(crate) prefix: Option<String>,
+    pub(crate) search: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum PageTokenKind {
+pub(crate) enum PageTokenKind {
     Buckets,
     Objects,
     Versions,
     MultipartUploads,
+    Mailboxes,
+    Messages,
+    TextConversations,
+    TextMessages,
 }
 
 impl PageTokenKind {
@@ -34,11 +38,15 @@ impl PageTokenKind {
             Self::Objects => "objects",
             Self::Versions => "versions",
             Self::MultipartUploads => "multipart-uploads",
+            Self::Mailboxes => "mailboxes",
+            Self::Messages => "messages",
+            Self::TextConversations => "text-conversations",
+            Self::TextMessages => "text-messages",
         }
     }
 }
 
-pub(super) fn decode_component(input: &str) -> String {
+pub(crate) fn decode_component(input: &str) -> String {
     decode(input).map_or_else(|_| input.to_string(), std::borrow::Cow::into_owned)
 }
 
@@ -71,7 +79,7 @@ fn parse_next_token(token: &str, kind: PageTokenKind) -> Result<usize> {
         .map_err(|_| Error::InvalidRequest("invalid next token".into()))
 }
 
-pub(super) fn parse_page_params(query: &str, kind: PageTokenKind) -> Result<PageParams> {
+pub(crate) fn parse_page_params(query: &str, kind: PageTokenKind) -> Result<PageParams> {
     let params = parse_query_map(query);
 
     let next = params
@@ -125,12 +133,15 @@ fn parse_object_next_token(token: &str, kind: PageTokenKind) -> Result<String> {
     Ok(marker.to_string())
 }
 
-pub(super) fn parse_object_page_params(query: &str) -> Result<ObjectPageParams> {
+pub(crate) fn parse_object_page_params(
+    query: &str,
+    kind: PageTokenKind,
+) -> Result<ObjectPageParams> {
     let params = parse_query_map(query);
 
     let next = params
         .get("next")
-        .map(|value| parse_object_next_token(value, PageTokenKind::Objects))
+        .map(|value| parse_object_next_token(value, kind))
         .transpose()?;
 
     let limit = params
@@ -163,7 +174,7 @@ pub(super) fn parse_object_page_params(query: &str) -> Result<ObjectPageParams> 
     })
 }
 
-pub(super) fn paginate<T>(items: Vec<T>, page: &PageParams) -> (Vec<T>, Option<usize>) {
+pub(crate) fn paginate<T>(items: Vec<T>, page: &PageParams) -> (Vec<T>, Option<usize>) {
     let start = page.next.min(items.len());
     let end = (start + page.limit).min(items.len());
     let next = (end < items.len()).then_some(end);
@@ -171,15 +182,15 @@ pub(super) fn paginate<T>(items: Vec<T>, page: &PageParams) -> (Vec<T>, Option<u
     (items, next)
 }
 
-pub(super) fn encode_next(next: Option<usize>, kind: PageTokenKind) -> Option<String> {
+pub(crate) fn encode_next(next: Option<usize>, kind: PageTokenKind) -> Option<String> {
     next.map(|offset| URL_SAFE_NO_PAD.encode(format!("{}:{}", kind.as_str(), offset)))
 }
 
-pub(super) fn encode_object_next(next: Option<String>, kind: PageTokenKind) -> Option<String> {
+pub(crate) fn encode_object_next(next: Option<String>, kind: PageTokenKind) -> Option<String> {
     next.map(|marker| URL_SAFE_NO_PAD.encode(format!("{}:{}", kind.as_str(), marker)))
 }
 
-pub(super) fn contains_search(value: &str, search: Option<&str>) -> bool {
+pub(crate) fn contains_search(value: &str, search: Option<&str>) -> bool {
     match search {
         Some(search) => value.to_ascii_lowercase().contains(search),
         None => true,
