@@ -1061,6 +1061,123 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn should_persist_gcs_json_media_uploads_with_generation_preconditions() {
+        let adapter = GcsAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("media-bucket".to_string()).unwrap();
+
+        let response = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    "http://localhost/upload/storage/v1/b/media-bucket/o?uploadType=media&name=wal%2Fpublication-catalog.v1.json&ifGenerationMatch=0",
+                    &[
+                        ("host", "storage.googleapis.com"),
+                        ("content-type", "application/json"),
+                        ("x-goog-meta-owner", "midge"),
+                    ],
+                    br#"{"version":1}"#,
+                )
+                .await,
+            )
+            .expect("media upload should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let created = parse_json_body(response).await;
+        assert_eq!(created["name"], "wal/publication-catalog.v1.json");
+        let generation = created["generation"]
+            .as_str()
+            .expect("generation should exist")
+            .to_string();
+        assert!(created["etag"]
+            .as_str()
+            .is_some_and(|etag| !etag.is_empty()));
+
+        let metadata = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "GET",
+                    "http://localhost/storage/v1/b/media-bucket/o/wal%2Fpublication-catalog.v1.json",
+                    &[("host", "storage.googleapis.com")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("metadata read should succeed");
+        assert_eq!(metadata.status(), StatusCode::OK);
+        let metadata = parse_json_body(metadata).await;
+        assert_eq!(metadata["generation"], generation);
+        assert_eq!(metadata["metadata"]["owner"], "midge");
+
+        let media = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "GET",
+                    "http://localhost/storage/v1/b/media-bucket/o/wal%2Fpublication-catalog.v1.json?alt=media",
+                    &[("host", "storage.googleapis.com")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("media read should succeed");
+        assert_eq!(media.status(), StatusCode::OK);
+        assert_eq!(read_test_body(media).await, br#"{"version":1}"#);
+
+        let matching_uri = format!(
+            "http://localhost/upload/storage/v1/b/media-bucket/o?uploadType=media&name=wal%2Fpublication-catalog.v1.json&ifGenerationMatch={generation}"
+        );
+        let overwritten = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    &matching_uri,
+                    &[("host", "storage.googleapis.com")],
+                    br#"{"version":2}"#,
+                )
+                .await,
+            )
+            .expect("matching generation upload should succeed");
+        assert_eq!(overwritten.status(), StatusCode::OK);
+
+        let stale = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    &matching_uri,
+                    &[("host", "storage.googleapis.com")],
+                    br#"{"version":3}"#,
+                )
+                .await,
+            )
+            .expect("stale generation upload should return a response");
+        assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+
+        let media = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "GET",
+                    "http://localhost/storage/v1/b/media-bucket/o/wal%2Fpublication-catalog.v1.json?alt=media",
+                    &[("host", "storage.googleapis.com")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("media read after stale upload should succeed");
+        assert_eq!(read_test_body(media).await, br#"{"version":2}"#);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn should_increment_generation_on_overwrite_and_patch_metageneration() {
         let adapter = GcsAdapter::new();
         let storage = temp_storage();
@@ -1764,10 +1881,38 @@ impl GcsAdapter {
         if let Err(response) = Self::authorize(req, auth_config, bucket, None) {
             return Ok(response);
         }
-        if req.query_param("uploadType") == Some("multipart") {
-            return Self::handle_multipart_upload(storage, req, bucket);
+        match req.query_param("uploadType") {
+            Some("media") => Self::handle_media_upload(storage, req, bucket),
+            Some("multipart") => Self::handle_multipart_upload(storage, req, bucket),
+            _ => self.create_resumable_session(storage, req, bucket),
         }
-        self.create_resumable_session(storage, req, bucket)
+    }
+
+    fn handle_media_upload(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+    ) -> Result<Response<Body>, String> {
+        let key = req
+            .query_param("name")
+            .ok_or_else(|| "Missing media upload object name".to_string())?;
+        let content_type = req
+            .header("content-type")
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let stored = Self::put_blob_with_generation_match(
+            storage.as_ref(),
+            bucket,
+            key,
+            req.body.to_vec(),
+            content_type,
+            Self::metadata_from_headers(req),
+            req.query_param("ifGenerationMatch"),
+        )?;
+        let Some(stored) = stored else {
+            return Ok(Self::generation_precondition_failed());
+        };
+        Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
     }
 
     fn handle_multipart_upload(
