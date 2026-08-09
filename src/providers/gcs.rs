@@ -1066,23 +1066,18 @@ mod tests {
         let storage = temp_storage();
         storage.create_bucket("media-bucket".to_string()).unwrap();
 
-        let response = adapter
-            .handle_request(
-                &storage.clone(),
-                &auth_disabled(),
-                &parsed_request(
-                    "POST",
-                    "http://localhost/upload/storage/v1/b/media-bucket/o?uploadType=media&name=wal%2Fpublication-catalog.v1.json&ifGenerationMatch=0",
-                    &[
-                        ("host", "storage.googleapis.com"),
-                        ("content-type", "application/json"),
-                        ("x-goog-meta-owner", "midge"),
-                    ],
-                    br#"{"version":1}"#,
-                )
-                .await,
-            )
-            .expect("media upload should succeed");
+        let create_uri = "http://localhost/upload/storage/v1/b/media-bucket/o?uploadType=media&name=wal%2Fpublication-catalog.v1.json&ifGenerationMatch=0";
+        let response = upload_gcs_json_media(
+            &adapter,
+            &storage,
+            create_uri,
+            br#"{"version":1}"#,
+            &[
+                ("content-type", "application/json"),
+                ("x-goog-meta-owner", "midge"),
+            ],
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let created = parse_json_body(response).await;
         assert_eq!(created["name"], "wal/publication-catalog.v1.json");
@@ -1112,58 +1107,52 @@ mod tests {
         assert_eq!(metadata["generation"], generation);
         assert_eq!(metadata["metadata"]["owner"], "midge");
 
-        let media = adapter
-            .handle_request(
-                &storage.clone(),
-                &auth_disabled(),
-                &parsed_request(
-                    "GET",
-                    "http://localhost/storage/v1/b/media-bucket/o/wal%2Fpublication-catalog.v1.json?alt=media",
-                    &[("host", "storage.googleapis.com")],
-                    b"",
-                )
-                .await,
-            )
-            .expect("media read should succeed");
+        let media = read_gcs_json_media(&adapter, &storage).await;
         assert_eq!(media.status(), StatusCode::OK);
         assert_eq!(read_test_body(media).await, br#"{"version":1}"#);
 
         let matching_uri = format!(
             "http://localhost/upload/storage/v1/b/media-bucket/o?uploadType=media&name=wal%2Fpublication-catalog.v1.json&ifGenerationMatch={generation}"
         );
-        let overwritten = adapter
-            .handle_request(
-                &storage.clone(),
-                &auth_disabled(),
-                &parsed_request(
-                    "POST",
-                    &matching_uri,
-                    &[("host", "storage.googleapis.com")],
-                    br#"{"version":2}"#,
-                )
-                .await,
-            )
-            .expect("matching generation upload should succeed");
+        let overwritten =
+            upload_gcs_json_media(&adapter, &storage, &matching_uri, br#"{"version":2}"#, &[])
+                .await;
         assert_eq!(overwritten.status(), StatusCode::OK);
 
-        let stale = adapter
+        let stale =
+            upload_gcs_json_media(&adapter, &storage, &matching_uri, br#"{"version":3}"#, &[])
+                .await;
+        assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+
+        let media = read_gcs_json_media(&adapter, &storage).await;
+        assert_eq!(read_test_body(media).await, br#"{"version":2}"#);
+    }
+
+    async fn upload_gcs_json_media(
+        adapter: &GcsAdapter,
+        storage: &Arc<dyn Storage>,
+        uri: &str,
+        body: &[u8],
+        extra_headers: &[(&str, &str)],
+    ) -> Response<Body> {
+        let mut headers = vec![("host", "storage.googleapis.com")];
+        headers.extend_from_slice(extra_headers);
+        adapter
             .handle_request(
                 &storage.clone(),
                 &auth_disabled(),
-                &parsed_request(
-                    "POST",
-                    &matching_uri,
-                    &[("host", "storage.googleapis.com")],
-                    br#"{"version":3}"#,
-                )
-                .await,
+                &parsed_request("POST", uri, &headers, body).await,
             )
-            .expect("stale generation upload should return a response");
-        assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+            .expect("media upload should return a response")
+    }
 
-        let media = adapter
+    async fn read_gcs_json_media(
+        adapter: &GcsAdapter,
+        storage: &Arc<dyn Storage>,
+    ) -> Response<Body> {
+        adapter
             .handle_request(
-                &storage,
+                &storage.clone(),
                 &auth_disabled(),
                 &parsed_request(
                     "GET",
@@ -1173,8 +1162,7 @@ mod tests {
                 )
                 .await,
             )
-            .expect("media read after stale upload should succeed");
-        assert_eq!(read_test_body(media).await, br#"{"version":2}"#);
+            .expect("media read should return a response")
     }
 
     #[tokio::test(flavor = "multi_thread")]
