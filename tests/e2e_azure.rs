@@ -82,3 +82,82 @@ async fn should_reject_unauthorized_container_list_given_live_server_when_azure_
         StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED
     ));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_enforce_azure_create_and_update_etag_preconditions() {
+    let server = LiveServer::start_api(auth_disabled()).await;
+    let container_url = format!("{}/devstoreaccount1/conditional", server.base_url);
+    let blob_url = format!("{container_url}/lease");
+
+    let create_container = Request::builder()
+        .method("PUT")
+        .uri(format!("{container_url}?restype=container"))
+        .header("x-ms-version", AZURE_VERSION)
+        .body(Body::default())
+        .unwrap();
+    assert_eq!(
+        server.request(create_container).await.status(),
+        StatusCode::CREATED
+    );
+
+    let create = |body: &'static str| {
+        Request::builder()
+            .method("PUT")
+            .uri(&blob_url)
+            .header("x-ms-version", AZURE_VERSION)
+            .header("x-ms-blob-type", "BlockBlob")
+            .header("if-none-match", "*")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let first = server.request(create("first")).await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let etag = first
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let loser = server.request(create("second")).await;
+    assert_eq!(loser.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        loser.headers().get("x-ms-error-code").unwrap(),
+        "ConditionNotMet"
+    );
+
+    let update = Request::builder()
+        .method("PUT")
+        .uri(&blob_url)
+        .header("x-ms-version", AZURE_VERSION)
+        .header("x-ms-blob-type", "BlockBlob")
+        .header("if-match", &etag)
+        .body(Body::from("updated"))
+        .unwrap();
+    assert_eq!(server.request(update).await.status(), StatusCode::CREATED);
+
+    let stale = Request::builder()
+        .method("DELETE")
+        .uri(&blob_url)
+        .header("x-ms-version", AZURE_VERSION)
+        .header("if-match", etag)
+        .body(Body::default())
+        .unwrap();
+    assert_eq!(
+        server.request(stale).await.status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    let missing = Request::builder()
+        .method("DELETE")
+        .uri(format!("{container_url}/missing"))
+        .header("x-ms-version", AZURE_VERSION)
+        .body(Body::default())
+        .unwrap();
+    let missing = server.request(missing).await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        missing.headers().get("x-ms-error-code").unwrap(),
+        "BlobNotFound"
+    );
+}

@@ -132,6 +132,8 @@ Durability hardening covers:
 - Atomic temp-file-then-rename writes for object data, object metadata, bucket
   metadata, upload records, and provider sidecars.
 - Per-object write coordination for same-object mutations.
+- Atomic GCS generation and Azure ETag create/update/delete preconditions for
+  deterministic lease and compare-and-swap races.
 - Persisted Azure staged block state and committed block lists.
 - Persisted GCS resumable upload sessions.
 - Hidden provider-state directories that are excluded from bucket listings.
@@ -151,6 +153,9 @@ the operation as `certified`.
   partial.
 - GCS signed URL V2 validation is contract-tested, but official SDK signed URL
   generation is not in the certification gate.
+- GCS generation history and Azure conditional headers beyond `If-Match` and
+  `If-None-Match: *` are not emulated; conditional operations target the current
+  object only.
 - Provider control-plane behavior outside object/blob storage workflows is out
   of scope.
 

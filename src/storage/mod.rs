@@ -10,6 +10,14 @@ pub use filesystem::FilesystemStorage;
 pub use indexed::IndexedStorage;
 pub use lockfree_index::{DirectoryEntry, DirectoryEntryKind, LockFreeIndex};
 
+/// A predicate evaluated while holding the per-object mutation lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectCondition {
+    Missing,
+    Etag(String),
+    Metadata { key: String, value: String },
+}
+
 /// Bucket metadata and lifecycle-independent bucket operations.
 pub trait BucketStore: Send + Sync {
     ///
@@ -55,6 +63,18 @@ pub trait ObjectStore: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()>;
+    /// Atomically writes an object only when the current object matches `condition`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
+    fn put_object_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: &ObjectCondition,
+    ) -> Result<bool>;
     ///
     /// # Errors
     ///
@@ -76,6 +96,17 @@ pub trait ObjectStore: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()>;
+    /// Atomically deletes an object only when the current object matches `condition`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
+    fn delete_object_if(
+        &self,
+        bucket: &str,
+        key: &str,
+        condition: &ObjectCondition,
+    ) -> Result<bool>;
     ///
     /// # Errors
     ///
@@ -372,6 +403,17 @@ pub trait Storage: Send + Sync {
     ///
     /// # Errors
     ///
+    /// Returns an error when the conditional write cannot be evaluated or persisted.
+    fn put_object_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: &ObjectCondition,
+    ) -> Result<bool>;
+    ///
+    /// # Errors
+    ///
     /// Returns an error when the underlying emulator operation fails.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object>;
     ///
@@ -390,6 +432,16 @@ pub trait Storage: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the conditional delete cannot be evaluated or persisted.
+    fn delete_object_if(
+        &self,
+        bucket: &str,
+        key: &str,
+        condition: &ObjectCondition,
+    ) -> Result<bool>;
     ///
     /// # Errors
     ///
@@ -656,6 +708,16 @@ where
         ObjectStore::put_object(self, bucket, key, object)
     }
 
+    fn put_object_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        ObjectStore::put_object_if(self, bucket, key, object, condition)
+    }
+
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
         ObjectStore::get_object(self, bucket, key)
     }
@@ -672,6 +734,15 @@ where
 
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
         ObjectStore::delete_object(self, bucket, key)
+    }
+
+    fn delete_object_if(
+        &self,
+        bucket: &str,
+        key: &str,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        ObjectStore::delete_object_if(self, bucket, key, condition)
     }
 
     fn update_object_storage_class(
@@ -898,6 +969,16 @@ impl ObjectStore for dyn Storage + '_ {
         Storage::put_object(self, bucket, key, object)
     }
 
+    fn put_object_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        Storage::put_object_if(self, bucket, key, object, condition)
+    }
+
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
         Storage::get_object(self, bucket, key)
     }
@@ -914,6 +995,15 @@ impl ObjectStore for dyn Storage + '_ {
 
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
         Storage::delete_object(self, bucket, key)
+    }
+
+    fn delete_object_if(
+        &self,
+        bucket: &str,
+        key: &str,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        Storage::delete_object_if(self, bucket, key, condition)
     }
 
     fn update_object_storage_class(

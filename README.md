@@ -186,13 +186,22 @@ All provider APIs use the storage listener, normally
 | --- | --- | --- |
 | S3-compatible | Endpoint URL `http://localhost:9000` | Use region `us-east-1`, SigV4, and path-style addressing. |
 | Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. For the simplest smoke setup, use no credential and leave Sqrzl auth disabled. |
-| GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials for the auth-disabled development flow. |
+| GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. When enabled, bearer tokens equal to either configured Sqrzl credential are accepted for local qualification. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
 | OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/<namespace>/b/<bucket>/...`; the default namespace response is `sqrzl-emulator`. |
 | Twilio Messages | API base `http://localhost:9000` | Supports outbound SMS/MMS references plus admin-driven inbound and delivery simulation. |
 | Amazon SNS | Endpoint URL `http://localhost:9000` | Supports direct `PhoneNumber` SMS `Publish` only. |
 | AWS SMS Voice v2 | Endpoint URL `http://localhost:9000` | Supports `SendTextMessage` and `SendMediaMessage`. |
 | ACS SMS | Connection-string endpoint `http://localhost:9000` | Supports one-to-many SMS and admin-driven Event Grid callbacks. |
+
+For lease and compare-and-swap qualification, the GCS JSON endpoint supports
+`ifGenerationMatch` (including create-only value `0`) on uploads and conditional
+object mutations. Azure Blob writes and deletes enforce `If-Match` and
+`If-None-Match: *`. These checks are atomic per object, missing resources use
+provider-shaped `404` responses, and returned GCS generations and quoted Azure
+ETags can be fed back into later conditional requests. Sqrzl models only the
+current object: historical GCS generations and the full HTTP conditional-header
+matrix remain outside this local emulator contract.
 
 See [SMS and MMS emulation](docs/text-emulation.md) for callback security,
 simulation behavior, media handling, and explicit unsupported scope.

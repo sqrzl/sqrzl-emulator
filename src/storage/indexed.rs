@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::models::{Acl, Bucket, MultipartUpload, Object};
 use crate::storage::{
-    AclStore, BucketStore, LifecycleStore, MultipartStore, ObjectListingStore, ObjectStore,
-    PolicyStore, ProviderStateStore, Storage, TagStore, VersionStore,
+    AclStore, BucketStore, LifecycleStore, MultipartStore, ObjectCondition, ObjectListingStore,
+    ObjectStore, PolicyStore, ProviderStateStore, Storage, TagStore, VersionStore,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
@@ -147,6 +147,22 @@ impl ObjectStore for IndexedStorage {
         Ok(())
     }
 
+    fn put_object_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        let written = self
+            .inner
+            .put_object_if(bucket, key.clone(), object, condition)?;
+        if written {
+            self.update_index_put(bucket, key);
+        }
+        Ok(written)
+    }
+
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
         self.inner.get_object(bucket, key)
     }
@@ -165,6 +181,19 @@ impl ObjectStore for IndexedStorage {
         self.inner.delete_object(bucket, key)?;
         self.update_index_delete(bucket, key);
         Ok(())
+    }
+
+    fn delete_object_if(
+        &self,
+        bucket: &str,
+        key: &str,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        let deleted = self.inner.delete_object_if(bucket, key, condition)?;
+        if deleted {
+            self.update_index_delete(bucket, key);
+        }
+        Ok(deleted)
     }
 
     fn update_object_storage_class(

@@ -1,8 +1,9 @@
 use super::{state, ProviderAdapter};
 use crate::auth::{AuthConfig, HttpRequestLike};
-use crate::blob::{BlobBackend, BlobRange, PutBlobRequest, UpdateBlobMetadataRequest};
+use crate::blob::{BlobBackend, BlobRange, PutBlobRequest};
 use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
+use crate::storage::ObjectCondition;
 use crate::storage::Storage;
 use crate::utils::request_origin;
 use crate::utils::xml::push_escaped_xml;
@@ -28,6 +29,8 @@ struct ResumableSession {
     key: String,
     content_type: String,
     metadata: HashMap<String, String>,
+    #[serde(default)]
+    if_generation_match: Option<String>,
 }
 
 pub struct GcsAdapter {
@@ -226,6 +229,75 @@ impl GcsAdapter {
                 tags: HashMap::new(),
             })
             .map_err(|err| err.to_string())
+    }
+
+    fn put_blob_with_generation_match(
+        storage: &dyn Storage,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        content_type: String,
+        metadata: HashMap<String, String>,
+        expected: Option<&str>,
+    ) -> Result<Option<crate::blob::BlobRecord>, String> {
+        let existing = storage.get_object(bucket, key).ok();
+        let generation = Self::next_generation(existing.as_ref());
+        let metadata = Self::metadata_with_gcs_state(metadata, generation, "1".to_string());
+        let object =
+            crate::models::Object::new_with_metadata(key.to_string(), data, content_type, metadata);
+        let written = match expected {
+            Some("0") => {
+                storage.put_object_if(bucket, key.to_string(), object, &ObjectCondition::Missing)
+            }
+            Some(expected) => storage.put_object_if(
+                bucket,
+                key.to_string(),
+                object,
+                &ObjectCondition::Metadata {
+                    key: GCS_GENERATION_KEY.to_string(),
+                    value: expected.to_string(),
+                },
+            ),
+            None => storage
+                .put_object(bucket, key.to_string(), object)
+                .map(|()| true),
+        }
+        .map_err(|err| err.to_string())?;
+        if !written {
+            return Ok(None);
+        }
+        let stored = storage
+            .get_object(bucket, key)
+            .map_err(|err| err.to_string())?;
+        Ok(Some(crate::blob::BlobRecord::from_object(bucket, &stored)))
+    }
+
+    fn generation_precondition_failed() -> Response<Body> {
+        Self::json_response(
+            StatusCode::PRECONDITION_FAILED,
+            &serde_json::json!({
+                "error": {
+                    "code": 412,
+                    "message": "At least one of the pre-conditions you specified did not hold.",
+                    "status": "FAILED_PRECONDITION"
+                }
+            })
+            .to_string(),
+        )
+    }
+
+    fn json_not_found(object: &str) -> Response<Body> {
+        Self::json_response(
+            StatusCode::NOT_FOUND,
+            &serde_json::json!({
+                "error": {
+                    "code": 404,
+                    "message": format!("No such object: {object}"),
+                    "status": "NOT_FOUND"
+                }
+            })
+            .to_string(),
+        )
     }
 
     #[allow(clippy::result_large_err)]
@@ -502,6 +574,22 @@ impl GcsAdapter {
                 "Missing authorization",
             ));
         };
+        if let Some(token) = authorization.strip_prefix("Bearer ") {
+            if config.secret_key() == Some(token) || config.access_key() == Some(token) {
+                return Ok(());
+            }
+            return Err(Self::json_response(
+                StatusCode::UNAUTHORIZED,
+                &serde_json::json!({
+                    "error": {
+                        "code": 401,
+                        "message": "Invalid bearer token",
+                        "status": "UNAUTHENTICATED"
+                    }
+                })
+                .to_string(),
+            ));
+        }
         let prefix = format!("GOOG1 {}:", config.access_key().unwrap_or_default());
         let Some(signature) = authorization.strip_prefix(&prefix) else {
             return Err(Self::error_response(
@@ -1690,14 +1778,18 @@ impl GcsAdapter {
         let content_type = req.header("content-type").unwrap_or("multipart/related");
         let (key, object_content_type, metadata, data) =
             Self::parse_multipart_upload(content_type, &req.body)?;
-        let stored = Self::put_blob_with_generation(
+        let stored = Self::put_blob_with_generation_match(
             storage.as_ref(),
-            bucket.to_string(),
-            key,
+            bucket,
+            &key,
             data,
             object_content_type,
             metadata,
+            req.query_param("ifGenerationMatch"),
         )?;
+        let Some(stored) = stored else {
+            return Ok(Self::generation_precondition_failed());
+        };
         Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
     }
 
@@ -1720,6 +1812,7 @@ impl GcsAdapter {
                 .unwrap_or("application/octet-stream")
                 .to_string(),
             metadata: Self::metadata_from_headers(req),
+            if_generation_match: req.query_param("ifGenerationMatch").map(str::to_string),
         };
         state::save_json(
             storage.as_ref(),
@@ -1744,17 +1837,21 @@ impl GcsAdapter {
         session_id: &str,
     ) -> Result<Response<Body>, String> {
         let session = self.take_resumable_session(storage, session_id)?;
-        let stored = Self::put_blob_with_generation(
+        let stored = Self::put_blob_with_generation_match(
             storage.as_ref(),
-            session.bucket,
-            session.key,
+            &session.bucket,
+            &session.key,
             req.body.to_vec(),
             session.content_type,
             session.metadata,
+            session.if_generation_match.as_deref(),
         )?;
         storage
             .delete_provider_state(GCS_RESUMABLE_SESSION_STATE, session_id)
             .map_err(|err| err.to_string())?;
+        let Some(stored) = stored else {
+            return Ok(Self::generation_precondition_failed());
+        };
         Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
     }
 
@@ -2044,14 +2141,29 @@ impl GcsAdapter {
         };
         let payload: serde_json::Value =
             serde_json::from_slice(&req.body).map_err(|err| err.to_string())?;
-        let updated = storage
-            .as_ref()
-            .update_blob_metadata(UpdateBlobMetadataRequest {
-                namespace: bucket.to_string(),
-                key: object.to_string(),
-                metadata: Self::metadata_patch_with_gcs_state(&payload, &blob),
-            })
+        let condition = if let Some(expected) = req.query_param("ifMetagenerationMatch") {
+            ObjectCondition::Metadata {
+                key: GCS_METAGENERATION_KEY.to_string(),
+                value: expected.to_string(),
+            }
+        } else {
+            ObjectCondition::Metadata {
+                key: GCS_GENERATION_KEY.to_string(),
+                value: Self::generation(&blob),
+            }
+        };
+        let mut updated_object = blob;
+        updated_object.metadata = Self::metadata_patch_with_gcs_state(&payload, &updated_object);
+        if !storage
+            .put_object_if(bucket, object.to_string(), updated_object, &condition)
+            .map_err(|err| err.to_string())?
+        {
+            return Ok(Self::generation_precondition_failed());
+        }
+        let updated_object = storage
+            .get_object(bucket, object)
             .map_err(|err| err.to_string())?;
+        let updated = crate::blob::BlobRecord::from_object(bucket, &updated_object);
         Ok(Self::json_response(
             StatusCode::OK,
             &Self::json_blob_record_metadata(bucket, &updated).to_string(),
@@ -2064,13 +2176,23 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        if let Err(response) = Self::checked_json_blob(storage, req, bucket, object)? {
-            return Ok(*response);
+        let blob = match Self::checked_json_blob(storage, req, bucket, object)? {
+            Ok(blob) => blob,
+            Err(response) => return Ok(*response),
+        };
+        if !storage
+            .delete_object_if(
+                bucket,
+                object,
+                &ObjectCondition::Metadata {
+                    key: GCS_GENERATION_KEY.to_string(),
+                    value: Self::generation(&blob),
+                },
+            )
+            .map_err(|err| err.to_string())?
+        {
+            return Ok(Self::generation_precondition_failed());
         }
-        storage
-            .as_ref()
-            .delete_blob(bucket, object)
-            .map_err(|err| err.to_string())?;
         Ok(Self::empty_response(StatusCode::NO_CONTENT))
     }
 
@@ -2080,10 +2202,13 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Result<crate::models::Object, Box<Response<Body>>>, String> {
-        let blob = storage
-            .as_ref()
-            .get_blob(bucket, object)
-            .map_err(|err| err.to_string())?;
+        let blob = match storage.as_ref().get_blob(bucket, object) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => {
+                return Ok(Err(Box::new(Self::json_not_found(object))));
+            }
+            Err(err) => return Err(err.to_string()),
+        };
         if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
             return Ok(Err(Box::new(response)));
         }
@@ -2157,10 +2282,13 @@ impl GcsAdapter {
         if let Err(response) = Self::authorize(req, auth_config, bucket, Some(&object)) {
             return Ok(response);
         }
-        let blob = storage
-            .as_ref()
-            .get_blob(bucket, &object)
-            .map_err(|err| err.to_string())?;
+        let blob = match storage.as_ref().get_blob(bucket, &object) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => {
+                return Ok(Self::json_not_found(&object));
+            }
+            Err(err) => return Err(err.to_string()),
+        };
         if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
             return Ok(response);
         }
