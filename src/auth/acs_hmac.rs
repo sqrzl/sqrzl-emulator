@@ -75,6 +75,9 @@ mod tests {
 
     #[test]
     fn should_parse_acs_connection_string() {
+        // Arrange
+        // Act
+        // Assert
         let parsed = parse_connection_string(
             "endpoint=https://my.endpoint.communication.azure.com/;accesskey=test-key;",
         )
@@ -88,7 +91,10 @@ mod tests {
     }
 
     #[test]
-    fn should_sign_and_validate_official_acs_payload() {
+    fn should_round_trip_official_acs_signature() {
+        // Arrange
+        // Act
+        // Assert
         let access_key = BASE64.encode("shared-secret");
         let body_hash = content_hash(b"payload");
         let string_to_sign = format!(

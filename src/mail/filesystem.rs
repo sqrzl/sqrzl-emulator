@@ -326,6 +326,9 @@ mod tests {
 
     #[test]
     fn should_round_trip_message_when_storing_and_getting() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
         let message_id = generate_message_id();
 
@@ -347,6 +350,9 @@ mod tests {
 
     #[test]
     fn should_round_trip_mailboxes_with_filesystem_path_characters() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
         let addresses = ["user/tag@example.com", "team%ops@example.com"];
 
@@ -372,6 +378,9 @@ mod tests {
 
     #[test]
     fn should_return_message_not_found_when_message_is_missing() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
 
         let err = store
@@ -382,7 +391,10 @@ mod tests {
     }
 
     #[test]
-    fn should_paginate_and_report_next_marker_when_limit_is_smaller_than_mailbox() {
+    fn should_paginate_mailbox_with_next_marker() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
         for _ in 0..3 {
             fan_out(&store, &sample_message("alice@example.com")).expect("fan-out should succeed");
@@ -417,6 +429,9 @@ mod tests {
 
     #[test]
     fn should_report_empty_result_when_mailbox_has_never_received_mail() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
 
         let result = store
@@ -427,7 +442,10 @@ mod tests {
     }
 
     #[test]
-    fn should_exclude_all_mailbox_and_report_counts_when_listing_mailboxes() {
+    fn should_list_mailboxes_with_counts_without_all_pseudo_mailbox() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
         fan_out(&store, &sample_message("alice@example.com")).expect("fan-out should succeed");
         fan_out(&store, &sample_message("bob@example.com")).expect("fan-out should succeed");
@@ -448,6 +466,9 @@ mod tests {
 
     #[test]
     fn should_update_delivery_status() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
         let message_id = generate_message_id();
         store
@@ -481,6 +502,9 @@ mod tests {
 
     #[test]
     fn should_delete_message_idempotently() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
         let message_id = generate_message_id();
         store
@@ -505,7 +529,10 @@ mod tests {
     }
 
     #[test]
-    fn should_delete_mailbox_and_all_messages() {
+    fn should_delete_mailbox_recursively() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
         fan_out(&store, &sample_message("alice@example.com")).expect("fan-out should succeed");
         fan_out(&store, &sample_message("alice@example.com")).expect("fan-out should succeed");
@@ -534,7 +561,10 @@ mod tests {
     }
 
     #[test]
-    fn should_contain_mailbox_path_characters_and_reject_message_id_traversal() {
+    fn should_contain_untrusted_mail_paths() {
+        // Arrange
+        // Act
+        // Assert
         let store = temp_store();
 
         store

@@ -545,7 +545,10 @@ mod tests {
     }
 
     #[test]
-    fn should_group_both_directions_under_the_remote_peer_and_survive_restart() {
+    fn should_preserve_remote_peer_conversation_across_restart() {
+        // Arrange
+        // Act
+        // Assert
         let path = temp_path();
         let store = FilesystemSmsStore::open(&path).unwrap();
         store
@@ -573,7 +576,10 @@ mod tests {
     }
 
     #[test]
-    fn should_hash_special_peer_characters_and_keep_only_canonical_message_json() {
+    fn should_persist_special_peers_in_canonical_message_namespace() {
+        // Arrange
+        // Act
+        // Assert
         let path = temp_path();
         let store = FilesystemSmsStore::open(&path).unwrap();
         let stored = store
@@ -600,7 +606,10 @@ mod tests {
     }
 
     #[test]
-    fn should_paginate_delete_transition_and_round_trip_media() {
+    fn should_support_message_lifecycle_with_media() {
+        // Arrange
+        // Act
+        // Assert
         let store = FilesystemSmsStore::open(temp_path()).unwrap();
         let mut first = message(SmsDirection::Inbound, "+15550000002", "+15550000001");
         first.channel = SmsChannel::Mms;

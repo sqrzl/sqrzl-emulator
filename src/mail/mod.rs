@@ -171,6 +171,9 @@ mod tests {
 
     #[test]
     fn should_reject_fan_out_when_message_has_no_recipients() {
+        // Arrange
+        // Act
+        // Assert
         let store = FilesystemMailStore::open(temp_dir()).expect("store should open");
         let message = message_to(&[]);
 
@@ -181,6 +184,9 @@ mod tests {
 
     #[test]
     fn should_dedupe_mailboxes_when_recipient_appears_twice() {
+        // Arrange
+        // Act
+        // Assert
         let store = FilesystemMailStore::open(temp_dir()).expect("store should open");
         let message = message_to(&["Bob@Example.com", "bob@example.com"]);
 

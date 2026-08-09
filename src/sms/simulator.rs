@@ -567,7 +567,10 @@ mod tests {
     }
 
     #[test]
-    fn should_parse_and_bound_callback_response() {
+    fn should_bound_parsed_callback_response() {
+        // Arrange
+        // Act
+        // Assert
         let response = b"HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\n\r\nok";
         assert_eq!(
             parse_http_response(response).unwrap(),
@@ -665,7 +668,10 @@ mod tests {
     }
 
     #[test]
-    fn should_render_aws_sns_and_acs_event_batches() {
+    fn should_render_provider_specific_event_batches() {
+        // Arrange
+        // Act
+        // Assert
         let now = Utc::now();
         let base = SmsMessage {
             message_id: "txt-1".to_string(),

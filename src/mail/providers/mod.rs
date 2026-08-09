@@ -90,6 +90,9 @@ mod tests {
 
     #[test]
     fn should_include_default_adapters_in_registration_order() {
+        // Arrange
+        // Act
+        // Assert
         let registry = MailAdapterRegistry::default();
         assert_eq!(registry.adapters.len(), 3);
         assert_eq!(registry.adapters[0].name(), "sendgrid");
@@ -99,6 +102,9 @@ mod tests {
 
     #[test]
     fn should_not_render_an_oversized_response_for_non_mail_routes() {
+        // Arrange
+        // Act
+        // Assert
         let registry = MailAdapterRegistry::default();
         let uri = Uri::from_static("http://localhost/devstoreaccount1/container/blob");
         let mut headers = HeaderMap::new();

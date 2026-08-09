@@ -497,7 +497,10 @@ mod tests {
     }
 
     #[test]
-    fn should_parse_address_case_insensitively_and_tolerate_optional_space() {
+    fn should_parse_address_variants() {
+        // Arrange
+        // Act
+        // Assert
         let parsed = parse_address("from: <sender@example.com>", "FROM:").expect("should parse");
         assert_eq!(parsed.email, "sender@example.com");
 

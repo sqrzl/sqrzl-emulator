@@ -546,6 +546,9 @@ mod tests {
 
     #[test]
     fn should_generate_authorized_signature_roundtrip() {
+        // Arrange
+        // Act
+        // Assert
         let access_key = BASE64.encode("shared-secret");
         let content_hash = acs_hmac::content_hash(b"abc");
         let string_to_sign = format!(
