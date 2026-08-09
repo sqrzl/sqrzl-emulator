@@ -6,7 +6,7 @@ import { Badge, Button, DataTable, EmptyState, FieldError, Inline, Spinner, Stac
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from '@askrjs/ui';
 import type { TextMedia, TextMessageDetail } from '../../adapters/api.g';
 import { downloadTextMedia, getTextMessageDetail, retryTextCallback, transitionTextDelivery } from '../../features/texts/texts.query';
-import { formatByteCount, formatRelativeTime } from '../../shared/format';
+import { formatByteCount, formatRelativeTime, formatTextProvider } from '../../shared/format';
 
 export default function TextMessageDetails({ peer, messageId }: { peer: string; messageId: string }) {
   const detail = resource(
@@ -86,7 +86,7 @@ export default function TextMessageDetails({ peer, messageId }: { peer: string; 
               <TableRow><TableHeaderCell>Message ID</TableHeaderCell><TableCell>{message.message_id}</TableCell></TableRow>
               <TableRow><TableHeaderCell>Provider message ID</TableHeaderCell><TableCell>{message.provider_message_id}</TableCell></TableRow>
               <TableRow><TableHeaderCell>Batch ID</TableHeaderCell><TableCell>{message.batch_id ?? '—'}</TableCell></TableRow>
-              <TableRow><TableHeaderCell>Provider</TableHeaderCell><TableCell><Badge variant="secondary">{message.provider}</Badge></TableCell></TableRow>
+              <TableRow><TableHeaderCell>Provider</TableHeaderCell><TableCell><Badge variant="secondary">{formatTextProvider(message.provider)}</Badge></TableCell></TableRow>
               <TableRow><TableHeaderCell>Direction</TableHeaderCell><TableCell>{message.direction}</TableCell></TableRow>
               <TableRow><TableHeaderCell>Channel</TableHeaderCell><TableCell>{message.channel.toUpperCase()}</TableCell></TableRow>
               <TableRow><TableHeaderCell>From</TableHeaderCell><TableCell>{message.from}</TableCell></TableRow>

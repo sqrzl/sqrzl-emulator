@@ -72,6 +72,12 @@ struct RequestState {
 }
 
 impl Server {
+    /// Constructs an API server and opens its SMS store beneath the configured blob path.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the SMS persistence tree cannot be opened. Runtime startup uses
+    /// [`Self::new_with_sms`] after opening the store fallibly.
     pub fn new(
         storage: Arc<dyn Storage>,
         mail: Arc<dyn MailStore>,
@@ -146,6 +152,11 @@ impl Server {
     }
 }
 
+fn handler_error(kind: &str, error: &str) -> Response<Body> {
+    error!("{kind} handler error: {error}");
+    simple_text_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+}
+
 async fn handle_request<B>(
     state: RequestState,
     req: Request<B>,
@@ -182,13 +193,7 @@ where
             {
                 return match response {
                     Ok(response) => Ok(response),
-                    Err(e) => {
-                        error!("SMS handler error: {}", e);
-                        Ok(simple_text_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Internal Server Error",
-                        ))
-                    }
+                    Err(e) => Ok(handler_error("SMS", &e)),
                 };
             }
 
@@ -203,13 +208,7 @@ where
             {
                 return match response {
                     Ok(response) => Ok(response),
-                    Err(e) => {
-                        error!("Mail handler error: {}", e);
-                        Ok(simple_text_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Internal Server Error",
-                        ))
-                    }
+                    Err(e) => Ok(handler_error("Mail", &e)),
                 };
             }
 
@@ -219,13 +218,7 @@ where
                 .await
             {
                 Ok(response) => Ok(response),
-                Err(e) => {
-                    error!("Handler error: {}", e);
-                    Ok(simple_text_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal Server Error",
-                    ))
-                }
+                Err(e) => Ok(handler_error("Storage", &e)),
             }
         }
         Err(RequestParseError::BodyTooLarge {

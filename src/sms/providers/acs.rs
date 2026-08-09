@@ -15,6 +15,57 @@ use std::sync::Arc;
 pub struct AcsSmsAdapter;
 
 impl AcsSmsAdapter {
+    fn send_response(results: &[Value]) -> Response<Body> {
+        ResponseBuilder::new(StatusCode::ACCEPTED)
+            .content_type("application/json; charset=utf-8")
+            .body(serde_json::to_vec(&serde_json::json!({ "value": results })).unwrap_or_default())
+            .build()
+    }
+
+    fn store_recipient(
+        store: &dyn SmsStore,
+        batch_id: &str,
+        sender: &str,
+        message_body: &str,
+        options: Option<&Value>,
+        to: &str,
+        repeatability_request_id: Option<String>,
+    ) -> crate::error::Result<Value> {
+        let mut metadata = HashMap::new();
+        if let Some(options) = options {
+            metadata.insert("sms_send_options".to_string(), options.clone());
+        }
+        if let Some(value) = &repeatability_request_id {
+            metadata.insert(
+                "repeatability_request_id".to_string(),
+                Value::String(value.clone()),
+            );
+        }
+        let stored = store.store_message(NewSmsMessage {
+            batch_id: Some(batch_id.to_string()),
+            provider: SmsProvider::Acs,
+            provider_message_id: None,
+            direction: SmsDirection::Outbound,
+            channel: SmsChannel::Sms,
+            from: sender.to_string(),
+            to: to.to_string(),
+            body: message_body.to_string(),
+            media: Vec::new(),
+            metadata,
+        })?;
+        Ok(serde_json::json!({
+            "to": to,
+            "messageId": stored.provider_message_id,
+            "successful": true,
+            "httpStatusCode": 202,
+            "errorMessage": null,
+            "repeatabilityResult": repeatability_request_id.map(|request_id| serde_json::json!({
+                "repeatabilityRequestId": request_id,
+                "firstSent": stored.created_at.to_rfc3339(),
+            }))
+        }))
+    }
+
     fn connection_key() -> Option<String> {
         std::env::var("SQRZL_ACS_CONNECTION_STRING")
             .ok()
@@ -91,15 +142,12 @@ impl AcsSmsAdapter {
     }
 
     fn send(store: &dyn SmsStore, request: &SmsRequest) -> Response<Body> {
-        let payload = match serde_json::from_slice::<Value>(&request.body) {
-            Ok(Value::Object(payload)) => payload,
-            _ => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    "InvalidRequest",
-                    "Invalid JSON request body",
-                )
-            }
+        let Ok(Value::Object(payload)) = serde_json::from_slice::<Value>(&request.body) else {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                "Invalid JSON request body",
+            );
         };
         if payload.contains_key("media")
             || payload.contains_key("mediaUrls")
@@ -159,29 +207,16 @@ impl AcsSmsAdapter {
         let options = payload.get("smsSendOptions").cloned();
         let mut results = Vec::with_capacity(recipients.len());
         for (to, repeatability_request_id) in recipients {
-            let mut metadata = HashMap::new();
-            if let Some(options) = &options {
-                metadata.insert("sms_send_options".to_string(), options.clone());
-            }
-            if let Some(value) = &repeatability_request_id {
-                metadata.insert(
-                    "repeatability_request_id".to_string(),
-                    Value::String(value.clone()),
-                );
-            }
-            let stored = match store.store_message(NewSmsMessage {
-                batch_id: Some(batch_id.clone()),
-                provider: SmsProvider::Acs,
-                provider_message_id: None,
-                direction: SmsDirection::Outbound,
-                channel: SmsChannel::Sms,
-                from: sender.to_string(),
-                to: to.clone(),
-                body: message_body.to_string(),
-                media: Vec::new(),
-                metadata,
-            }) {
-                Ok(stored) => stored,
+            let result = match Self::store_recipient(
+                store,
+                &batch_id,
+                sender,
+                message_body,
+                options.as_ref(),
+                &to,
+                repeatability_request_id,
+            ) {
+                Ok(result) => result,
                 Err(error) => {
                     return json_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -190,22 +225,9 @@ impl AcsSmsAdapter {
                     )
                 }
             };
-            results.push(serde_json::json!({
-                "to": to,
-                "messageId": stored.provider_message_id,
-                "successful": true,
-                "httpStatusCode": 202,
-                "errorMessage": null,
-                "repeatabilityResult": repeatability_request_id.map(|request_id| serde_json::json!({
-                    "repeatabilityRequestId": request_id,
-                    "firstSent": stored.created_at.to_rfc3339(),
-                }))
-            }));
+            results.push(result);
         }
-        ResponseBuilder::new(StatusCode::ACCEPTED)
-            .content_type("application/json; charset=utf-8")
-            .body(serde_json::to_vec(&serde_json::json!({ "value": results })).unwrap_or_default())
-            .build()
+        Self::send_response(&results)
     }
 }
 

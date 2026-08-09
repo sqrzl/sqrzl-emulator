@@ -37,6 +37,11 @@ pub fn matches_path(path: &str) -> bool {
     .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
+/// Routes an authenticated text-emulation admin request.
+///
+/// # Errors
+///
+/// Returns an error for invalid routes, payloads, identifiers, or persistence failures.
 pub async fn handle_request(
     store: &Arc<dyn SmsStore>,
     request: Request<RequestBody>,

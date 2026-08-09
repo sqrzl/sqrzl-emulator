@@ -9,7 +9,7 @@ import { useCursorList } from '../../features/storage/use-cursor-list';
 import { useDeleteTarget } from '../../features/storage/use-delete-target';
 import { textConversationListKey } from '../../features/texts/keys';
 import { deleteTextConversation, listTextConversationPage } from '../../features/texts/texts.query';
-import { formatRelativeTime } from '../../shared/format';
+import { formatRelativeTime, formatTextProvider } from '../../shared/format';
 import { textConversationPath } from '../../shared/routes';
 import DataTableSection from '../storage/data-table-section';
 import TextDeleteDialog from './text-delete-dialog';
@@ -66,8 +66,8 @@ export default function TextConversationTable() {
             <For each={items} by={(item) => item.peer}>
               {(item) => <TableRow key={item.peer}>
                 <TableCell><Link href={textConversationPath(item.peer)}>{item.peer}</Link></TableCell>
-                <TableCell><Badge variant="secondary">{item.provider}</Badge></TableCell>
-                <TableCell>{item.last_direction === 'inbound' ? '← ' : '→ '}{item.last_message_body || 'No body'}</TableCell>
+                <TableCell><Badge variant="secondary">{formatTextProvider(item.provider)}</Badge></TableCell>
+                <TableCell><span aria-label={item.last_direction}>{item.last_direction === 'inbound' ? '←' : '→'}</span> {item.last_message_body || 'No body'}</TableCell>
                 <TableCell>{formatRelativeTime(item.last_message_at)}</TableCell>
                 <TableCell>{item.message_count}</TableCell>
                 <TableCell><Inline justify="end"><Button variant="ghost" size="icon-sm" aria-label={`Delete text conversation ${item.peer}`} onPress={() => remover.open({ id: item.peer })}><TrashIcon aria-hidden="true" /></Button></Inline></TableCell>

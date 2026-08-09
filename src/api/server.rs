@@ -31,6 +31,10 @@ pub async fn start_ui_server(
 }
 
 /// Launches the UI server with an explicitly shared SMS store.
+///
+/// # Errors
+///
+/// Returns an error when session initialization, listener binding, or accepting fails.
 pub async fn start_ui_server_with_sms(
     storage: Arc<dyn Storage>,
     config: Arc<crate::Config>,

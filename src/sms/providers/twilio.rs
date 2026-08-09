@@ -16,6 +16,80 @@ use std::sync::Arc;
 pub struct TwilioSmsAdapter;
 
 impl TwilioSmsAdapter {
+    fn message_metadata(
+        fields: &[(String, String)],
+        messaging_service_sid: Option<&str>,
+    ) -> HashMap<String, Value> {
+        let mut metadata = HashMap::new();
+        if let Some(callback) = form_value(fields, "StatusCallback") {
+            metadata.insert(
+                "status_callback".to_string(),
+                Value::String(callback.to_string()),
+            );
+        }
+        if let Some(sid) = messaging_service_sid {
+            metadata.insert(
+                "messaging_service_sid".to_string(),
+                Value::String(sid.to_string()),
+            );
+        }
+        metadata
+    }
+
+    fn message_media(media_urls: &[String]) -> Vec<NewSmsMedia> {
+        media_urls
+            .iter()
+            .enumerate()
+            .map(|(index, url)| NewSmsMedia {
+                filename: format!("media-{}", index + 1),
+                content_type: "application/octet-stream".to_string(),
+                content: None,
+                external_url: Some(url.clone()),
+            })
+            .collect()
+    }
+
+    fn send_response(
+        message: &crate::sms::SmsMessage,
+        account_sid: &str,
+        body: &str,
+        from: Option<&str>,
+        messaging_service_sid: Option<&str>,
+        media_count: usize,
+        to: &str,
+    ) -> Response<Body> {
+        let now = message.created_at.to_rfc2822();
+        ResponseBuilder::new(StatusCode::CREATED)
+            .content_type("application/json; charset=utf-8")
+            .body(
+                serde_json::json!({
+                    "sid": message.provider_message_id,
+                    "account_sid": account_sid,
+                    "api_version": "2010-04-01",
+                    "body": body,
+                    "date_created": now,
+                    "date_sent": null,
+                    "date_updated": now,
+                    "direction": "outbound-api",
+                    "error_code": null,
+                    "error_message": null,
+                    "from": from,
+                    "messaging_service_sid": messaging_service_sid,
+                    "num_media": media_count.to_string(),
+                    "num_segments": "1",
+                    "price": null,
+                    "price_unit": "USD",
+                    "status": "queued",
+                    "subresource_uris": {"media": format!("/2010-04-01/Accounts/{account_sid}/Messages/{}/Media.json", message.provider_message_id)},
+                    "to": to,
+                    "uri": format!("/2010-04-01/Accounts/{account_sid}/Messages/{}.json", message.provider_message_id)
+                })
+                .to_string()
+                .into_bytes(),
+            )
+            .build()
+    }
+
     fn path_parts(path: &str) -> Option<(&str, &str)> {
         let parts = path.trim_matches('/').split('/').collect::<Vec<_>>();
         match parts.as_slice() {
@@ -121,19 +195,7 @@ impl TwilioSmsAdapter {
             }
         }
 
-        let mut metadata = HashMap::new();
-        if let Some(callback) = form_value(&fields, "StatusCallback") {
-            metadata.insert(
-                "status_callback".to_string(),
-                Value::String(callback.to_string()),
-            );
-        }
-        if let Some(sid) = messaging_service_sid {
-            metadata.insert(
-                "messaging_service_sid".to_string(),
-                Value::String(sid.to_string()),
-            );
-        }
+        let metadata = Self::message_metadata(&fields, messaging_service_sid);
         let body = form_value(&fields, "Body").unwrap_or("").to_string();
         let message = match store.store_message(NewSmsMessage {
             batch_id: None,
@@ -151,16 +213,7 @@ impl TwilioSmsAdapter {
                 .to_string(),
             to: to.to_string(),
             body: body.clone(),
-            media: media_urls
-                .iter()
-                .enumerate()
-                .map(|(index, url)| NewSmsMedia {
-                    filename: format!("media-{}", index + 1),
-                    content_type: "application/octet-stream".to_string(),
-                    content: None,
-                    external_url: Some(url.clone()),
-                })
-                .collect(),
+            media: Self::message_media(&media_urls),
             metadata,
         }) {
             Ok(message) => message,
@@ -172,36 +225,15 @@ impl TwilioSmsAdapter {
                 )
             }
         };
-        let now = message.created_at.to_rfc2822();
-        ResponseBuilder::new(StatusCode::CREATED)
-            .content_type("application/json; charset=utf-8")
-            .body(
-                serde_json::json!({
-                    "sid": message.provider_message_id,
-                    "account_sid": account_sid,
-                    "api_version": "2010-04-01",
-                    "body": body,
-                    "date_created": now,
-                    "date_sent": null,
-                    "date_updated": now,
-                    "direction": "outbound-api",
-                    "error_code": null,
-                    "error_message": null,
-                    "from": from,
-                    "messaging_service_sid": messaging_service_sid,
-                    "num_media": media_urls.len().to_string(),
-                    "num_segments": "1",
-                    "price": null,
-                    "price_unit": "USD",
-                    "status": "queued",
-                    "subresource_uris": {"media": format!("/2010-04-01/Accounts/{account_sid}/Messages/{}/Media.json", message.provider_message_id)},
-                    "to": to,
-                    "uri": format!("/2010-04-01/Accounts/{account_sid}/Messages/{}.json", message.provider_message_id)
-                })
-                .to_string()
-                .into_bytes(),
-            )
-            .build()
+        Self::send_response(
+            &message,
+            account_sid,
+            &body,
+            from,
+            messaging_service_sid,
+            media_urls.len(),
+            to,
+        )
     }
 
     fn media(store: &dyn SmsStore, request: &SmsRequest) -> Response<Body> {
@@ -212,25 +244,19 @@ impl TwilioSmsAdapter {
             .collect::<Vec<_>>();
         let provider_id = parts[4];
         let media_id = parts[6];
-        let message = match store.get_message_by_provider_id(provider_id) {
-            Ok(message) => message,
-            Err(_) => {
-                return Self::error(
-                    StatusCode::NOT_FOUND,
-                    20_404,
-                    "The requested media was not found.",
-                )
-            }
+        let Ok(message) = store.get_message_by_provider_id(provider_id) else {
+            return Self::error(
+                StatusCode::NOT_FOUND,
+                20_404,
+                "The requested media was not found.",
+            );
         };
-        let (media, bytes) = match store.read_media(&message.message_id, media_id) {
-            Ok(media) => media,
-            Err(_) => {
-                return Self::error(
-                    StatusCode::NOT_FOUND,
-                    20_404,
-                    "The requested media was not found.",
-                )
-            }
+        let Ok((media, bytes)) = store.read_media(&message.message_id, media_id) else {
+            return Self::error(
+                StatusCode::NOT_FOUND,
+                20_404,
+                "The requested media was not found.",
+            );
         };
         ResponseBuilder::new(StatusCode::OK)
             .content_type(&media.content_type)

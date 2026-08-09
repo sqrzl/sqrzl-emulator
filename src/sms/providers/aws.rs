@@ -142,6 +142,17 @@ impl SmsAdapter for SnsSmsAdapter {
 }
 
 impl AwsSmsVoiceAdapter {
+    fn send_response(message_id: &str) -> Response<Body> {
+        ResponseBuilder::new(StatusCode::OK)
+            .content_type("application/x-amz-json-1.0")
+            .body(
+                serde_json::json!({"MessageId": message_id})
+                    .to_string()
+                    .into_bytes(),
+            )
+            .build()
+    }
+
     fn target(request: &SmsRequest) -> Option<&str> {
         request.header("x-amz-target").filter(|target| {
             matches!(
@@ -164,15 +175,12 @@ impl AwsSmsVoiceAdapter {
     }
 
     fn send(store: &dyn SmsStore, request: &SmsRequest, target: &str) -> Response<Body> {
-        let payload = match serde_json::from_slice::<Value>(&request.body) {
-            Ok(Value::Object(payload)) => payload,
-            _ => {
-                return Self::error(
-                    StatusCode::BAD_REQUEST,
-                    "ValidationException",
-                    "Invalid JSON request body",
-                )
-            }
+        let Ok(Value::Object(payload)) = serde_json::from_slice::<Value>(&request.body) else {
+            return Self::error(
+                StatusCode::BAD_REQUEST,
+                "ValidationException",
+                "Invalid JSON request body",
+            );
         };
         let destination = payload
             .get("DestinationPhoneNumber")
@@ -262,14 +270,7 @@ impl AwsSmsVoiceAdapter {
                 )
             }
         };
-        ResponseBuilder::new(StatusCode::OK)
-            .content_type("application/x-amz-json-1.0")
-            .body(
-                serde_json::json!({"MessageId": message.provider_message_id})
-                    .to_string()
-                    .into_bytes(),
-            )
-            .build()
+        Self::send_response(&message.provider_message_id)
     }
 }
 

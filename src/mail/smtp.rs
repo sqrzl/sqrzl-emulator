@@ -12,18 +12,30 @@ use crate::mail::model::{Address, Message, SourceProtocol};
 use crate::mail::{fan_out, MailStore};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 pub struct SmtpServer {
     mail: Arc<dyn MailStore>,
     port: u16,
+    max_message_bytes: usize,
 }
 
 impl SmtpServer {
     #[must_use]
     pub fn new(mail: Arc<dyn MailStore>, port: u16) -> Self {
-        Self { mail, port }
+        Self {
+            mail,
+            port,
+            max_message_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+        }
+    }
+
+    /// Applies the maximum accepted SMTP `DATA` payload size.
+    #[must_use]
+    pub fn with_max_message_bytes(mut self, max_message_bytes: usize) -> Self {
+        self.max_message_bytes = max_message_bytes;
+        self
     }
 
     /// Binds the configured port and serves connections until the listener errors.
@@ -44,8 +56,9 @@ impl SmtpServer {
                 .await
                 .map_err(|e| Error::InternalError(e.to_string()))?;
             let mail = self.mail.clone();
+            let max_message_bytes = self.max_message_bytes;
             tokio::spawn(async move {
-                if let Err(err) = handle_session(stream, mail).await {
+                if let Err(err) = handle_session(stream, mail, max_message_bytes).await {
                     tracing::warn!("SMTP session error: {}", err);
                 }
             });
@@ -62,18 +75,22 @@ struct Transaction {
 /// Drives one SMTP connection to completion. Generic over the stream type so
 /// tests can exercise it over an in-memory `tokio::io::duplex` pipe instead of a
 /// real socket.
-async fn handle_session<S>(stream: S, mail: Arc<dyn MailStore>) -> Result<()>
+async fn handle_session<S>(
+    stream: S,
+    mail: Arc<dyn MailStore>,
+    max_message_bytes: usize,
+) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let (reader, mut writer) = tokio::io::split(stream);
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
 
     write_line(&mut writer, "220 sqrzl-emulator SMTP ready").await?;
 
     let mut transaction = Transaction::default();
 
-    while let Some(line) = next_line(&mut lines).await? {
+    while let Some(line) = next_line(&mut reader).await? {
         let Some((command, rest)) = split_command(&line) else {
             write_line(&mut writer, "500 Command not recognized").await?;
             continue;
@@ -104,7 +121,15 @@ where
                     continue;
                 }
                 write_line(&mut writer, "354 Start mail input; end with <CRLF>.<CRLF>").await?;
-                let raw = read_data(&mut lines).await?;
+                let raw = match read_data(&mut reader, max_message_bytes).await {
+                    Ok(raw) => raw,
+                    Err(Error::InvalidRequest(message)) => {
+                        write_line(&mut writer, &format!("552 {message}")).await?;
+                        transaction = Transaction::default();
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let message = build_message(&transaction, &raw);
                 match fan_out(mail.as_ref(), &message) {
                     Ok(_) => write_line(&mut writer, "250 OK: message accepted").await?,
@@ -128,14 +153,22 @@ where
     Ok(())
 }
 
-async fn next_line<R>(lines: &mut Lines<BufReader<R>>) -> Result<Option<String>>
+async fn next_line<R>(reader: &mut BufReader<R>) -> Result<Option<String>>
 where
     R: AsyncRead + Unpin,
 {
-    lines
-        .next_line()
+    let mut line = String::new();
+    let read = reader
+        .read_line(&mut line)
         .await
-        .map_err(|e| Error::InternalError(e.to_string()))
+        .map_err(|e| Error::InternalError(e.to_string()))?;
+    if read == 0 {
+        return Ok(None);
+    }
+    while line.ends_with(['\r', '\n']) {
+        line.pop();
+    }
+    Ok(Some(line))
 }
 
 fn split_command(line: &str) -> Option<(String, &str)> {
@@ -170,21 +203,65 @@ fn parse_address(rest: &str, prefix: &str) -> Option<Address> {
     Some(Address::new(email))
 }
 
-async fn read_data<R>(lines: &mut Lines<BufReader<R>>) -> Result<Vec<u8>>
+async fn read_data<R>(reader: &mut BufReader<R>, max_message_bytes: usize) -> Result<Vec<u8>>
 where
     R: AsyncRead + Unpin,
 {
     let mut raw = Vec::new();
-    while let Some(line) = next_line(lines).await? {
-        if line == "." {
-            break;
+    let mut line = Vec::new();
+    let mut too_large = false;
+    loop {
+        let byte = match reader.read_u8().await {
+            Ok(byte) => byte,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(error) => return Err(Error::InternalError(error.to_string())),
+        };
+
+        // Once the limit is exceeded, retaining three bytes is sufficient to
+        // recognize the SMTP terminator without buffering the rejected body.
+        let line_limit = if too_large {
+            3
+        } else {
+            max_message_bytes.saturating_add(3)
+        };
+        if line.len() < line_limit {
+            line.push(byte);
+        } else {
+            too_large = true;
+            raw.clear();
         }
-        // Undo RFC 5321 dot-stuffing: a leading dot is doubled by the sender.
-        let unescaped = line.strip_prefix('.').unwrap_or(&line);
-        raw.extend_from_slice(unescaped.as_bytes());
-        raw.push(b'\n');
+
+        if byte == b'\n' {
+            if line.ends_with(b"\n") {
+                line.pop();
+            }
+            if line.ends_with(b"\r") {
+                line.pop();
+            }
+            if line == b"." {
+                break;
+            }
+            if !too_large {
+                let unescaped = line.strip_prefix(b".").unwrap_or(&line);
+                let added = unescaped.len().saturating_add(1);
+                if raw.len().saturating_add(added) > max_message_bytes {
+                    too_large = true;
+                    raw.clear();
+                } else {
+                    raw.extend_from_slice(unescaped);
+                    raw.push(b'\n');
+                }
+            }
+            line.clear();
+        }
     }
-    Ok(raw)
+    if too_large {
+        Err(Error::InvalidRequest(format!(
+            "message exceeds the {max_message_bytes}-byte emulator limit"
+        )))
+    } else {
+        Ok(raw)
+    }
 }
 
 async fn write_line<W>(writer: &mut W, line: &str) -> Result<()>
@@ -304,7 +381,7 @@ mod tests {
         let mail = temp_store();
         let (client, server) = tokio::io::duplex(4096);
 
-        let session = tokio::spawn(handle_session(server, mail.clone()));
+        let session = tokio::spawn(handle_session(server, mail.clone(), 4096));
         let mut client_reader = ClientBufReader::new(client);
 
         // Greeting
@@ -353,7 +430,7 @@ mod tests {
         let mail = temp_store();
         let (client, server) = tokio::io::duplex(4096);
 
-        let session = tokio::spawn(handle_session(server, mail.clone()));
+        let session = tokio::spawn(handle_session(server, mail.clone(), 4096));
         let mut client_reader = ClientBufReader::new(client);
 
         let mut greeting = String::new();
@@ -369,6 +446,35 @@ mod tests {
         assert_reply(&mut client_reader, "221").await;
 
         session.await.expect("session task should not panic").ok();
+    }
+
+    #[tokio::test]
+    async fn should_reject_oversized_data_and_keep_the_session_usable() {
+        let mail = temp_store();
+        let (client, server) = tokio::io::duplex(4096);
+        let session = tokio::spawn(handle_session(server, mail.clone(), 8));
+        let mut client_reader = ClientBufReader::new(client);
+
+        let mut greeting = String::new();
+        client_reader.read_line(&mut greeting).await.unwrap();
+        send(&mut client_reader, "MAIL FROM:<sender@example.com>").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "RCPT TO:<alice@example.com>").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "DATA").await;
+        assert_reply(&mut client_reader, "354").await;
+        send(&mut client_reader, "payload-too-large").await;
+        send(&mut client_reader, ".").await;
+        assert_reply(&mut client_reader, "552").await;
+        send(&mut client_reader, "QUIT").await;
+        assert_reply(&mut client_reader, "221").await;
+
+        session.await.expect("session task should not panic").ok();
+        assert!(mail
+            .list_messages("alice@example.com", ListMessagesParams::default())
+            .unwrap()
+            .messages
+            .is_empty());
     }
 
     async fn send(client: &mut ClientBufReader<tokio::io::DuplexStream>, line: &str) {

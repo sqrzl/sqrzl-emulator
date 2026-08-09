@@ -78,7 +78,13 @@ async fn main() -> Result<()> {
     listeners.spawn({
         let mail = mail.clone();
         let port = config.smtp_port;
-        async move { SmtpServer::new(mail, port).start().await }
+        let max_message_bytes = config.max_request_bytes;
+        async move {
+            SmtpServer::new(mail, port)
+                .with_max_message_bytes(max_message_bytes)
+                .start()
+                .await
+        }
     });
 
     let Some(result) = listeners.join_next().await else {

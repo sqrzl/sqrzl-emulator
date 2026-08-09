@@ -80,11 +80,11 @@ export default function TextDestinationDialog() {
                 </Field>
                 <Field>
                   <Label for="destination-number">Local number or identity</Label>
-                  <Input id="destination-number" placeholder="+15557654321" ref={(node: HTMLInputElement | null) => { numberInput = node; }} />
+                  <Input id="destination-number" type="tel" required placeholder="+15557654321" ref={(node: Element | null) => { numberInput = node as HTMLInputElement | null; }} />
                 </Field>
                 <Field>
                   <Label for="destination-url">Callback URL</Label>
-                  <Input id="destination-url" type="url" placeholder="http://127.0.0.1:8080/texts" ref={(node: HTMLInputElement | null) => { callbackInput = node; }} />
+                  <Input id="destination-url" type="url" required placeholder="http://127.0.0.1:8080/texts" ref={(node: Element | null) => { callbackInput = node as HTMLInputElement | null; }} />
                 </Field>
                 <Show when={error()}><FieldError role="alert">{error()}</FieldError></Show>
                 <StorageDialogFooter>

@@ -130,19 +130,19 @@ export default function TextSimulationDialog() {
                 </Field>
                 <Field>
                   <Label for="text-from">From</Label>
-                  <Input id="text-from" placeholder="+15551234567" ref={(node: HTMLInputElement | null) => { fromInput = node; }} />
+                  <Input id="text-from" type="tel" required placeholder="+15551234567" ref={(node: Element | null) => { fromInput = node as HTMLInputElement | null; }} />
                 </Field>
                 <Field>
                   <Label for="text-to">To (local number)</Label>
-                  <Input id="text-to" placeholder="+15557654321" ref={(node: HTMLInputElement | null) => { toInput = node; }} />
+                  <Input id="text-to" type="tel" required placeholder="+15557654321" ref={(node: Element | null) => { toInput = node as HTMLInputElement | null; }} />
                 </Field>
                 <Field>
                   <Label for="text-body">Body</Label>
-                  <Textarea id="text-body" ref={(node: HTMLTextAreaElement | null) => { bodyInput = node; }} />
+                  <Textarea id="text-body" placeholder="Message body" ref={(node: Element | null) => { bodyInput = node as HTMLTextAreaElement | null; }} />
                 </Field>
                 <Field>
                   <Label for="text-media">Twilio MMS media (optional)</Label>
-                  <Input id="text-media" type="file" ref={(node: HTMLInputElement | null) => { mediaInput = node; }} />
+                  <Input id="text-media" type="file" disabled={provider() !== 'twilio'} ref={(node: Element | null) => { mediaInput = node as HTMLInputElement | null; }} />
                 </Field>
                 <Show when={error()}>
                   <FieldError role="alert">{error()}</FieldError>

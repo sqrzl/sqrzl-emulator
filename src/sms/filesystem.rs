@@ -17,6 +17,10 @@ pub struct FilesystemSmsStore {
 
 impl FilesystemSmsStore {
     /// Opens the independent `_sms` persistence tree beneath `blobs_path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the persistence directories cannot be created.
     pub fn open(blobs_path: impl AsRef<Path>) -> Result<Self> {
         let root = blobs_path.as_ref().join("_sms");
         for child in [
@@ -511,7 +515,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::rename(temporary, path).map_err(io_err)
 }
 
-fn io_err(err: std::io::Error) -> Error {
+fn io_err(err: impl std::fmt::Display) -> Error {
     Error::InternalError(err.to_string())
 }
 

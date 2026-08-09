@@ -9,7 +9,7 @@ import { useCursorList } from '../../features/storage/use-cursor-list';
 import { useDeleteTarget } from '../../features/storage/use-delete-target';
 import { textConversationListKey, textMessageListKey } from '../../features/texts/keys';
 import { deleteTextMessage, listTextMessagePage } from '../../features/texts/texts.query';
-import { formatRelativeTime } from '../../shared/format';
+import { formatRelativeTime, formatTextProvider } from '../../shared/format';
 import { textMessagePath } from '../../shared/routes';
 import DataTableSection from '../storage/data-table-section';
 import TextDeleteDialog from './text-delete-dialog';
@@ -61,7 +61,7 @@ export default function TextMessageTable({ peer }: { peer: string }) {
             <TableCell>{formatRelativeTime(item.created_at)}</TableCell>
             <TableCell>{item.direction === 'inbound' ? 'Inbound ←' : 'Outbound →'}</TableCell>
             <TableCell><Link href={textMessagePath(peer, item.message_id)}>{item.body || '(no body)'}</Link></TableCell>
-            <TableCell><Badge variant="secondary">{item.provider}</Badge></TableCell>
+            <TableCell><Badge variant="secondary">{formatTextProvider(item.provider)}</Badge></TableCell>
             <TableCell><Badge variant="outline">{item.channel.toUpperCase()}</Badge></TableCell>
             <TableCell><Badge variant={item.delivery_state === 'failed' ? 'outline' : 'secondary'}>{item.delivery_state}</Badge></TableCell>
             <TableCell><Inline justify="end"><Button variant="ghost" size="icon-sm" aria-label={`Delete text message ${item.message_id}`} onPress={() => remover.open({ id: item.message_id })}><TrashIcon aria-hidden="true" /></Button></Inline></TableCell>

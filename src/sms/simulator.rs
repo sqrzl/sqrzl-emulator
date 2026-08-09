@@ -10,6 +10,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use http::Uri;
 use sha1::Sha1;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -29,6 +30,10 @@ impl SmsSimulator {
 
     /// Stores an inbound message and, when configured, immediately performs one callback.
     /// Callback failure deliberately does not roll back the canonical message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid inbound data or persistence failures.
     pub async fn inject_inbound(&self, message: NewSmsMessage) -> Result<SmsMessage> {
         if message.direction != SmsDirection::Inbound {
             return Err(Error::InvalidRequest(
@@ -61,6 +66,11 @@ impl SmsSimulator {
         Ok(stored)
     }
 
+    /// Applies a terminal outbound delivery state and sends its configured callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid transitions, missing messages, or persistence failures.
     pub async fn transition_delivery(
         &self,
         message_id: &str,
@@ -97,6 +107,11 @@ impl SmsSimulator {
         Ok(transitioned)
     }
 
+    /// Creates and records a new callback attempt linked to a previous attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the prior attempt or message is missing or persistence fails.
     pub async fn retry(&self, attempt_id: &str) -> Result<CallbackAttempt> {
         let prior = self.store.get_callback(attempt_id)?;
         let message = self.store.get_message(&prior.message_id)?;
@@ -406,7 +421,7 @@ async fn send_http_callback(
             request.push_str(value);
             request.push_str("\r\n");
         }
-        request.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+        let _ = write!(request, "Content-Length: {}\r\n\r\n", body.len());
         stream
             .write_all(request.as_bytes())
             .await
