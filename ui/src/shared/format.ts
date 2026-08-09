@@ -28,3 +28,18 @@ export function formatBytes(size: number): string {
 export function formatByteCount(size: number): string {
   return `${formatBytes(size)} (${size.toLocaleString()} bytes)`;
 }
+
+export function formatTextProvider(provider: string): string {
+  switch (provider) {
+    case 'acs':
+      return 'Azure Communication Services';
+    case 'aws-sms-voice-v2':
+      return 'AWS SMS Voice v2';
+    case 'sns':
+      return 'Amazon SNS';
+    case 'twilio':
+      return 'Twilio';
+    default:
+      return provider;
+  }
+}

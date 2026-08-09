@@ -124,6 +124,22 @@ export function adminBucketsPath(): string {
   return '/admin/buckets';
 }
 
+export function adminMailboxesPath(): string {
+  return '/admin/mailboxes';
+}
+
+export function adminTextsPath(): string {
+  return '/admin/texts';
+}
+
+export function textConversationPath(peer: string): string {
+  return `${adminTextsPath()}/${encodeURIComponent(peer)}`;
+}
+
+export function textMessagePath(peer: string, messageId: string): string {
+  return `/admin/text/${encodeURIComponent(peer)}/${encodeURIComponent(messageId)}`;
+}
+
 export function homePath(): string {
   return adminBucketsPath();
 }
@@ -146,6 +162,17 @@ export function bucketFolderPath(
   );
 
   return `${bucketPath(bucketName)}/${encodedPath}`;
+}
+
+export function mailboxPath(mailboxName: string): string {
+  return `${adminMailboxesPath()}/${encodeURIComponent(mailboxName)}`;
+}
+
+export function mailMessagePath(
+  mailboxName: string,
+  messageId: string
+): string {
+  return `/admin/mail/${encodeURIComponent(mailboxName)}/${encodeURIComponent(messageId)}`;
 }
 
 export function blobIdFromBlobKey(blobKey: string): string {

@@ -28,6 +28,10 @@ tags:
     description: Object metadata and binary content operations.
   - name: Tags
     description: Object tagging operations.
+  - name: Mail
+    description: Captured email mailbox and message inspection operations.
+  - name: Texts
+    description: Bidirectional SMS and MMS inspection and simulation operations.
 paths:
   /auth/login:
     post:
@@ -766,6 +770,416 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /mailboxes:
+    get:
+      tags:
+        - Mail
+      operationId: listMailboxes
+      summary: List captured mailboxes
+      parameters:
+        - $ref: '#/components/parameters/Next'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Mailboxes returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMailboxesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /mailboxes/{mailbox}:
+    delete:
+      parameters:
+        - $ref: '#/components/parameters/Mailbox'
+      tags:
+        - Mail
+      operationId: deleteMailbox
+      summary: Delete a mailbox and all captured messages
+      responses:
+        '204':
+          description: Mailbox deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /mailboxes/{mailbox}/messages:
+    get:
+      parameters:
+        - $ref: '#/components/parameters/Mailbox'
+        - $ref: '#/components/parameters/Next'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+      tags:
+        - Mail
+      operationId: listMailboxMessages
+      summary: List messages in a mailbox
+      responses:
+        '200':
+          description: Mailbox messages returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListMessagesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /mailboxes/{mailbox}/messages/{messageId}:
+    get:
+      parameters:
+        - $ref: '#/components/parameters/Mailbox'
+        - $ref: '#/components/parameters/MessageId'
+      tags:
+        - Mail
+      operationId: getMailboxMessage
+      summary: Get a mailbox message
+      responses:
+        '200':
+          description: Message detail returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      parameters:
+        - $ref: '#/components/parameters/Mailbox'
+        - $ref: '#/components/parameters/MessageId'
+      tags:
+        - Mail
+      operationId: deleteMailboxMessage
+      summary: Delete a mailbox message
+      responses:
+        '204':
+          description: Message deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /mailboxes/{mailbox}/messages/{messageId}/content:
+    get:
+      parameters:
+        - $ref: '#/components/parameters/Mailbox'
+        - $ref: '#/components/parameters/MessageId'
+      tags:
+        - Mail
+      operationId: getMailboxMessageContent
+      summary: Download raw message content
+      responses:
+        '200':
+          description: Raw message content.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /mailboxes/{mailbox}/messages/{messageId}/attachments/{filename}:
+    get:
+      parameters:
+        - $ref: '#/components/parameters/Mailbox'
+        - $ref: '#/components/parameters/MessageId'
+        - $ref: '#/components/parameters/Filename'
+      tags:
+        - Mail
+      operationId: getMailboxMessageAttachment
+      summary: Download a message attachment
+      responses:
+        '200':
+          description: Attachment content.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-conversations:
+    get:
+      tags: [Texts]
+      operationId: listTextConversations
+      summary: List text conversations grouped by remote peer
+      parameters:
+        - $ref: '#/components/parameters/Next'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Text conversations returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTextConversationsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-conversations/{peer}:
+    delete:
+      tags: [Texts]
+      operationId: deleteTextConversation
+      summary: Delete a text conversation and all canonical messages
+      parameters:
+        - $ref: '#/components/parameters/TextPeer'
+      responses:
+        '204':
+          description: Conversation deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-conversations/{peer}/messages:
+    get:
+      tags: [Texts]
+      operationId: listTextConversationMessages
+      summary: List bidirectional messages for a peer
+      parameters:
+        - $ref: '#/components/parameters/TextPeer'
+        - $ref: '#/components/parameters/Next'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+      responses:
+        '200':
+          description: Text messages returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListTextMessagesResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-conversations/{peer}/messages/{messageId}:
+    get:
+      tags: [Texts]
+      operationId: getTextMessage
+      summary: Get text message detail and callback history
+      parameters:
+        - $ref: '#/components/parameters/TextPeer'
+        - $ref: '#/components/parameters/TextMessageId'
+      responses:
+        '200':
+          description: Text message detail returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextMessageDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Texts]
+      operationId: deleteTextMessage
+      summary: Delete one canonical text message
+      parameters:
+        - $ref: '#/components/parameters/TextPeer'
+        - $ref: '#/components/parameters/TextMessageId'
+      responses:
+        '204':
+          description: Message deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-conversations/{peer}/messages/{messageId}/media/{mediaId}:
+    get:
+      tags: [Texts]
+      operationId: getTextMessageMedia
+      summary: Download locally stored inbound MMS media
+      parameters:
+        - $ref: '#/components/parameters/TextPeer'
+        - $ref: '#/components/parameters/TextMessageId'
+        - $ref: '#/components/parameters/TextMediaId'
+      responses:
+        '200':
+          description: Locally stored media content.
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-simulations/inbound:
+    post:
+      tags: [Texts]
+      operationId: simulateInboundText
+      summary: Store an inbound SMS or Twilio MMS and attempt its configured callback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboundTextSimulationRequest'
+      responses:
+        '201':
+          description: Inbound message stored; callback result is included when attempted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextMessageDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-messages/{messageId}/delivery:
+    post:
+      tags: [Texts]
+      operationId: transitionTextDelivery
+      summary: Explicitly transition an accepted outbound message to delivered or failed
+      parameters:
+        - $ref: '#/components/parameters/TextMessageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TextDeliveryRequest'
+      responses:
+        '200':
+          description: Delivery state transitioned or idempotently confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextMessageDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-destinations/{provider}/{localNumber}:
+    get:
+      tags: [Texts]
+      operationId: getTextDestination
+      summary: Get a provider/local-number callback destination
+      parameters:
+        - $ref: '#/components/parameters/TextProvider'
+        - $ref: '#/components/parameters/TextLocalNumber'
+      responses:
+        '200':
+          description: Destination returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextDestination'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Texts]
+      operationId: putTextDestination
+      summary: Create or replace a callback destination
+      parameters:
+        - $ref: '#/components/parameters/TextProvider'
+        - $ref: '#/components/parameters/TextLocalNumber'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutTextDestinationRequest'
+      responses:
+        '200':
+          description: Destination stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextDestination'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Texts]
+      operationId: deleteTextDestination
+      summary: Delete a callback destination
+      parameters:
+        - $ref: '#/components/parameters/TextProvider'
+        - $ref: '#/components/parameters/TextLocalNumber'
+      responses:
+        '204':
+          description: Destination deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /text-callback-attempts/{attemptId}/retry:
+    post:
+      tags: [Texts]
+      operationId: retryTextCallback
+      summary: Create a linked retry attempt without overwriting callback history
+      parameters:
+        - $ref: '#/components/parameters/TextAttemptId'
+      responses:
+        '200':
+          description: Retry attempted and recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TextCallbackAttempt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   securitySchemes:
     AdminSessionCookie:
@@ -840,6 +1254,73 @@ components:
       description: Restrict listing to keys that start with this prefix.
       schema:
         type: string
+    Mailbox:
+      name: mailbox
+      in: path
+      required: true
+      description: Mailbox identifier (recipient email, URL encoded when required).
+      schema:
+        type: string
+        minLength: 1
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      description: Internal emulator message identifier.
+      schema:
+        type: string
+        minLength: 1
+    Filename:
+      name: filename
+      in: path
+      required: true
+      description: Attachment filename (URL encoded when required).
+      schema:
+        type: string
+        minLength: 1
+    TextPeer:
+      name: peer
+      in: path
+      required: true
+      description: Original remote phone number or peer key, URL encoded as one segment.
+      schema:
+        type: string
+        minLength: 1
+    TextMessageId:
+      name: messageId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    TextMediaId:
+      name: mediaId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+    TextProvider:
+      name: provider
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/TextProvider'
+    TextLocalNumber:
+      name: localNumber
+      in: path
+      required: true
+      description: Provider-facing local number or identity, URL encoded as one segment.
+      schema:
+        type: string
+        minLength: 1
+    TextAttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
   responses:
     InvalidCredentials:
       description: The provided admin credentials are invalid.
@@ -855,6 +1336,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     BadRequest:
       description: The request could not be processed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PayloadTooLarge:
+      description: The request body exceeds the configured emulator limit.
       content:
         application/json:
           schema:
@@ -1466,3 +1953,499 @@ components:
             - string
             - 'null'
           description: Optional implementation-specific error context.
+    MailAddress:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type:
+            - string
+            - 'null'
+    MailboxInfo:
+      type: object
+      additionalProperties: false
+      required:
+        - address
+        - message_count
+        - last_received_at
+      properties:
+        address:
+          type: string
+        message_count:
+          type: integer
+          format: int64
+          minimum: 0
+        last_received_at:
+          type:
+            - string
+            - 'null'
+          format: date-time
+    ListMailboxesResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MailboxInfo'
+        next:
+          type:
+            - string
+            - 'null'
+    MessageSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - message_id
+        - from
+        - subject
+        - received_at
+        - delivery_state
+        - to
+      properties:
+        message_id:
+          type: string
+        from:
+          $ref: '#/components/schemas/MailAddress'
+        subject:
+          type: string
+        received_at:
+          type: string
+          format: date-time
+        delivery_state:
+          type: string
+          enum:
+            - accepted
+            - delivered
+            - bounced
+            - rejected
+        to:
+          type: array
+          items:
+            $ref: '#/components/schemas/MailAddress'
+    MessageDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - message_id
+        - mailbox
+        - from
+        - to
+        - cc
+        - bcc
+        - subject
+        - received_at
+        - source_protocol
+        - delivery_state
+        - headers
+        - attachments
+      properties:
+        message_id:
+          type: string
+        mailbox:
+          type: string
+        from:
+          $ref: '#/components/schemas/MailAddress'
+        to:
+          type: array
+          items:
+            $ref: '#/components/schemas/MailAddress'
+        cc:
+          type: array
+          items:
+            $ref: '#/components/schemas/MailAddress'
+        bcc:
+          type: array
+          items:
+            $ref: '#/components/schemas/MailAddress'
+        subject:
+          type: string
+        received_at:
+          type: string
+          format: date-time
+        source_protocol:
+          type: string
+          enum:
+            - smtp
+            - sendgrid
+            - ses
+            - acs
+        delivery_state:
+          type: string
+          enum:
+            - accepted
+            - delivered
+            - bounced
+            - rejected
+        delivery_detail:
+          type:
+            - string
+            - 'null'
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        body_text:
+          type:
+            - string
+            - 'null'
+        body_html:
+          type:
+            - string
+            - 'null'
+        thread_id:
+          type:
+            - string
+            - 'null'
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageAttachmentSummary'
+    MessageAttachmentSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - filename
+        - content_type
+        - size
+      properties:
+        filename:
+          type: string
+        content_type:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+    ListMessagesResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageSummary'
+        next:
+          type:
+            - string
+            - 'null'
+    TextProvider:
+      type: string
+      enum:
+        - twilio
+        - sns
+        - aws-sms-voice-v2
+        - acs
+    TextDirection:
+      type: string
+      enum:
+        - inbound
+        - outbound
+    TextChannel:
+      type: string
+      enum:
+        - sms
+        - mms
+    TextDeliveryState:
+      type: string
+      enum:
+        - accepted
+        - delivered
+        - failed
+    TextMedia:
+      type: object
+      additionalProperties: false
+      required:
+        - media_id
+        - filename
+        - content_type
+      properties:
+        media_id:
+          type: string
+        filename:
+          type: string
+        content_type:
+          type: string
+        size:
+          type:
+            - integer
+            - 'null'
+          format: int64
+          minimum: 0
+        external_url:
+          type:
+            - string
+            - 'null'
+    TextMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - message_id
+        - provider
+        - provider_message_id
+        - direction
+        - channel
+        - from
+        - to
+        - body
+        - media
+        - metadata
+        - peer
+        - delivery_state
+        - created_at
+        - updated_at
+      properties:
+        message_id:
+          type: string
+        batch_id:
+          type:
+            - string
+            - 'null'
+        provider:
+          $ref: '#/components/schemas/TextProvider'
+        provider_message_id:
+          type: string
+        direction:
+          $ref: '#/components/schemas/TextDirection'
+        channel:
+          $ref: '#/components/schemas/TextChannel'
+        from:
+          type: string
+        to:
+          type: string
+        body:
+          type: string
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextMedia'
+        metadata:
+          type: object
+          additionalProperties: true
+        peer:
+          type: string
+        delivery_state:
+          $ref: '#/components/schemas/TextDeliveryState'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TextConversation:
+      type: object
+      additionalProperties: false
+      required:
+        - peer
+        - message_count
+        - last_message_at
+        - last_message_body
+        - last_direction
+        - provider
+      properties:
+        peer:
+          type: string
+        message_count:
+          type: integer
+          format: int64
+          minimum: 0
+        last_message_at:
+          type: string
+          format: date-time
+        last_message_body:
+          type: string
+        last_direction:
+          $ref: '#/components/schemas/TextDirection'
+        provider:
+          $ref: '#/components/schemas/TextProvider'
+    ListTextConversationsResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextConversation'
+        next:
+          type:
+            - string
+            - 'null'
+    ListTextMessagesResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - next
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextMessage'
+        next:
+          type:
+            - string
+            - 'null'
+    TextCallbackAttempt:
+      type: object
+      additionalProperties: false
+      required:
+        - attempt_id
+        - message_id
+        - kind
+        - provider
+        - url
+        - request_headers
+        - request_body
+        - state
+        - attempted_at
+      properties:
+        attempt_id:
+          type: string
+        message_id:
+          type: string
+        kind:
+          type: string
+          enum: [inbound, delivery]
+        provider:
+          $ref: '#/components/schemas/TextProvider'
+        url:
+          type: string
+          format: uri
+        request_headers:
+          type: object
+          additionalProperties:
+            type: string
+        request_body:
+          type: string
+        response_status:
+          type:
+            - integer
+            - 'null'
+          format: int32
+        response_body:
+          type:
+            - string
+            - 'null'
+        error:
+          type:
+            - string
+            - 'null'
+        state:
+          type: string
+          enum: [succeeded, failed]
+        attempted_at:
+          type: string
+          format: date-time
+        retry_of:
+          type:
+            - string
+            - 'null'
+    TextMessageDetail:
+      allOf:
+        - $ref: '#/components/schemas/TextMessage'
+        - type: object
+          required:
+            - callback_attempts
+          properties:
+            callback_attempts:
+              type: array
+              items:
+                $ref: '#/components/schemas/TextCallbackAttempt'
+    InboundTextMediaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - filename
+        - content_type
+        - content_base64
+      properties:
+        filename:
+          type: string
+          minLength: 1
+        content_type:
+          type: string
+          minLength: 1
+        content_base64:
+          type: string
+          format: byte
+    InboundTextSimulationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - provider
+        - from
+        - to
+        - body
+      properties:
+        provider:
+          $ref: '#/components/schemas/TextProvider'
+        from:
+          type: string
+        to:
+          type: string
+        body:
+          type: string
+        media:
+          type: array
+          items:
+            $ref: '#/components/schemas/InboundTextMediaRequest'
+        metadata:
+          type: object
+          additionalProperties: true
+    TextDeliveryRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - state
+      properties:
+        state:
+          type: string
+          enum:
+            - delivered
+            - failed
+    TextDestination:
+      type: object
+      additionalProperties: false
+      required:
+        - provider
+        - local_number
+        - callback_url
+        - created_at
+        - updated_at
+      properties:
+        provider:
+          $ref: '#/components/schemas/TextProvider'
+        local_number:
+          type: string
+        callback_url:
+          type: string
+          format: uri
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PutTextDestinationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - callback_url
+      properties:
+        callback_url:
+          type: string
+          format: uri

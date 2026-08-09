@@ -1,9 +1,10 @@
 # Sqrzl Emulator
 
 Sqrzl is a Docker-ready object and blob storage emulator for local development
-and CI. One persistent filesystem-backed store is available through
+and CI. Persistent filesystem-backed stores are available through
 S3-compatible, Azure Blob Storage, Google Cloud Storage, and OCI Object Storage
-HTTP APIs. A browser UI is included for inspecting buckets and objects.
+HTTP APIs, outbound email capture, and bidirectional SMS/MMS provider adapters.
+A browser UI is included for inspecting buckets, mailboxes, and texts.
 
 Sqrzl is a development tool, not a production storage service. Provider
 compatibility is intentionally scoped; see the
@@ -137,9 +138,16 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_LIFECYCLE_HOURS` | Unsigned integer hours | `1` | Interval between lifecycle-rule passes. Invalid values use the default. Avoid `0`, which requests a continuous interval. |
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
 | `SQRZL_UI_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9001` | Admin UI listener inside the container. Normally keep this at `9001`. |
-| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum buffered HTTP request body. Oversized provider requests receive a provider-shaped `413 Payload Too Large`. Zero and invalid values use the default. |
+| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum buffered HTTP request body or SMTP `DATA` payload. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
 | `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names must be 3–63 characters using lowercase ASCII letters, digits, and single hyphens; they cannot start or end with a hyphen. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
+| `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
+| `SQRZL_SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
+| `SQRZL_TWILIO_ACCOUNT_SID` | Twilio account SID; set with `SQRZL_TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication only when both Twilio values are present. |
+| `SQRZL_TWILIO_AUTH_TOKEN` | Twilio auth token; set with `SQRZL_TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
+| `SQRZL_ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
+| `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
+| `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each inbound or delivery callback attempt. |
 
 Docker port mappings are `HOST:CONTAINER`. For example, to expose Sqrzl on
 host ports 19000 and 19001 without changing its internal configuration:
@@ -179,9 +187,29 @@ All provider APIs use the storage listener, normally
 | --- | --- | --- |
 | S3-compatible | Endpoint URL `http://localhost:9000` | Use region `us-east-1`, SigV4, and path-style addressing. |
 | Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. For the simplest smoke setup, use no credential and leave Sqrzl auth disabled. |
-| GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials for the auth-disabled development flow. |
+| GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. When enabled, bearer tokens equal to either configured Sqrzl credential are accepted for local qualification. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
 | OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/<namespace>/b/<bucket>/...`; the default namespace response is `sqrzl-emulator`. |
+| SMTP | SMTP server `localhost:2525` | Plaintext local capture; SMTP AUTH and STARTTLS are intentionally unsupported. |
+| SendGrid Mail Send | API base `http://localhost:9000` | Supports `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
+| Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports `SendEmail` through `POST /v2/email/outbound-emails` with SigV4. |
+| ACS Email | Connection-string endpoint `http://localhost:9000` | Supports `POST /emails:send` and operation polling with ACS HMAC authentication. |
+| Twilio Messages | API base `http://localhost:9000` | Supports outbound SMS/MMS references plus admin-driven inbound and delivery simulation. |
+| Amazon SNS | Endpoint URL `http://localhost:9000` | Supports direct `PhoneNumber` SMS `Publish` only. |
+| AWS SMS Voice v2 | Endpoint URL `http://localhost:9000` | Supports `SendTextMessage` and `SendMediaMessage`. |
+| ACS SMS | Connection-string endpoint `http://localhost:9000` | Supports one-to-many SMS and admin-driven Event Grid callbacks. |
+
+For lease and compare-and-swap qualification, the GCS JSON endpoint supports
+`ifGenerationMatch` (including create-only value `0`) on uploads and conditional
+object mutations. Azure Blob writes and deletes enforce `If-Match` and
+`If-None-Match: *`. These checks are atomic per object, missing resources use
+provider-shaped `404` responses, and returned GCS generations and quoted Azure
+ETags can be fed back into later conditional requests. Sqrzl models only the
+current object: historical GCS generations and the full HTTP conditional-header
+matrix remain outside this local emulator contract.
+
+See [SMS and MMS emulation](docs/text-emulation.md) for callback security,
+simulation behavior, media handling, and explicit unsupported scope.
 
 ### S3 example with boto3
 

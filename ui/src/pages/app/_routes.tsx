@@ -2,7 +2,17 @@ import { route } from '@askrjs/askr/router';
 import Buckets from './buckets';
 import BucketPage from './bucket';
 import BlobPage from './blob';
-import { adminBucketsPath } from '../../shared/routes';
+import MailboxPage from './mailbox';
+import MailMessagePage from './mail-message';
+import Mailboxes from './mailboxes';
+import TextConversationPage from './text-conversation';
+import TextMessagePage from './text-message';
+import TextsPage from './texts';
+import {
+  adminBucketsPath,
+  adminMailboxesPath,
+  adminTextsPath,
+} from '../../shared/routes';
 import { normalizeStoragePathPrefix } from '../../features/storage/path';
 
 export function registerAppRoutes(): void {
@@ -15,6 +25,23 @@ export function registerAppRoutes(): void {
       bucketName={params.bucketName ?? ''}
       blobId={params.blobId ?? ''}
     />
+  ));
+  route(adminMailboxesPath(), Mailboxes);
+  route(`${adminMailboxesPath()}/{mailboxName}`, (params) => (
+    <MailboxPage mailboxName={params.mailboxName ?? ''} />
+  ));
+  route('/admin/mail/{mailboxName}/{messageId}', (params) => (
+    <MailMessagePage
+      mailboxName={params.mailboxName ?? ''}
+      messageId={params.messageId ?? ''}
+    />
+  ));
+  route(adminTextsPath(), TextsPage);
+  route(`${adminTextsPath()}/{peer}`, (params) => (
+    <TextConversationPage peer={params.peer ?? ''} />
+  ));
+  route('/admin/text/{peer}/{messageId}', (params) => (
+    <TextMessagePage peer={params.peer ?? ''} messageId={params.messageId ?? ''} />
   ));
   route(`${adminBucketsPath()}/{bucketName}/*`, (params) => (
     <BucketPage

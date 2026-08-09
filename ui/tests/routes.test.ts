@@ -15,6 +15,12 @@ import {
   blobPath,
   bucketFolderPath,
   bucketPath,
+  adminMailboxesPath,
+  adminTextsPath,
+  mailMessagePath,
+  mailboxPath,
+  textConversationPath,
+  textMessagePath,
   loginPath,
   logoutPath,
 } from '../src/shared/routes';
@@ -108,9 +114,23 @@ describe('shared route helpers', () => {
 
   it('points the canonical ui routes at the admin surface', () => {
     expect(adminBucketsPath()).toBe('/admin/buckets');
+    expect(adminMailboxesPath()).toBe('/admin/mailboxes');
+    expect(adminTextsPath()).toBe('/admin/texts');
     expect(bucketPath('demo bucket')).toBe('/admin/buckets/demo%20bucket');
     expect(bucketFolderPath('demo bucket', 'dir one/child/')).toBe(
       '/admin/buckets/demo%20bucket/dir%20one%2Fchild'
+    );
+    expect(mailboxPath('team@example.com')).toBe(
+      '/admin/mailboxes/team%40example.com'
+    );
+    expect(mailMessagePath('team@example.com', 'msg-1')).toBe(
+      '/admin/mail/team%40example.com/msg-1'
+    );
+    expect(textConversationPath('+1555%01')).toBe(
+      '/admin/texts/%2B1555%2501'
+    );
+    expect(textMessagePath('+1555', 'txt-1')).toBe(
+      '/admin/text/%2B1555/txt-1'
     );
     expect(loginPath()).toBe('/login');
     expect(logoutPath()).toBe('/logout');
@@ -121,6 +141,12 @@ describe('shared route helpers', () => {
 
     expect(paths).toContain('/admin/blobs/{bucketName}/{blobId}');
     expect(paths).toContain('/admin/buckets/{bucketName}');
+    expect(paths).toContain('/admin/mailboxes');
+    expect(paths).toContain('/admin/mailboxes/{mailboxName}');
+    expect(paths).toContain('/admin/mail/{mailboxName}/{messageId}');
+    expect(paths).toContain('/admin/texts');
+    expect(paths).toContain('/admin/texts/{peer}');
+    expect(paths).toContain('/admin/text/{peer}/{messageId}');
     expect(paths).toContain('/admin/buckets/{bucketName}/*');
     expect(paths).not.toContain('/admin/buckets/{bucketName}/blob/{blobId}');
     expect(paths).not.toContain('/admin/buckets/{bucketName}/_blob/{blobId}');

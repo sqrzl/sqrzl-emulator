@@ -113,3 +113,104 @@ async fn should_complete_resumable_upload_given_live_server_when_using_gcs_json_
     assert!(metadata.contains("\"hello.txt\""));
     assert!(metadata.contains("\"owner\":\"jules\""));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_enforce_gcs_generation_preconditions_and_return_json_not_found() {
+    let server = LiveServer::start_api(auth_disabled()).await;
+    let create_bucket = Request::builder()
+        .method("POST")
+        .uri(format!("{}/storage/v1/b?project=test", server.base_url))
+        .header("host", "storage.googleapis.com")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"name":"generation-bucket"}"#))
+        .unwrap();
+    assert_eq!(server.request(create_bucket).await.status(), StatusCode::OK);
+
+    let start_url = format!(
+        "{}/upload/storage/v1/b/generation-bucket/o?uploadType=resumable&name=lease&ifGenerationMatch=0",
+        server.base_url
+    );
+    let start = Request::builder()
+        .method("POST")
+        .uri(&start_url)
+        .header("host", "storage.googleapis.com")
+        .body(Body::default())
+        .unwrap();
+    let started = server.request(start).await;
+    let location = rebase_url(
+        &server.base_url,
+        started.headers().get("location").unwrap().to_str().unwrap(),
+    );
+    let complete = Request::builder()
+        .method("PUT")
+        .uri(location)
+        .header("host", "storage.googleapis.com")
+        .body(Body::from("first"))
+        .unwrap();
+    let created = server.request(complete).await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let created: serde_json::Value = serde_json::from_str(&text_body(created).await).unwrap();
+    let generation = created["generation"].as_str().unwrap().to_string();
+
+    let losing_start = Request::builder()
+        .method("POST")
+        .uri(&start_url)
+        .header("host", "storage.googleapis.com")
+        .body(Body::default())
+        .unwrap();
+    let losing_start = server.request(losing_start).await;
+    let losing_location = rebase_url(
+        &server.base_url,
+        losing_start
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    );
+    let losing_complete = Request::builder()
+        .method("PUT")
+        .uri(losing_location)
+        .header("host", "storage.googleapis.com")
+        .body(Body::from("loser"))
+        .unwrap();
+    assert_eq!(
+        server.request(losing_complete).await.status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    let delete = Request::builder()
+        .method("DELETE")
+        .uri(format!(
+            "{}/storage/v1/b/generation-bucket/o/lease?ifGenerationMatch={generation}",
+            server.base_url
+        ))
+        .header("host", "storage.googleapis.com")
+        .body(Body::default())
+        .unwrap();
+    assert_eq!(
+        server.request(delete).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let missing = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "{}/storage/v1/b/generation-bucket/o/lease",
+            server.base_url
+        ))
+        .header("host", "storage.googleapis.com")
+        .body(Body::default())
+        .unwrap();
+    let missing = server.request(missing).await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        missing.headers().get("content-type").unwrap(),
+        "application/json"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text_body(missing).await).unwrap()["error"]
+            ["status"],
+        "NOT_FOUND"
+    );
+}

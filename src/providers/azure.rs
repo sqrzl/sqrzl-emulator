@@ -3,6 +3,7 @@ use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::{BlobBackend, BlobRange, CreateUploadSessionRequest, UpdateBlobMetadataRequest};
 use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
+use crate::storage::ObjectCondition;
 use crate::storage::Storage;
 use crate::utils::request_origin;
 use crate::utils::xml::push_escaped_xml;
@@ -414,6 +415,22 @@ impl AzureBlobAdapter {
             ));
         }
         Self::ensure_lease_allows(req, blob)
+    }
+
+    fn write_condition(req: &Request) -> Option<ObjectCondition> {
+        if req.header("if-none-match") == Some("*") {
+            return Some(ObjectCondition::Missing);
+        }
+        req.header("if-match")
+            .map(|etag| ObjectCondition::Etag(etag.trim_matches('"').to_string()))
+    }
+
+    fn condition_failed() -> Response<Body> {
+        Self::error_response(
+            StatusCode::PRECONDITION_FAILED,
+            "ConditionNotMet",
+            "The condition specified using HTTP conditional header(s) is not met.",
+        )
     }
 
     fn set_lease_state(
@@ -1573,11 +1590,29 @@ impl AzureBlobAdapter {
             if let Err(response) = Self::ensure_mutation_allowed(req, &existing) {
                 return Ok(response);
             }
+        } else if req.header("if-match").is_some() {
+            return Ok(Self::condition_failed());
         }
         if let Some(response) = Self::validate_blob_create_request(req) {
             return Ok(response);
         }
-        let stored = Self::store_blob_for_type(storage, req, container, blob_key)?;
+        let object = Self::blob_for_type(req, blob_key);
+        let written = if let Some(condition) = Self::write_condition(req) {
+            storage
+                .put_object_if(container, blob_key.to_string(), object, &condition)
+                .map_err(|err| err.to_string())?
+        } else {
+            storage
+                .put_object(container, blob_key.to_string(), object)
+                .map_err(|err| err.to_string())?;
+            true
+        };
+        if !written {
+            return Ok(Self::condition_failed());
+        }
+        let stored = storage
+            .get_object(container, blob_key)
+            .map_err(|err| err.to_string())?;
         Ok(Self::response(StatusCode::CREATED)
             .header("etag", &format!("\"{}\"", stored.etag))
             .header("last-modified", &stored.last_modified.to_rfc2822())
@@ -1585,47 +1620,20 @@ impl AzureBlobAdapter {
             .empty())
     }
 
-    fn store_blob_for_type(
-        storage: &Arc<dyn Storage>,
-        req: &Request,
-        container: &str,
-        blob_key: &str,
-    ) -> Result<crate::models::Object, String> {
+    fn blob_for_type(req: &Request, blob_key: &str) -> crate::models::Object {
         let blob_type = req.header("x-ms-blob-type").unwrap_or("BlockBlob");
-        if blob_type == "PageBlob" {
-            return Self::store_page_blob(storage, req, container, blob_key);
-        }
         let mut object = crate::models::Object::new_with_metadata(
             blob_key.to_string(),
-            req.body.to_vec(),
+            if blob_type == "PageBlob" {
+                vec![0_u8; Self::page_blob_declared_len(req)]
+            } else {
+                req.body.to_vec()
+            },
             Self::content_type(req),
             Self::metadata_from_headers(req),
         );
         Self::set_blob_type(&mut object, blob_type);
-        storage
-            .put_object(container, blob_key.to_string(), object.clone())
-            .map_err(|err| err.to_string())?;
-        Ok(object)
-    }
-
-    fn store_page_blob(
-        storage: &Arc<dyn Storage>,
-        req: &Request,
-        container: &str,
-        blob_key: &str,
-    ) -> Result<crate::models::Object, String> {
-        let declared_len = Self::page_blob_declared_len(req);
-        let mut object = crate::models::Object::new_with_metadata(
-            blob_key.to_string(),
-            vec![0_u8; declared_len],
-            Self::content_type(req),
-            Self::metadata_from_headers(req),
-        );
-        Self::set_blob_type(&mut object, "PageBlob");
-        storage
-            .put_object(container, blob_key.to_string(), object.clone())
-            .map_err(|err| err.to_string())?;
-        Ok(object)
+        object
     }
 
     fn validate_blob_create_request(req: &Request) -> Option<Response<Body>> {
@@ -1758,17 +1766,33 @@ impl AzureBlobAdapter {
                 .map_err(|err| err.to_string())?;
             return Ok(Self::empty_response(StatusCode::ACCEPTED));
         }
-        let blob = storage
-            .as_ref()
-            .get_blob(container, blob_key)
-            .map_err(|err| err.to_string())?;
+        let blob = match storage.as_ref().get_blob(container, blob_key) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => {
+                return Ok(Self::error_response(
+                    StatusCode::NOT_FOUND,
+                    "BlobNotFound",
+                    "The specified blob does not exist.",
+                ));
+            }
+            Err(err) => return Err(err.to_string()),
+        };
         if let Err(response) = Self::ensure_mutation_allowed(req, &blob) {
             return Ok(response);
         }
-        storage
-            .as_ref()
-            .delete_blob(container, blob_key)
-            .map_err(|err| err.to_string())?;
+        if let Some(condition) = Self::write_condition(req) {
+            if !storage
+                .delete_object_if(container, blob_key, &condition)
+                .map_err(|err| err.to_string())?
+            {
+                return Ok(Self::condition_failed());
+            }
+        } else {
+            storage
+                .as_ref()
+                .delete_blob(container, blob_key)
+                .map_err(|err| err.to_string())?;
+        }
         Ok(Self::empty_response(StatusCode::ACCEPTED))
     }
 }
@@ -1816,6 +1840,7 @@ mod tests {
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+            smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
         })
     }
 
@@ -1830,6 +1855,7 @@ mod tests {
             api_port: 9000,
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+            smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
         })
     }
 

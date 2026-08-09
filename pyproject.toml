@@ -21,6 +21,10 @@ sdk-tests = [
   "azure-storage-blob>=12.19,<13.0",
   "google-cloud-storage>=2.16,<4.0",
   "oci>=2.120,<3.0",
+  "sendgrid>=6.11,<7.0",
+  "azure-communication-email>=1.0,<2.0",
+  "azure-communication-sms>=1.0,<2.0",
+  "twilio>=9.0,<10.0",
 ]
 
 [tool.setuptools]

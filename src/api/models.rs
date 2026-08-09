@@ -21,6 +21,78 @@ pub struct ListBucketsResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct MailboxInfo {
+    pub address: String,
+    pub message_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_received_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListMailboxesResponse {
+    pub items: Vec<MailboxInfo>,
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MailAddress {
+    pub email: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MessageAttachmentSummary {
+    pub filename: String,
+    pub content_type: String,
+    #[serde(default)]
+    pub size: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListMessagesResponse {
+    pub items: Vec<MessageSummary>,
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MessageSummary {
+    pub message_id: String,
+    pub from: MailAddress,
+    pub subject: String,
+    pub received_at: String,
+    pub delivery_state: crate::mail::model::DeliveryState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub to: Vec<MailAddress>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MessageDetail {
+    pub message_id: String,
+    pub mailbox: String,
+    pub from: MailAddress,
+    pub to: Vec<MailAddress>,
+    pub cc: Vec<MailAddress>,
+    pub bcc: Vec<MailAddress>,
+    pub subject: String,
+    pub received_at: String,
+    pub source_protocol: crate::mail::model::SourceProtocol,
+    pub delivery_state: crate::mail::model::DeliveryState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_detail: Option<String>,
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_html: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<MessageAttachmentSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SuccessResponse {
     pub success: bool,
 }

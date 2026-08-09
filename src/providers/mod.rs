@@ -17,6 +17,7 @@ mod state;
 pub use azure::AzureBlobAdapter;
 pub use gcs::GcsAdapter;
 pub use oci::OciAdapter;
+pub(crate) use s3::payload_too_large_response;
 pub use s3::S3Adapter;
 
 pub trait ProviderAdapter: Send + Sync {

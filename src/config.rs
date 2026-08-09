@@ -18,6 +18,7 @@ const ENV_SQRZL_ADMIN_AUTH_DISABLED: &str = "SQRZL_ADMIN_AUTH_DISABLED";
 const ENV_SQRZL_MAX_REQUEST_BYTES: &str = "SQRZL_MAX_REQUEST_BYTES";
 const ENV_SQRZL_BUCKET_LIST: &str = "SQRZL_BUCKET_LIST";
 const ENV_SQRZL_LOG_FORMAT: &str = "SQRZL_LOG_FORMAT";
+const ENV_SQRZL_SMTP_PORT: &str = "SQRZL_SMTP_PORT";
 
 // Default values
 const DEFAULT_SQRZL_BLOBS_PATH: &str = "./blobs";
@@ -25,6 +26,9 @@ const DEFAULT_SQRZL_LIFECYCLE_HOURS: u64 = 1;
 const DEFAULT_SQRZL_API_PORT: u16 = 9000;
 const DEFAULT_SQRZL_UI_PORT: u16 = 9001;
 pub const DEFAULT_SQRZL_MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
+/// Default SMTP capture port. Not 25, since that requires elevated privileges
+/// on most hosts and this emulator targets local dev/CI, not a production MTA.
+pub const DEFAULT_SQRZL_SMTP_PORT: u16 = 2525;
 
 /// Logging format for tracing output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +60,8 @@ pub struct Config {
     pub ui_port: u16,
     /// Maximum accepted HTTP request body size before streaming support is added
     pub max_request_bytes: usize,
+    /// Port for the SMTP mail-capture server
+    pub smtp_port: u16,
 }
 
 impl Config {
@@ -84,6 +90,9 @@ impl Config {
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SQRZL_MAX_REQUEST_BYTES);
+        let smtp_port = lookup(ENV_SQRZL_SMTP_PORT)
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(DEFAULT_SQRZL_SMTP_PORT);
 
         let enforce_auth = access_key_id.is_some() && secret_access_key.is_some();
 
@@ -97,6 +106,7 @@ impl Config {
             api_port,
             ui_port,
             max_request_bytes,
+            smtp_port,
         }
     }
 
@@ -112,6 +122,7 @@ impl Config {
     /// - `SQRZL_ADMIN_AUTH_DISABLED`: Disable `/admin/v1` session auth even when provider auth is enabled
     /// - `SQRZL_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
     /// - `SQRZL_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)
+    /// - `SQRZL_SMTP_PORT`: Port for the SMTP mail-capture server (default: 2525)
     #[must_use]
     pub fn from_env() -> Self {
         Self::from_env_with(|name| env::var(name).ok())
@@ -230,6 +241,7 @@ mod tests {
         assert_eq!(config.api_port, DEFAULT_SQRZL_API_PORT);
         assert_eq!(config.ui_port, DEFAULT_SQRZL_UI_PORT);
         assert_eq!(config.max_request_bytes, DEFAULT_SQRZL_MAX_REQUEST_BYTES);
+        assert_eq!(config.smtp_port, DEFAULT_SQRZL_SMTP_PORT);
         assert!(startup_buckets.is_empty());
     }
 
@@ -245,6 +257,7 @@ mod tests {
             ENV_SQRZL_API_PORT => Some("9100".to_string()),
             ENV_SQRZL_UI_PORT => Some("9101".to_string()),
             ENV_SQRZL_MAX_REQUEST_BYTES => Some("1024".to_string()),
+            ENV_SQRZL_SMTP_PORT => Some("2626".to_string()),
             _ => None,
         });
 
@@ -258,6 +271,7 @@ mod tests {
         assert_eq!(config.api_port, 9100);
         assert_eq!(config.ui_port, 9101);
         assert_eq!(config.max_request_bytes, 1024);
+        assert_eq!(config.smtp_port, 2626);
         assert!(config.validate_credentials("test-key", "test-secret"));
         assert!(!config.validate_credentials("wrong-key", "test-secret"));
     }

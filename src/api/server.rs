@@ -1,8 +1,10 @@
 use crate::auth::{AdminLoginRequest, AdminSessionManager};
 use crate::body::{Body, RequestBody};
 use crate::error::{Error, Result};
+use crate::mail::MailStore;
 use crate::server::{serve_h1_connection, ResponseBuilder};
 use crate::services::{json_error_response, json_response};
+use crate::sms::{FilesystemSmsStore, SmsStore};
 use crate::storage::Storage;
 use http_body_util::BodyExt;
 use hyper::service::service_fn;
@@ -22,6 +24,22 @@ use tokio::fs as async_fs;
 pub async fn start_ui_server(
     storage: Arc<dyn Storage>,
     config: Arc<crate::Config>,
+    mail: Arc<dyn MailStore>,
+) -> crate::error::Result<()> {
+    let sms = Arc::new(FilesystemSmsStore::open(&config.blobs_path)?);
+    start_ui_server_with_sms(storage, config, mail, sms).await
+}
+
+/// Launches the UI server with an explicitly shared SMS store.
+///
+/// # Errors
+///
+/// Returns an error when session initialization, listener binding, or accepting fails.
+pub async fn start_ui_server_with_sms(
+    storage: Arc<dyn Storage>,
+    config: Arc<crate::Config>,
+    mail: Arc<dyn MailStore>,
+    sms: Arc<dyn SmsStore>,
 ) -> crate::error::Result<()> {
     let ui_port = config.ui_port;
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], ui_port));
@@ -38,15 +56,19 @@ pub async fn start_ui_server(
             .await
             .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
         let storage = storage.clone();
+        let mail = mail.clone();
+        let sms = sms.clone();
         let config = config.clone();
         let admin_session = admin_session.clone();
 
         tokio::spawn(async move {
             let service = service_fn(move |req| {
                 let storage = storage.clone();
+                let mail = mail.clone();
+                let sms = sms.clone();
                 let config = config.clone();
                 let admin_session = admin_session.clone();
-                handle_ui_request(storage, config, admin_session, req)
+                handle_ui_request(storage, mail, sms, config, admin_session, req)
             });
 
             if let Err(e) = serve_h1_connection(stream, service).await {
@@ -58,6 +80,8 @@ pub async fn start_ui_server(
 
 async fn handle_ui_request(
     storage: Arc<dyn Storage>,
+    mail: Arc<dyn MailStore>,
+    sms: Arc<dyn SmsStore>,
     config: Arc<crate::Config>,
     admin_session: Arc<AdminSessionManager>,
     req: Request<RequestBody>,
@@ -90,6 +114,34 @@ async fn handle_ui_request(
 
     if path == crate::auth::admin_session::ADMIN_SESSION_PATH {
         let resp = handle_admin_session(config.as_ref(), admin_session.as_ref(), &req);
+        return Ok(resp);
+    }
+
+    if path == crate::api::admin_mail::MAILBOXES_PATH_PREFIX
+        || path.starts_with(&format!(
+            "{}/",
+            crate::api::admin_mail::MAILBOXES_PATH_PREFIX
+        ))
+    {
+        if !admin_request_is_authorized(&req, &config, &admin_session) {
+            return Ok(admin_unauthorized_response());
+        }
+
+        let resp = match crate::api::admin_mail::handle_request(&mail, &req) {
+            Ok(resp) => resp,
+            Err(err) => crate::api::admin::error_response(&err),
+        };
+        return Ok(resp);
+    }
+
+    if crate::api::admin_text::matches_path(&path) {
+        if !admin_request_is_authorized(&req, &config, &admin_session) {
+            return Ok(admin_unauthorized_response());
+        }
+        let resp = match crate::api::admin_text::handle_request(&sms, req).await {
+            Ok(resp) => resp,
+            Err(err) => crate::api::admin::error_response(&err),
+        };
         return Ok(resp);
     }
 

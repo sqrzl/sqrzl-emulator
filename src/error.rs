@@ -55,6 +55,9 @@ pub enum Error {
 
     #[error("Signature does not match")]
     SignatureDoesNotMatch,
+
+    #[error("Message not found")]
+    MessageNotFound,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -70,7 +73,8 @@ impl Error {
             | Error::InvalidUploadId
             | Error::NoSuchUpload
             | Error::NoSuchVersion
-            | Error::NoSuchLifecycleConfiguration => http::StatusCode::NOT_FOUND,
+            | Error::NoSuchLifecycleConfiguration
+            | Error::MessageNotFound => http::StatusCode::NOT_FOUND,
             Error::InvalidRequest(_)
             | Error::InvalidPartNumber
             | Error::InvalidPartOrder
@@ -101,6 +105,7 @@ impl Error {
             Error::NoSuchLifecycleConfiguration => "NoSuchLifecycleConfiguration",
             Error::InvalidPolicy(_) => "MalformedPolicy",
             Error::SignatureDoesNotMatch => "SignatureDoesNotMatch",
+            Error::MessageNotFound => "MessageNotFound",
             Error::InternalError(_) => "InternalError",
         }
     }

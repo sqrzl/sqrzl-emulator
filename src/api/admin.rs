@@ -9,8 +9,9 @@ use serde::{de::DeserializeOwned, Deserialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod dto;
-mod pagination;
+pub(crate) mod dto;
+pub(crate) mod mail_dto;
+pub(crate) mod pagination;
 mod route;
 
 use dto::{
@@ -333,7 +334,7 @@ fn delete_bucket_lifecycle(storage: &Arc<dyn Storage>, bucket: &str) -> Result<R
 }
 
 fn list_objects(storage: &Arc<dyn Storage>, bucket: &str, query: &str) -> Result<Response<Body>> {
-    let page = parse_object_page_params(query)?;
+    let page = parse_object_page_params(query, PageTokenKind::Objects)?;
     if page.search.is_some() {
         let (items, next) = list_matching_objects(storage, bucket, &page)?;
         return Ok(json_response(

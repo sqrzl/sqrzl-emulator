@@ -12,7 +12,12 @@ import {
 } from '@askrjs/themes/components';
 import { ThemeToggle } from '@askrjs/themes/theme';
 import { isDevAuthBypassed } from '../../features/auth/admin-session';
-import { adminBucketsPath, logoutPath } from '../../shared/routes';
+import {
+  adminBucketsPath,
+  adminMailboxesPath,
+  adminTextsPath,
+  logoutPath,
+} from '../../shared/routes';
 
 export default function AppLayout({ children }: { children?: unknown }) {
   const showLogout = !isDevAuthBypassed();
@@ -25,6 +30,11 @@ export default function AppLayout({ children }: { children?: unknown }) {
             <NavBrand>
               <Link href={adminBucketsPath()}>Sqrzl</Link>
             </NavBrand>
+            <NavGroup>
+              <NavLink href={adminBucketsPath()} match="prefix">Buckets</NavLink>
+              <NavLink href={adminMailboxesPath()} match="prefix">Mailboxes</NavLink>
+              <NavLink href={adminTextsPath()} match="prefix">Texts</NavLink>
+            </NavGroup>
             <NavGroup align="end">
               <ThemeToggle
                 aria-label="Toggle theme"

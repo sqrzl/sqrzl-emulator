@@ -2,7 +2,8 @@ use crate::error::{Error, Result};
 use crate::models::{policy::Acl, Bucket, MultipartUpload, Object};
 use crate::storage::{
     AclStore, BucketStore, DirectoryEntryKind, LifecycleStore, LockFreeIndex, MultipartStore,
-    ObjectListingStore, ObjectStore, PolicyStore, ProviderStateStore, TagStore, VersionStore,
+    ObjectCondition, ObjectListingStore, ObjectStore, PolicyStore, ProviderStateStore, TagStore,
+    VersionStore,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -128,24 +129,31 @@ impl BucketStore for FilesystemStorage {
     }
 }
 
-impl ObjectStore for FilesystemStorage {
-    fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
-        let object_lock = self.object_lock(bucket, &key)?;
-        let _guard = object_lock
-            .lock()
-            .map_err(|_| Error::InternalError("Failed to lock object for write".to_string()))?;
-        let bucket_dir = self.bucket_dir(bucket);
+impl FilesystemStorage {
+    fn object_condition_matches(
+        &self,
+        bucket: &str,
+        key: &str,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        match (condition, self.get_object(bucket, key)) {
+            (ObjectCondition::Missing, Err(Error::KeyNotFound)) => Ok(true),
+            (ObjectCondition::Missing, Ok(_)) | (_, Err(Error::KeyNotFound)) => Ok(false),
+            (ObjectCondition::Etag(expected), Ok(object)) => Ok(object.etag == *expected),
+            (ObjectCondition::Metadata { key, value }, Ok(object)) => {
+                Ok(object.metadata.get(key) == Some(value))
+            }
+            (_, Err(error)) => Err(error),
+        }
+    }
 
-        if !bucket_dir.exists() {
+    fn put_object_locked(&self, bucket: &str, key: &str, mut object: Object) -> Result<()> {
+        if !self.bucket_dir(bucket).exists() {
             return Err(Error::BucketNotFound);
         }
-
-        let object_id = Self::compute_object_id(bucket, &key);
-
-        let mut object = object;
-
+        let object_id = Self::compute_object_id(bucket, key);
         if self.versioning_enabled(bucket) {
-            match self.get_object(bucket, &key) {
+            match self.get_object(bucket, key) {
                 Ok(current_object) => {
                     let snapshot_version_id = current_object
                         .version_id
@@ -159,20 +167,69 @@ impl ObjectStore for FilesystemStorage {
                     )?;
                 }
                 Err(Error::KeyNotFound) => {}
-                Err(e) => return Err(e),
+                Err(error) => return Err(error),
             }
-
             object.version_id = Some(Uuid::new_v4().to_string());
         } else {
             object.version_id = None;
         }
-
         self.write_object_files(bucket, &object_id, &object)?;
-
-        // Update index
-        self.index.insert(bucket, &key);
-
+        self.index.insert(bucket, key);
         Ok(())
+    }
+
+    fn delete_object_locked(&self, bucket: &str, key: &str) -> Result<()> {
+        let object_id = Self::compute_object_id(bucket, key);
+        let object_id_dir = self.object_id_dir(bucket, &object_id);
+        self.get_object(bucket, key)?;
+        if self.versioning_enabled(bucket) {
+            let object_data_path = self.object_data_path(bucket, &object_id);
+            let metadata_path = self.object_metadata_path(bucket, &object_id);
+            if object_data_path.exists() {
+                fs::remove_file(&object_data_path)
+                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
+            }
+            if metadata_path.exists() {
+                fs::remove_file(&metadata_path)
+                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
+            }
+            if !self.version_entries_exist(bucket, &object_id)? {
+                let _ = fs::remove_dir_all(&object_id_dir);
+            }
+        } else {
+            fs::remove_dir_all(&object_id_dir)
+                .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
+        }
+        self.index.remove(bucket, key);
+        Ok(())
+    }
+}
+
+impl ObjectStore for FilesystemStorage {
+    fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
+        let object_lock = self.object_lock(bucket, &key)?;
+        let _guard = object_lock
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock object for write".to_string()))?;
+        self.put_object_locked(bucket, &key, object)
+    }
+
+    fn put_object_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        let object_lock = self.object_lock(bucket, &key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for conditional write".to_string())
+        })?;
+        if !self.object_condition_matches(bucket, &key, condition)? {
+            return Ok(false);
+        }
+        self.put_object_locked(bucket, &key, object)?;
+        Ok(true)
     }
 
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
@@ -244,38 +301,24 @@ impl ObjectStore for FilesystemStorage {
         let _guard = object_lock
             .lock()
             .map_err(|_| Error::InternalError("Failed to lock object for delete".to_string()))?;
-        let object_id = Self::compute_object_id(bucket, key);
-        let object_id_dir = self.object_id_dir(bucket, &object_id);
+        self.delete_object_locked(bucket, key)
+    }
 
-        self.get_object(bucket, key)?;
-
-        if self.versioning_enabled(bucket) {
-            let object_data_path = self.object_data_path(bucket, &object_id);
-            let metadata_path = self.object_metadata_path(bucket, &object_id);
-
-            if object_data_path.exists() {
-                fs::remove_file(&object_data_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
-            }
-
-            if metadata_path.exists() {
-                fs::remove_file(&metadata_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
-            }
-
-            if !self.version_entries_exist(bucket, &object_id)? {
-                let _ = fs::remove_dir_all(&object_id_dir);
-            }
-        } else {
-            // Remove entire object_id directory
-            fs::remove_dir_all(&object_id_dir)
-                .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
+    fn delete_object_if(
+        &self,
+        bucket: &str,
+        key: &str,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for conditional delete".to_string())
+        })?;
+        if !self.object_condition_matches(bucket, key, condition)? {
+            return Ok(false);
         }
-
-        // Update index
-        self.index.remove(bucket, key);
-
-        Ok(())
+        self.delete_object_locked(bucket, key)?;
+        Ok(true)
     }
 
     fn update_object_storage_class(
@@ -1703,6 +1746,85 @@ mod tests {
         let payload = String::from_utf8(stored.data).unwrap();
         assert!(payload.starts_with("payload-"));
         assert_eq!(stored.size, payload.len() as u64);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_serialize_conditional_write_races() {
+        // Arrange
+        // Act
+        // Assert
+        use std::sync::Barrier;
+        use std::thread;
+
+        let base = temp_path();
+        let storage = Arc::new(FilesystemStorage::new(&base));
+        storage.create_bucket("conditional".to_string()).unwrap();
+
+        let barrier = Arc::new(Barrier::new(8));
+        let handles = (0..8)
+            .map(|index| {
+                let storage = storage.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    storage
+                        .put_object_if(
+                            "conditional",
+                            "lease".to_string(),
+                            Object::new(
+                                "lease".to_string(),
+                                format!("create-{index}").into_bytes(),
+                                "text/plain".to_string(),
+                            ),
+                            &ObjectCondition::Missing,
+                        )
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|won| *won)
+                .count(),
+            1
+        );
+
+        let observed = storage.get_object("conditional", "lease").unwrap().etag;
+        let barrier = Arc::new(Barrier::new(8));
+        let handles = (0..8)
+            .map(|index| {
+                let storage = storage.clone();
+                let barrier = barrier.clone();
+                let observed = observed.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    storage
+                        .put_object_if(
+                            "conditional",
+                            "lease".to_string(),
+                            Object::new(
+                                "lease".to_string(),
+                                format!("update-{index}").into_bytes(),
+                                "text/plain".to_string(),
+                            ),
+                            &ObjectCondition::Etag(observed),
+                        )
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|won| *won)
+                .count(),
+            1
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
