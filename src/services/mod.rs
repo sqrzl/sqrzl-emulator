@@ -17,11 +17,13 @@ pub fn xml_error_response(
     message: &str,
     req_id: &str,
 ) -> Response<Body> {
-    let xml = xml_utils::error_xml(error_code, message, req_id);
+    let host_id = header_utils::generate_request_id();
+    let xml = xml_utils::error_xml_with_host_id(error_code, message, req_id, &host_id);
 
     ResponseBuilder::new(status)
         .content_type("application/xml; charset=utf-8")
         .header("x-amz-request-id", req_id)
+        .header("x-amz-id-2", &host_id)
         .body(xml.into_bytes())
         .build()
 }
@@ -95,11 +97,19 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(response.headers().get("x-amz-request-id").unwrap(), "req-1");
+        let host_id = response
+            .headers()
+            .get("x-amz-id-2")
+            .and_then(|value| value.to_str().ok())
+            .expect("S3 error host ID should exist")
+            .to_string();
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("<Code>NoSuchBucket</Code>"));
         assert!(body.contains("<Message>Bucket not found</Message>"));
+        assert!(body.contains("<RequestId>req-1</RequestId>"));
+        assert!(body.contains(&format!("<HostId>{host_id}</HostId>")));
     }
 
     #[tokio::test]

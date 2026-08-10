@@ -163,6 +163,17 @@ impl ObjectStore for IndexedStorage {
         Ok(written)
     }
 
+    fn replace_object_metadata_if_unchanged(
+        &self,
+        bucket: &str,
+        key: &str,
+        observed: &Object,
+        updated: &Object,
+    ) -> Result<bool> {
+        self.inner
+            .replace_object_metadata_if_unchanged(bucket, key, observed, updated)
+    }
+
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
         self.inner.get_object(bucket, key)
     }

@@ -141,12 +141,15 @@ async fn should_capture_sendgrid_send_and_fan_out_recipients() {
             "to": [{"email": "alice@example.com"}, {"email": "bob@example.com"}],
             "cc": [{"email": "carol@example.com"}],
             "subject": "sendgrid blackbox",
+            "headers": {"x-trace": "personalized"},
         }, {
             "to": [{"email": "dave@example.com"}],
             "subject": "sendgrid personalized blackbox",
         }],
         "from": {"email": "no-reply@example.com", "name": "Email Emulator"},
+        "reply_to_list": [{"email": "support@example.com", "name": "Support"}],
         "subject": "sendgrid blackbox",
+        "headers": {"X-Trace": "global", "X-Request": "qualification"},
         "content": [
             {"type": "text/plain", "value": "hello from sendgrid"},
             {"type": "text/html", "value": "<p>hello from sendgrid</p>"},
@@ -155,16 +158,18 @@ async fn should_capture_sendgrid_send_and_fan_out_recipients() {
             "filename": "notes.txt",
             "type": "text/plain",
             "content": BASE64.encode("hello"),
+            "disposition": "inline",
+            "content_id": "notes",
         }],
     });
 
-    let request = request(
+    let send_request = request(
         "POST",
         "http://localhost/v3/mail/send",
         &[("content-type", "application/json")],
         payload.to_string().as_bytes(),
     );
-    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), request).await;
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), send_request).await;
 
     assert_eq!(response.status(), hyper::StatusCode::ACCEPTED);
     assert!(response.headers().contains_key("x-message-id"));
@@ -200,9 +205,97 @@ async fn should_capture_sendgrid_send_and_fan_out_recipients() {
     );
     assert_eq!(alice.messages[0].message.attachments.len(), 1);
     assert_eq!(
+        alice.messages[0].message.reply_to[0].email,
+        "support@example.com"
+    );
+    assert_eq!(alice.messages[0].message.headers["x-trace"], "personalized");
+    assert_eq!(
+        alice.messages[0].message.headers["X-Request"],
+        "qualification"
+    );
+    assert_eq!(
+        alice.messages[0].message.attachments[0]
+            .disposition
+            .as_deref(),
+        Some("inline")
+    );
+    assert_eq!(
+        alice.messages[0].message.attachments[0]
+            .content_id
+            .as_deref(),
+        Some("notes")
+    );
+    assert_eq!(
         dave.messages[0].message.subject,
         "sendgrid personalized blackbox"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_reject_unsupported_mail_shapes_before_capture() {
+    let mail = temp_mail();
+    let adapters = MailAdapterRegistry::default();
+
+    let sendgrid = request(
+        "POST",
+        "http://localhost/v3/mail/send",
+        &[("content-type", "application/json")],
+        br#"{"personalizations":[{"to":[{"email":"alice@example.com"}],"subject":"bad attachment"}],"from":{"email":"sender@example.com"},"content":[{"type":"text/plain","value":"hello"}],"attachments":[{"filename":"bad.bin","content":"%%%"}]}"#,
+    );
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), sendgrid).await;
+    assert_eq!(response.status(), hyper::StatusCode::BAD_REQUEST);
+
+    let duplicate_sendgrid = request(
+        "POST",
+        "http://localhost/v3/mail/send",
+        &[("content-type", "application/json")],
+        br#"{"personalizations":[{"to":[{"email":"alice@example.com"}]},{"to":[{"email":"ALICE@example.com"}]}],"from":{"email":"sender@example.com"},"subject":"duplicate","content":[{"type":"text/plain","value":"hello"}]}"#,
+    );
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), duplicate_sendgrid).await;
+    assert_eq!(response.status(), hyper::StatusCode::BAD_REQUEST);
+
+    let ses = request(
+        "POST",
+        "http://localhost/v2/email/outbound-emails",
+        &[("content-type", "application/json")],
+        br#"{"FromEmailAddress":"sender@example.com","Destination":{"ToAddresses":["alice@example.com"]},"Content":{"Raw":{"Data":"aGVsbG8="}}}"#,
+    );
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), ses).await;
+    assert_eq!(response.status(), hyper::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers()["x-amzn-errortype"],
+        "BadRequestException"
+    );
+
+    let reserved_ses_header = request(
+        "POST",
+        "http://localhost/v2/email/outbound-emails",
+        &[("content-type", "application/json")],
+        br#"{"FromEmailAddress":"sender@example.com","Destination":{"ToAddresses":["alice@example.com"]},"Content":{"Simple":{"Subject":{"Data":"reserved"},"Body":{"Text":{"Data":"hello"}},"Headers":[{"Name":"Subject","Value":"override"}]}}}"#,
+    );
+    let response = call_adapter(
+        &adapters,
+        mail.clone(),
+        auth_disabled(),
+        reserved_ses_header,
+    )
+    .await;
+    assert_eq!(response.status(), hyper::StatusCode::BAD_REQUEST);
+
+    let acs = request(
+        "POST",
+        "http://localhost/emails:send?api-version=2025-09-01",
+        &[("content-type", "application/json")],
+        br#"{"senderAddress":"sender@example.com","recipients":{"to":[{"address":"alice@example.com"}]},"content":{"subject":"bad attachment","plainText":"hello"},"attachments":[{"name":"bad.bin","contentType":"application/octet-stream","contentInBase64":"%%%"}]}"#,
+    );
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), acs).await;
+    assert_eq!(response.status(), hyper::StatusCode::BAD_REQUEST);
+
+    assert!(mail
+        .list_messages("alice@example.com", ListMessagesParams::default())
+        .unwrap()
+        .messages
+        .is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -212,29 +305,33 @@ async fn should_capture_acs_send_with_recipients_and_attachments() {
     let payload = serde_json::json!({
         "senderAddress": "sender@example.com",
         "recipients": {
-            "to": ["alice@example.com"],
-            "cc": ["bob@example.com"],
-            "bcc": ["carol@example.com"],
+            "to": [{"address": "alice@example.com"}],
+            "cc": [{"address": "bob@example.com"}],
+            "bcc": [{"address": "carol@example.com"}],
         },
-        "subject": "acs blackbox",
         "content": {
-            "text": "hello from acs",
+            "subject": "acs blackbox",
+            "plainText": "hello from acs",
             "html": "<p>hello from acs</p>",
         },
         "attachments": [{
             "name": "inline.txt",
             "contentType": "text/plain",
-            "content": BASE64.encode("hello"),
+            "contentInBase64": BASE64.encode("hello"),
+            "contentId": "inline-note",
         }],
+        "headers": {"X-Request": "qualification"},
+        "replyTo": [{"address": "support@example.com", "displayName": "Support"}],
+        "userEngagementTrackingDisabled": true,
     });
 
-    let request = request(
+    let send_request = request(
         "POST",
         "http://localhost/emails:send?api-version=2023-03-01",
         &[("content-type", "application/json")],
         payload.to_string().as_bytes(),
     );
-    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), request).await;
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), send_request).await;
 
     assert_eq!(response.status(), hyper::StatusCode::ACCEPTED);
     assert!(response.headers().contains_key("operation-location"));
@@ -265,6 +362,40 @@ async fn should_capture_acs_send_with_recipients_and_attachments() {
         Some("<p>hello from acs</p>".into())
     );
     assert_eq!(alice.messages[0].message.attachments.len(), 1);
+    assert_eq!(
+        alice.messages[0].message.headers["X-Request"],
+        "qualification"
+    );
+    assert_eq!(
+        alice.messages[0].message.reply_to[0].email,
+        "support@example.com"
+    );
+    assert_eq!(
+        alice.messages[0].message.user_engagement_tracking_disabled,
+        Some(true)
+    );
+    assert_eq!(
+        alice.messages[0].message.attachments[0]
+            .content_id
+            .as_deref(),
+        Some("inline-note")
+    );
+
+    let bcc_only = request(
+        "POST",
+        "http://localhost/emails:send?api-version=2025-09-01",
+        &[("content-type", "application/json")],
+        br#"{"senderAddress":"sender@example.com","recipients":{"bcc":[{"address":"dave@example.com"}]},"content":{"subject":"bcc only","plainText":"accepted"}}"#,
+    );
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), bcc_only).await;
+    assert_eq!(response.status(), hyper::StatusCode::ACCEPTED);
+    assert_eq!(
+        mail.list_messages("dave@example.com", ListMessagesParams::default())
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -273,17 +404,19 @@ async fn should_capture_ses_send_with_signature_authorization() {
     let adapters = MailAdapterRegistry::default();
 
     let payload = serde_json::json!({
-        "FromEmailAddress": "sender@example.com",
+        "FromEmailAddress": "\"Sqrzl Sender\" <sender@example.com>",
         "Destination": {
             "ToAddresses": ["alice@example.com", "bob@example.com"],
             "CcAddresses": ["carol@example.com"],
         },
+        "ReplyToAddresses": ["Support <support@example.com>"],
         "Content": {
             "Simple": {
-                "Subject": {"Data": "ses blackbox"},
+                "Subject": {"Data": "ses blackbox", "Charset": "UTF-8"},
                 "Body": {
-                    "Text": {"Data": "hello from ses"},
+                    "Text": {"Data": "hello from ses", "Charset": "UTF-8"},
                 },
+                "Headers": [{"Name": "X-Request", "Value": "qualification"}],
             }
         },
     });
@@ -319,9 +452,107 @@ async fn should_capture_ses_send_with_signature_authorization() {
     assert_eq!(carol.messages.len(), 1);
     assert_eq!(alice.messages[0].message.subject, "ses blackbox");
     assert_eq!(
+        alice.messages[0].message.from.name.as_deref(),
+        Some("Sqrzl Sender")
+    );
+    assert_eq!(
+        alice.messages[0].message.reply_to[0].email,
+        "support@example.com"
+    );
+    assert_eq!(
+        alice.messages[0].message.headers["X-Request"],
+        "qualification"
+    );
+    assert_eq!(
+        alice.messages[0].message.provider_metadata["subject_charset"],
+        "UTF-8"
+    );
+    assert_eq!(
+        alice.messages[0].message.provider_metadata["text_charset"],
+        "UTF-8"
+    );
+    assert_eq!(
         alice.messages[0].message.body_text,
         Some("hello from ses".into())
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_apply_acs_email_repeatability_without_overwriting_or_duplicate_capture() {
+    let mail = temp_mail();
+    let adapters = MailAdapterRegistry::default();
+    let request_id = "fda6d242-46aa-4247-8bf6-619a1206f9c3";
+    let operation_id = "8540c0de-899f-5cce-acb5-3ec493af3800";
+    let first_sent = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let original = br#"{"senderAddress":"sender@example.com","recipients":{"to":[{"address":"alice@example.com"}]},"content":{"subject":"repeatable","plainText":"hello"}}"#;
+
+    let mut accepted_ids = Vec::new();
+    for _ in 0..2 {
+        let repeat = request(
+            "POST",
+            "http://localhost/emails:send?api-version=2025-09-01",
+            &[
+                ("content-type", "application/json"),
+                ("operation-id", operation_id),
+                ("repeatability-request-id", request_id),
+                ("repeatability-first-sent", &first_sent),
+            ],
+            original,
+        );
+        let response = call_adapter(&adapters, mail.clone(), auth_disabled(), repeat).await;
+        assert_eq!(response.status(), hyper::StatusCode::ACCEPTED);
+        let payload: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+        accepted_ids.push(payload["id"].as_str().unwrap().to_string());
+    }
+    assert_eq!(accepted_ids, [operation_id, operation_id]);
+    assert_eq!(
+        mail.list_messages("alice@example.com", ListMessagesParams::default())
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+
+    let changed = request(
+        "POST",
+        "http://localhost/emails:send?api-version=2025-09-01",
+        &[
+            ("content-type", "application/json"),
+            ("operation-id", operation_id),
+            ("repeatability-request-id", request_id),
+            ("repeatability-first-sent", &first_sent),
+        ],
+        br#"{"senderAddress":"sender@example.com","recipients":{"to":[{"address":"alice@example.com"}]},"content":{"subject":"changed","plainText":"hello"}}"#,
+    );
+    let response = call_adapter(&adapters, mail.clone(), auth_disabled(), changed).await;
+    assert_eq!(response.status(), hyper::StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["x-ms-error-code"], "InvalidRequest");
+    assert_eq!(
+        mail.list_messages("alice@example.com", ListMessagesParams::default())
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+
+    let stale = request(
+        "POST",
+        "http://localhost/emails:send?api-version=2025-09-01",
+        &[
+            ("content-type", "application/json"),
+            (
+                "repeatability-request-id",
+                "58b62dc6-f646-4d6c-bb99-cd6df75108fe",
+            ),
+            ("repeatability-first-sent", "Mon, 01 Apr 2019 06:22:03 GMT"),
+        ],
+        original,
+    );
+    let response = call_adapter(&adapters, mail, auth_disabled(), stale).await;
+    assert_eq!(response.status(), hyper::StatusCode::PRECONDITION_FAILED);
+    assert_eq!(response.headers()["x-ms-error-code"], "PreconditionFailed");
 }
 
 fn uri_encode(value: &str, encode_slash: bool) -> String {
@@ -442,9 +673,9 @@ fn signature_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u
 
 fn sign_signature(secret: &str, canonical_request: &str, date: &str, amz_date: &str) -> String {
     type HmacSha256 = Hmac<Sha256>;
-    let key = signature_key(secret, date, "us-east-1", "s3");
+    let key = signature_key(secret, date, "us-east-1", "ses");
     let string_to_sign = format!(
-        "AWS4-HMAC-SHA256\n{amz_date}\n{date}/us-east-1/s3/aws4_request\n{}",
+        "AWS4-HMAC-SHA256\n{amz_date}\n{date}/us-east-1/ses/aws4_request\n{}",
         sha256_hex(canonical_request.as_bytes())
     );
     let mut mac = HmacSha256::new_from_slice(&key).expect("signature key should be valid");
@@ -462,7 +693,7 @@ async fn signed_ses_request(
     let canonical = canonical_request(&body, &signed_headers).await;
     let signature = sign_signature(secret_key, &canonical, "20260101", "20260101T120000Z");
     let auth_header = format!(
-        "AWS4-HMAC-SHA256 Credential={access_key}/20260101/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}"
+        "AWS4-HMAC-SHA256 Credential={access_key}/20260101/us-east-1/ses/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}"
     );
 
     request(

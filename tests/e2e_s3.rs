@@ -5,6 +5,7 @@ use common::e2e::{auth_disabled, auth_enabled, text_body, LiveServer};
 use http_body_util::Full;
 type Body = Full<Bytes>;
 use hyper::{Request, StatusCode};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn should_report_health_given_live_server_when_using_api_port() {
@@ -101,4 +102,116 @@ async fn should_reject_oversized_upload_given_live_server_when_max_request_bytes
     let body = text_body(response).await;
     assert!(body.contains("EntityTooLarge"));
     assert!(body.contains("SQRZL_MAX_REQUEST_BYTES"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_not_commit_truncated_s3_request_body_over_tcp() {
+    // Arrange
+    let server = LiveServer::start_s3(auth_disabled()).await;
+    let create_bucket = Request::builder()
+        .method("PUT")
+        .uri(format!("{}/truncated-s3", server.base_url))
+        .body(Body::default())
+        .unwrap();
+    assert_eq!(server.request(create_bucket).await.status(), StatusCode::OK);
+    let address = server.base_url.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+
+    // Act
+    stream
+        .write_all(
+            b"PUT /truncated-s3/object HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nabc",
+        )
+        .await
+        .unwrap();
+    stream.shutdown().await.unwrap();
+    let mut raw_response = Vec::new();
+    stream.read_to_end(&mut raw_response).await.unwrap();
+    let head = Request::builder()
+        .method("HEAD")
+        .uri(format!("{}/truncated-s3/object", server.base_url))
+        .body(Body::default())
+        .unwrap();
+
+    // Assert
+    assert!(!String::from_utf8_lossy(&raw_response).contains(" 200 "));
+    assert_eq!(server.request(head).await.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_commit_s3_mutation_before_losing_response_over_tcp() {
+    // Arrange
+    let server = LiveServer::start_s3(auth_disabled()).await;
+    let create_bucket = Request::builder()
+        .method("PUT")
+        .uri(format!("{}/ambiguous-s3", server.base_url))
+        .body(Body::default())
+        .unwrap();
+    assert_eq!(server.request(create_bucket).await.status(), StatusCode::OK);
+    let address = server.base_url.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+
+    // Act
+    stream
+        .write_all(
+            b"PUT /ambiguous-s3/object HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nx-sqrzl-failpoint: response-loss-after-commit\r\nConnection: close\r\n\r\nvalue",
+        )
+        .await
+        .unwrap();
+    let mut raw_response = Vec::new();
+    stream.read_to_end(&mut raw_response).await.unwrap();
+    let get = Request::builder()
+        .method("GET")
+        .uri(format!("{}/ambiguous-s3/object", server.base_url))
+        .body(Body::default())
+        .unwrap();
+
+    // Assert
+    let raw_response = String::from_utf8_lossy(&raw_response);
+    assert!(!raw_response.contains(" 200 "));
+    let fetched = server.request(get).await;
+    assert_eq!(fetched.status(), StatusCode::OK);
+    assert_eq!(text_body(fetched).await, "value");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_lose_no_content_delete_response_after_commit_over_tcp() {
+    // Arrange
+    let server = LiveServer::start_s3(auth_disabled()).await;
+    let create_bucket = Request::builder()
+        .method("PUT")
+        .uri(format!("{}/ambiguous-delete-s3", server.base_url))
+        .body(Body::default())
+        .unwrap();
+    assert_eq!(server.request(create_bucket).await.status(), StatusCode::OK);
+    let put = Request::builder()
+        .method("PUT")
+        .uri(format!("{}/ambiguous-delete-s3/object", server.base_url))
+        .body(Body::from("value"))
+        .unwrap();
+    assert_eq!(server.request(put).await.status(), StatusCode::OK);
+    let address = server.base_url.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+
+    // Act
+    stream
+        .write_all(
+            b"DELETE /ambiguous-delete-s3/object HTTP/1.1\r\nHost: localhost\r\nx-sqrzl-failpoint: response-loss-after-commit\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut raw_response = Vec::new();
+    stream.read_to_end(&mut raw_response).await.unwrap();
+    let head = Request::builder()
+        .method("HEAD")
+        .uri(format!("{}/ambiguous-delete-s3/object", server.base_url))
+        .body(Body::default())
+        .unwrap();
+
+    // Assert
+    assert!(
+        raw_response.is_empty(),
+        "response-loss must close before serializing a clean 204 response"
+    );
+    assert_eq!(server.request(head).await.status(), StatusCode::NOT_FOUND);
 }

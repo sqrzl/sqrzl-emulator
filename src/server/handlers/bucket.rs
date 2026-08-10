@@ -1,15 +1,19 @@
 use super::acl;
 use super::auth::check_authorization;
 use super::cors;
-use super::ResponseBuilder;
+use super::{
+    foreign_data_protection_mode_active, s3_foreign_history_conflict,
+    s3_foreign_history_conflict_response, ResponseBuilder,
+};
 use crate::auth::AuthConfig;
 use crate::body::Body;
 use crate::services::{
     bucket as bucket_service, object as object_service, storage_error_response, xml_error_response,
     xml_success_response,
 };
-use crate::storage::Storage;
+use crate::storage::{ObjectCondition, Storage};
 use crate::utils::{headers as header_utils, validation, xml as xml_utils};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use http::StatusCode;
 use hyper::Response;
 use std::fmt::Write as _;
@@ -21,7 +25,8 @@ mod put;
 
 use self::helpers::{
     apply_bucket_cors_headers, bucket_cors_snapshot, escape_xml_str, parse_delete_keys,
-    parse_multipart_form_upload, with_bucket_metadata, S3_CORS_XML_KEY, S3_WEBSITE_XML_KEY,
+    parse_multipart_form_upload, with_bucket_metadata, DeleteObjectEntry, S3_CORS_XML_KEY,
+    S3_WEBSITE_XML_KEY,
 };
 pub use get::bucket_get_or_list_objects;
 pub use put::bucket_put;
@@ -169,6 +174,9 @@ pub async fn bucket_delete(
             &req_id,
         ))
     } else {
+        if s3_foreign_history_conflict(storage.as_ref(), bucket) {
+            return Ok(s3_foreign_history_conflict_response(&req_id));
+        }
         tokio::task::block_in_place(|| bucket_service::delete_bucket(storage.as_ref(), bucket))?;
         Ok(apply_bucket_cors_headers(
             storage.as_ref(),
@@ -231,16 +239,12 @@ pub async fn bucket_post(
         );
     }
 
-    let xml = xml_utils::error_xml(
+    Ok(xml_error_response(
+        StatusCode::NOT_IMPLEMENTED,
         "NotImplemented",
         "Bucket POST operations not yet implemented",
         &req_id,
-    );
-    Ok(ResponseBuilder::new(StatusCode::NOT_IMPLEMENTED)
-        .content_type("application/xml; charset=utf-8")
-        .header("x-amz-request-id", &req_id)
-        .body(xml.into_bytes())
-        .build())
+    ))
 }
 
 fn bucket_post_multi_object_delete(
@@ -251,52 +255,37 @@ fn bucket_post_multi_object_delete(
     req_id: &str,
 ) -> Result<Response<Body>, String> {
     if !tokio::task::block_in_place(|| bucket_service::bucket_exists(storage.as_ref(), bucket))? {
-        let xml = xml_utils::error_xml("NoSuchBucket", "Bucket not found", req_id);
-        return Ok(ResponseBuilder::new(StatusCode::NOT_FOUND)
-            .content_type("application/xml; charset=utf-8")
-            .header("x-amz-request-id", req_id)
-            .body(xml.into_bytes())
-            .build());
+        return Ok(xml_error_response(
+            StatusCode::NOT_FOUND,
+            "NoSuchBucket",
+            "Bucket not found",
+            req_id,
+        ));
     }
 
-    let body_str =
-        String::from_utf8(req.body.to_vec()).map_err(|e| format!("Invalid UTF-8 body: {e}"))?;
-    let objects = parse_delete_keys(&body_str);
-
-    for (key, _) in &objects {
-        if let Err(response) = check_authorization(
-            req,
-            auth_config,
-            storage,
-            bucket,
-            Some(key.as_str()),
-            "s3:DeleteObject",
-        ) {
-            return Ok(response);
-        }
+    let objects = match multi_delete_request_objects(req, req_id) {
+        Ok(objects) => objects,
+        Err(response) => return Ok(*response),
+    };
+    if let Some(response) =
+        multi_delete_authorization_error(storage, auth_config, bucket, req, &objects)
+    {
+        return Ok(response);
     }
 
-    for (key, version) in &objects {
-        let _ = tokio::task::block_in_place(|| {
-            if let Some(v) = version {
-                object_service::delete_object_version(storage.as_ref(), bucket, key, v)
-            } else {
-                object_service::delete_object(storage.as_ref(), bucket, key)
-            }
-        });
+    if s3_foreign_history_conflict(storage.as_ref(), bucket) {
+        return Ok(s3_foreign_history_conflict_response(req_id));
     }
 
-    let mut resp_xml = xml_utils::xml_declaration();
-    resp_xml.push_str("<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
-    for (key, version) in objects {
-        resp_xml.push_str("<Deleted>");
-        let _ = write!(resp_xml, "<Key>{}</Key>", escape_xml_str(&key));
-        if let Some(v) = version {
-            let _ = write!(resp_xml, "<VersionId>{}</VersionId>", escape_xml_str(&v));
-        }
-        resp_xml.push_str("</Deleted>");
-    }
-    resp_xml.push_str("</DeleteResult>");
+    let outcomes = objects
+        .into_iter()
+        .map(|(key, version, etag)| {
+            let result =
+                multi_delete_object(storage, bucket, &key, version.as_deref(), etag.as_deref());
+            (key, version, result.err())
+        })
+        .collect::<Vec<_>>();
+    let resp_xml = multi_delete_result_xml(outcomes);
 
     Ok(apply_bucket_cors_headers(
         storage.as_ref(),
@@ -310,6 +299,244 @@ fn bucket_post_multi_object_delete(
         None,
     )
     .build())
+}
+
+fn multi_delete_request_objects(
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Result<Vec<DeleteObjectEntry>, Box<Response<Body>>> {
+    let Some(content_md5) = req.header("content-md5") else {
+        return Err(Box::new(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "MissingContentMD5",
+            "The Content-MD5 header is required for DeleteObjects requests.",
+            req_id,
+        )));
+    };
+    let Ok(supplied_md5) = BASE64.decode(content_md5) else {
+        return Err(Box::new(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidDigest",
+            "The Content-MD5 value is not a valid MD5 digest.",
+            req_id,
+        )));
+    };
+    if supplied_md5.len() != 16 {
+        return Err(Box::new(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidDigest",
+            "The Content-MD5 value is not a valid MD5 digest.",
+            req_id,
+        )));
+    }
+    if supplied_md5.as_slice() != md5::compute(&req.body).0 {
+        return Err(Box::new(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "BadDigest",
+            "The Content-MD5 value does not match the request body.",
+            req_id,
+        )));
+    }
+
+    String::from_utf8(req.body.to_vec())
+        .map_err(|error| error.to_string())
+        .and_then(|body| parse_delete_keys(&body))
+        .map_err(|message| {
+            Box::new(xml_error_response(
+                StatusCode::OK,
+                "MalformedXML",
+                &message,
+                req_id,
+            ))
+        })
+}
+
+fn multi_delete_authorization_error(
+    storage: &Arc<dyn Storage>,
+    auth_config: &Arc<AuthConfig>,
+    bucket: &str,
+    req: &crate::server::http::Request,
+    objects: &[DeleteObjectEntry],
+) -> Option<Response<Body>> {
+    objects.iter().find_map(|(key, _, _)| {
+        check_authorization(
+            req,
+            auth_config,
+            storage,
+            bucket,
+            Some(key),
+            "s3:DeleteObject",
+        )
+        .err()
+    })
+}
+
+type MultiDeleteOutcome = (String, Option<String>, Option<MultiDeleteFailure>);
+
+fn multi_delete_result_xml(outcomes: Vec<MultiDeleteOutcome>) -> String {
+    let mut xml = xml_utils::xml_declaration();
+    xml.push_str("<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
+    for (key, version, failure) in outcomes {
+        let element = if failure.is_some() {
+            "Error"
+        } else {
+            "Deleted"
+        };
+        let _ = write!(xml, "<{element}><Key>{}</Key>", escape_xml_str(&key));
+        if let Some(version) = version {
+            let _ = write!(xml, "<VersionId>{}</VersionId>", escape_xml_str(&version));
+        }
+        if let Some(failure) = failure {
+            let _ = write!(
+                xml,
+                "<Code>{}</Code><Message>{}</Message>",
+                failure.code,
+                escape_xml_str(&failure.message)
+            );
+        }
+        let _ = write!(xml, "</{element}>");
+    }
+    xml.push_str("</DeleteResult>");
+    xml
+}
+
+struct MultiDeleteFailure {
+    code: &'static str,
+    message: String,
+}
+
+fn multi_delete_object(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    version: Option<&str>,
+    etag: Option<&str>,
+) -> Result<(), MultiDeleteFailure> {
+    if let Some(version) = version {
+        let target = match storage.get_object_version(bucket, key, version) {
+            Ok(target) => target,
+            Err(crate::error::Error::KeyNotFound | crate::error::Error::NoSuchVersion)
+                if etag.is_none() =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(multi_delete_storage_failure(&error)),
+        };
+        if etag.is_some_and(|etag| !multi_delete_etag_matches(etag, &target.etag)) {
+            return Err(MultiDeleteFailure {
+                code: "PreconditionFailed",
+                message: "At least one of the pre-conditions you specified did not hold"
+                    .to_string(),
+            });
+        }
+        if multi_delete_object_is_locked(&target) {
+            return Err(MultiDeleteFailure {
+                code: "AccessDenied",
+                message: "Object is protected by an active retention policy or legal hold"
+                    .to_string(),
+            });
+        }
+        return object_service::delete_object_version(storage.as_ref(), bucket, key, version)
+            .or_else(|error| match error {
+                crate::error::Error::KeyNotFound | crate::error::Error::NoSuchVersion
+                    if etag.is_none() =>
+                {
+                    Ok(())
+                }
+                other => Err(other),
+            })
+            .map_err(|error| multi_delete_storage_failure(&error));
+    }
+
+    let current = storage.get_object(bucket, key);
+    if let Ok(current) = current.as_ref() {
+        if multi_delete_object_is_locked(current)
+            && !multi_delete_preserves_current_version(storage, bucket, current)
+        {
+            return Err(MultiDeleteFailure {
+                code: "AccessDenied",
+                message: "Object is protected by an active retention policy or legal hold"
+                    .to_string(),
+            });
+        }
+        if let Some(etag) = etag {
+            if !multi_delete_etag_matches(etag, &current.etag) {
+                return Err(MultiDeleteFailure {
+                    code: "PreconditionFailed",
+                    message: "At least one of the pre-conditions you specified did not hold"
+                        .to_string(),
+                });
+            }
+            return match storage.delete_object_if(
+                bucket,
+                key,
+                &ObjectCondition::Etag(current.etag.clone()),
+            ) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(MultiDeleteFailure {
+                    code: "Conflict",
+                    message: "A conflicting mutation changed the object.".to_string(),
+                }),
+                Err(error) => Err(multi_delete_storage_failure(&error)),
+            };
+        }
+    } else if etag.is_some() {
+        return Err(multi_delete_storage_failure(
+            &crate::error::Error::KeyNotFound,
+        ));
+    }
+
+    object_service::delete_object(storage.as_ref(), bucket, key)
+        .or_else(|error| match error {
+            crate::error::Error::KeyNotFound => Ok(()),
+            other => Err(other),
+        })
+        .map_err(|error| multi_delete_storage_failure(&error))
+}
+
+fn multi_delete_etag_matches(expected: &str, actual: &str) -> bool {
+    let expected = expected.trim();
+    expected == "*"
+        || (!expected.starts_with("W/") && expected.trim_matches('"') == actual.trim_matches('"'))
+}
+
+fn multi_delete_object_is_locked(object: &crate::models::Object) -> bool {
+    object
+        .provider_metadata
+        .get("s3_object_lock_legal_hold")
+        .is_some_and(|value| value.eq_ignore_ascii_case("ON"))
+        || object
+            .provider_metadata
+            .get("s3_object_lock_until")
+            .and_then(|value| {
+                chrono::DateTime::parse_from_rfc3339(value)
+                    .or_else(|_| chrono::DateTime::parse_from_rfc2822(value))
+                    .ok()
+            })
+            .is_some_and(|value| value.with_timezone(&chrono::Utc) > chrono::Utc::now())
+}
+
+fn multi_delete_preserves_current_version(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    current: &crate::models::Object,
+) -> bool {
+    let Ok(bucket) = storage.get_bucket(bucket) else {
+        return false;
+    };
+    bucket.versioning_enabled
+        || (bucket
+            .metadata
+            .get("s3_versioning_status")
+            .is_some_and(|status| status == "Suspended")
+            && current.version_id.as_deref() != Some("null"))
+}
+
+fn multi_delete_storage_failure(error: &crate::error::Error) -> MultiDeleteFailure {
+    MultiDeleteFailure {
+        code: error.error_code(),
+        message: error.to_string(),
+    }
 }
 
 fn bucket_post_browser_upload(
@@ -341,6 +568,10 @@ fn bucket_post_browser_upload(
             "s3:PutObject",
         ) {
             return Ok(response);
+        }
+
+        if s3_foreign_history_conflict(storage.as_ref(), bucket) {
+            return Ok(s3_foreign_history_conflict_response(req_id));
         }
 
         let object = crate::models::Object::new(key.clone(), data, file_content_type);
@@ -434,9 +665,11 @@ mod tests {
     }
 
     async fn parsed_request_with_method(method: &str, uri: &str, body: &[u8]) -> RequestExt {
-        let request = HyperRequest::builder()
-            .method(method)
-            .uri(uri)
+        let mut builder = HyperRequest::builder().method(method).uri(uri);
+        if method == "POST" && uri.contains("?delete") {
+            builder = builder.header("content-md5", BASE64.encode(md5::compute(body).0));
+        }
+        let request = builder
             .body(Body::from(body.to_vec()))
             .expect("request should build");
 
@@ -446,10 +679,14 @@ mod tests {
     }
 
     async fn parsed_request_with_origin(method: &str, uri: &str, body: &[u8]) -> RequestExt {
-        let request = HyperRequest::builder()
+        let mut builder = HyperRequest::builder()
             .method(method)
             .uri(uri)
-            .header("Origin", "https://app.example")
+            .header("Origin", "https://app.example");
+        if method == "POST" && uri.contains("?delete") {
+            builder = builder.header("content-md5", BASE64.encode(md5::compute(body).0));
+        }
+        let request = builder
             .body(Body::from(body.to_vec()))
             .expect("request should build");
 
@@ -468,11 +705,254 @@ mod tests {
         String::from_utf8(body.to_vec()).expect("body should be utf8")
     }
 
+    fn xml_tag(body: &str, tag: &str) -> Option<String> {
+        let start = format!("<{tag}>");
+        let end = format!("</{tag}>");
+        let value = body.split_once(&start)?.1.split_once(&end)?.0;
+        Some(value.to_string())
+    }
+
     fn cors_origin(response: &Response<Body>) -> Option<&str> {
         response
             .headers()
             .get("Access-Control-Allow-Origin")
             .and_then(|value| value.to_str().ok())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_fully_parse_multi_delete_before_mutating_any_object() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        for key in ["first.txt", "second.txt"] {
+            storage
+                .put_object(
+                    "bucket",
+                    key.to_string(),
+                    Object::new(
+                        key.to_string(),
+                        b"preserved".to_vec(),
+                        "text/plain".to_string(),
+                    ),
+                )
+                .unwrap();
+        }
+        let malformed =
+            br"<Delete><Object><Key>first.txt</Key></Object><Object><Key>second.txt</Key>";
+        let request =
+            parsed_request_with_method("POST", "http://localhost/bucket?delete", malformed).await;
+
+        // Act
+        let response = bucket_post(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            &request,
+            "req-malformed-multi-delete".to_string(),
+        )
+        .await
+        .expect("malformed multi-delete should respond");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["x-amz-request-id"],
+            "req-malformed-multi-delete"
+        );
+        assert!(response.headers().contains_key("x-amz-id-2"));
+        assert!(response_text(response)
+            .await
+            .contains("<Code>MalformedXML</Code>"));
+        for key in ["first.txt", "second.txt"] {
+            assert_eq!(
+                storage.get_object("bucket", key).unwrap().data,
+                b"preserved"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_schema_invalid_multi_delete_nesting_without_mutating() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        storage
+            .put_object(
+                "bucket",
+                "preserved.txt".to_string(),
+                Object::new(
+                    "preserved.txt".to_string(),
+                    b"preserved".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let invalid =
+            br"<Delete><Unexpected><Object><Key>preserved.txt</Key></Object></Unexpected></Delete>";
+        let request =
+            parsed_request_with_method("POST", "http://localhost/bucket?delete", invalid).await;
+
+        // Act
+        let response = bucket_post(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            &request,
+            "req-schema-invalid-multi-delete".to_string(),
+        )
+        .await
+        .expect("schema-invalid multi-delete should respond");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response_text(response)
+            .await
+            .contains("<Code>MalformedXML</Code>"));
+        assert_eq!(
+            storage.get_object("bucket", "preserved.txt").unwrap().data,
+            b"preserved"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_require_valid_content_md5_before_multi_delete_mutation() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        storage
+            .put_object(
+                "bucket",
+                "preserved.txt".to_string(),
+                Object::new(
+                    "preserved.txt".to_string(),
+                    b"preserved".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let body = br"<Delete><Object><Key>preserved.txt</Key></Object></Delete>";
+        let missing = RequestExt::from_hyper(
+            HyperRequest::builder()
+                .method("POST")
+                .uri("http://localhost/bucket?delete")
+                .body(Body::from(body.to_vec()))
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should parse");
+        let mismatched = RequestExt::from_hyper(
+            HyperRequest::builder()
+                .method("POST")
+                .uri("http://localhost/bucket?delete")
+                .header("content-md5", BASE64.encode(md5::compute(b"different").0))
+                .body(Body::from(body.to_vec()))
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should parse");
+
+        // Act
+        let missing_response = bucket_post(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            &missing,
+            "req-missing-md5".to_string(),
+        )
+        .await
+        .expect("missing digest should respond");
+        let mismatched_response = bucket_post(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            &mismatched,
+            "req-bad-md5".to_string(),
+        )
+        .await
+        .expect("bad digest should respond");
+
+        // Assert
+        assert_eq!(missing_response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_text(missing_response)
+            .await
+            .contains("<Code>MissingContentMD5</Code>"));
+        assert_eq!(mismatched_response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_text(mismatched_response)
+            .await
+            .contains("<Code>BadDigest</Code>"));
+        assert_eq!(
+            storage
+                .get_object("bucket", "preserved.txt")
+                .expect("invalid digest must not delete the object")
+                .data,
+            b"preserved"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_report_multi_delete_lock_and_etag_failures_without_deleting() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        storage.enable_versioning("bucket").unwrap();
+        let mut retained = Object::new(
+            "retained.txt".to_string(),
+            b"retained".to_vec(),
+            "text/plain".to_string(),
+        );
+        retained.provider_metadata.insert(
+            "s3_object_lock_until".to_string(),
+            "2099-01-01T00:00:00Z".to_string(),
+        );
+        storage
+            .put_object("bucket", "retained.txt".to_string(), retained)
+            .unwrap();
+        let retained_version = storage
+            .get_object("bucket", "retained.txt")
+            .unwrap()
+            .version_id
+            .expect("versioned object should have a version id");
+        storage
+            .put_object(
+                "bucket",
+                "etagged.txt".to_string(),
+                Object::new(
+                    "etagged.txt".to_string(),
+                    b"etagged".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let body = format!(
+            "<Delete><Object><Key>retained.txt</Key><VersionId>{retained_version}</VersionId></Object><Object><Key>etagged.txt</Key><ETag>\"wrong\"</ETag></Object></Delete>"
+        );
+        let request =
+            parsed_request_with_method("POST", "http://localhost/bucket?delete", body.as_bytes())
+                .await;
+
+        // Act
+        let response = bucket_post(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            &request,
+            "req-multi-delete-conditions".to_string(),
+        )
+        .await
+        .expect("conditional multi-delete should respond");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert!(body.contains("<Code>AccessDenied</Code>"));
+        assert!(body.contains("<Code>PreconditionFailed</Code>"));
+        assert!(storage
+            .get_object_version("bucket", "retained.txt", &retained_version)
+            .is_ok());
+        assert_eq!(
+            storage.get_object("bucket", "etagged.txt").unwrap().data,
+            b"etagged"
+        );
     }
 
     async fn browser_upload_request(
@@ -509,6 +989,85 @@ mod tests {
         )
         .await
         .expect("request should parse")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_enable_object_lock_at_bucket_creation_and_prevent_versioning_suspension() {
+        // Arrange
+        let storage = temp_storage();
+        let create = RequestExt::from_hyper(
+            HyperRequest::builder()
+                .method("PUT")
+                .uri("http://localhost/locked-bucket")
+                .header("x-amz-bucket-object-lock-enabled", "true")
+                .body(Body::from(Bytes::new()))
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should parse");
+
+        // Act
+        let create_response = bucket_put(
+            storage.clone(),
+            auth_disabled_config(),
+            "locked-bucket",
+            &create,
+            "req-lock-create".to_string(),
+        )
+        .await
+        .expect("locked bucket create should respond");
+        let get = parsed_request("http://localhost/locked-bucket?object-lock").await;
+        let get_response = bucket_get_or_list_objects(
+            storage.clone(),
+            auth_disabled_config(),
+            "locked-bucket",
+            &get,
+            "req-lock-get".to_string(),
+        )
+        .await
+        .expect("Object Lock configuration GET should respond");
+        let suspend = parsed_request_with_method(
+            "PUT",
+            "http://localhost/locked-bucket?versioning",
+            br#"<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Suspended</Status></VersioningConfiguration>"#,
+        )
+        .await;
+        let suspend_response = bucket_put(
+            storage.clone(),
+            auth_disabled_config(),
+            "locked-bucket",
+            &suspend,
+            "req-lock-suspend".to_string(),
+        )
+        .await
+        .expect("versioning suspension should respond");
+
+        // Assert
+        assert_eq!(create_response.status(), StatusCode::OK);
+        assert_eq!(
+            create_response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some("/locked-bucket")
+        );
+        let bucket = storage.get_bucket("locked-bucket").unwrap();
+        assert!(bucket.versioning_enabled);
+        assert_eq!(
+            bucket.metadata.get("s3_object_lock_enabled"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(get_response.status(), StatusCode::OK);
+        assert!(response_text(get_response)
+            .await
+            .contains("<ObjectLockEnabled>Enabled</ObjectLockEnabled>"));
+        assert_eq!(suspend_response.status(), StatusCode::CONFLICT);
+        assert!(
+            storage
+                .get_bucket("locked-bucket")
+                .unwrap()
+                .versioning_enabled
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -628,12 +1187,18 @@ mod tests {
         assert!(first_body.contains("<ListBucketResult"));
         assert!(first_body.contains("<KeyCount>2</KeyCount>"));
         assert!(first_body.contains("<IsTruncated>true</IsTruncated>"));
-        assert!(first_body.contains("<NextContinuationToken>beta.txt</NextContinuationToken>"));
+        let continuation_token = xml_tag(&first_body, "NextContinuationToken")
+            .expect("truncated result should include a continuation token");
+        assert_ne!(continuation_token, "beta.txt");
+        assert!(first_body.contains("<ETag>\"") && !first_body.contains(r#"<ETag>\""#));
         assert!(first_body.contains("alpha.txt"));
         assert!(first_body.contains("beta.txt"));
 
-        let second_req =
-            parsed_request("http://localhost/bucket?list-type=2&continuation-token=beta.txt").await;
+        let second_req = parsed_request(&format!(
+            "http://localhost/bucket?list-type=2&continuation-token={}",
+            urlencoding::encode(&continuation_token)
+        ))
+        .await;
         let second_resp = bucket_get_or_list_objects(
             storage.clone(),
             auth_disabled_config(),
@@ -657,6 +1222,160 @@ mod tests {
         assert!(second_body.contains("gamma.txt"));
         assert!(!second_body.contains("<Key>alpha.txt</Key>"));
         assert!(!second_body.contains("<Key>beta.txt</Key>"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_unissued_list_objects_v2_continuation_token() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        let req =
+            parsed_request("http://localhost/bucket?list-type=2&continuation-token=alpha.txt")
+                .await;
+
+        // Act
+        let response = bucket_get_or_list_objects(
+            storage,
+            auth_disabled_config(),
+            "bucket",
+            &req,
+            "req-invalid-token".to_string(),
+        )
+        .await
+        .expect("invalid token should produce a response");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_text(response)
+            .await
+            .contains("<Code>InvalidArgument</Code>"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_malformed_max_keys_for_every_s3_object_listing_shape() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        let listing_shapes = ["", "list-type=2&", "versions&"];
+
+        // Act
+        // Assert
+        for shape in listing_shapes {
+            for value in ["alpha", "-1", "184467440737095516160"] {
+                let req =
+                    parsed_request(&format!("http://localhost/bucket?{shape}max-keys={value}"))
+                        .await;
+                let response = bucket_get_or_list_objects(
+                    storage.clone(),
+                    auth_disabled_config(),
+                    "bucket",
+                    &req,
+                    "req-invalid-max-keys".to_string(),
+                )
+                .await
+                .expect("invalid max-keys should produce a response");
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{shape}{value}");
+                assert_eq!(
+                    response.headers()["x-amz-request-id"],
+                    "req-invalid-max-keys"
+                );
+                assert!(response.headers().contains_key("x-amz-id-2"));
+                assert!(response_text(response)
+                    .await
+                    .contains("<Code>InvalidArgument</Code>"));
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_return_no_such_bucket_for_s3_list_objects_v1() {
+        // Arrange
+        let storage = temp_storage();
+        let req = parsed_request("http://localhost/absent?prefix=logs%2F").await;
+
+        // Act
+        let response = bucket_get_or_list_objects(
+            storage,
+            auth_disabled_config(),
+            "absent",
+            &req,
+            "req-missing-list-bucket".to_string(),
+        )
+        .await
+        .expect("missing bucket listing should produce a response");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers()["x-amz-request-id"],
+            "req-missing-list-bucket"
+        );
+        assert!(response.headers().contains_key("x-amz-id-2"));
+        assert!(response_text(response)
+            .await
+            .contains("<Code>NoSuchBucket</Code>"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_order_and_resume_object_versions_by_key_then_recency() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        storage.enable_versioning("bucket").unwrap();
+        put_version_at(&storage, "bravo.txt", b"b1", 12, 0);
+        put_version_at(&storage, "alpha.txt", b"a1", 11, 0);
+        put_version_at(&storage, "bravo.txt", b"b2", 12, 5);
+        put_version_at(&storage, "alpha.txt", b"a2", 11, 5);
+        let first = parsed_request("http://localhost/bucket?versions&max-keys=2").await;
+
+        // Act
+        let first_body = response_text(
+            bucket_get_or_list_objects(
+                storage.clone(),
+                auth_disabled_config(),
+                "bucket",
+                &first,
+                "req-version-page-one".to_string(),
+            )
+            .await
+            .expect("first version page should complete"),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(first_body.matches("<Key>alpha.txt</Key>").count(), 2);
+        assert!(!first_body.contains("<Key>bravo.txt</Key>"));
+        let key_marker = xml_tag(&first_body, "NextKeyMarker").expect("next key marker");
+        let version_marker =
+            xml_tag(&first_body, "NextVersionIdMarker").expect("next version marker");
+        let second = parsed_request(&format!(
+            "http://localhost/bucket?versions&key-marker={}&version-id-marker={}",
+            urlencoding::encode(&key_marker),
+            urlencoding::encode(&version_marker)
+        ))
+        .await;
+        let second_body = response_text(
+            bucket_get_or_list_objects(
+                storage,
+                auth_disabled_config(),
+                "bucket",
+                &second,
+                "req-version-page-two".to_string(),
+            )
+            .await
+            .expect("second version page should complete"),
+        )
+        .await;
+        assert_eq!(second_body.matches("<Key>bravo.txt</Key>").count(), 2);
+        assert!(!second_body.contains("<Key>alpha.txt</Key>"));
+    }
+
+    fn put_version_at(storage: &Arc<dyn Storage>, key: &str, data: &[u8], hour: u32, minute: u32) {
+        let mut object = Object::new(key.to_string(), data.to_vec(), "text/plain".to_string());
+        object.last_modified = Utc.with_ymd_and_hms(2024, 4, 10, hour, minute, 0).unwrap();
+        storage
+            .put_object("bucket", key.to_string(), object)
+            .expect("version write should succeed");
     }
 
     #[tokio::test(flavor = "multi_thread")]

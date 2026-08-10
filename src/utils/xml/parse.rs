@@ -9,6 +9,59 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
 
+/// Parse the ordered part manifest supplied to S3 `CompleteMultipartUpload`.
+///
+/// # Errors
+///
+/// Returns an error for malformed XML or incomplete part entries.
+pub fn parse_complete_multipart_upload_xml(body: &str) -> Result<Vec<(u32, String)>, String> {
+    let mut reader = Reader::from_str(body);
+    reader.config_mut().trim_text(true);
+    let mut parts = Vec::new();
+    let mut current_tag = None;
+    let mut part_number = None;
+    let mut etag = None;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) => current_tag = Some(event.name().as_ref().to_vec()),
+            Ok(Event::Text(event)) => {
+                let decoded = event.decode().map_err(|error| error.to_string())?;
+                let value = unescape(&decoded).map_err(|error| error.to_string())?;
+                match current_tag.as_deref() {
+                    Some(b"PartNumber") => {
+                        part_number = Some(
+                            value
+                                .parse::<u32>()
+                                .map_err(|_| "Invalid PartNumber".to_string())?,
+                        );
+                    }
+                    Some(b"ETag") => etag = Some(value.trim_matches('"').to_string()),
+                    _ => {}
+                }
+            }
+            Ok(Event::End(event)) => {
+                if event.name().as_ref() == b"Part" {
+                    parts.push((
+                        part_number
+                            .take()
+                            .ok_or_else(|| "Missing PartNumber".to_string())?,
+                        etag.take().ok_or_else(|| "Missing ETag".to_string())?,
+                    ));
+                }
+                current_tag = None;
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(format!("XML parse error: {error}")),
+            _ => {}
+        }
+    }
+    if parts.is_empty() {
+        return Err("CompleteMultipartUpload requires at least one Part".to_string());
+    }
+    Ok(parts)
+}
+
 ///
 /// # Errors
 ///

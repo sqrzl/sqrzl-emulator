@@ -162,7 +162,16 @@ impl FilesystemStorage {
     }
 
     pub(super) fn versioning_enabled(&self, bucket: &str) -> bool {
-        self.versioning_marker(bucket).exists()
+        let marker = self.versioning_marker(bucket);
+        marker.exists()
+            && match fs::read(&marker) {
+                Ok(state) => state.as_slice() != b"suspended",
+                Err(_) => true,
+            }
+    }
+
+    pub(super) fn versioning_suspended(&self, bucket: &str) -> bool {
+        fs::read(self.versioning_marker(bucket)).is_ok_and(|state| state.as_slice() == b"suspended")
     }
 
     pub(super) fn compute_object_id(bucket: &str, key: &str) -> String {

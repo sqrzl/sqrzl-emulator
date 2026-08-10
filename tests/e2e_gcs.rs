@@ -14,6 +14,7 @@ async fn should_round_trip_bucket_and_object_given_live_server_when_using_gcs_xm
         .method("PUT")
         .uri(format!("{}/e2e-gcs", server.base_url))
         .header("host", "storage.googleapis.com")
+        .header("content-length", "0")
         .body(Body::default())
         .expect("bucket create request should build");
     let create_bucket_response = server.request(create_bucket).await;
@@ -24,6 +25,7 @@ async fn should_round_trip_bucket_and_object_given_live_server_when_using_gcs_xm
         .uri(format!("{}/e2e-gcs/hello.txt", server.base_url))
         .header("host", "storage.googleapis.com")
         .header("content-type", "text/plain")
+        .header("content-length", "12")
         .body(Body::from("gcs over tcp"))
         .expect("object put request should build");
     let put_object_response = server.request(put_object).await;
@@ -33,6 +35,7 @@ async fn should_round_trip_bucket_and_object_given_live_server_when_using_gcs_xm
         .method("GET")
         .uri(format!("{}/e2e-gcs/hello.txt", server.base_url))
         .header("host", "storage.googleapis.com")
+        .header("content-length", "0")
         .body(Body::default())
         .expect("object get request should build");
     let get_object_response = server.request(get_object).await;
@@ -43,6 +46,7 @@ async fn should_round_trip_bucket_and_object_given_live_server_when_using_gcs_xm
         .method("GET")
         .uri(format!("{}/e2e-gcs", server.base_url))
         .header("host", "storage.googleapis.com")
+        .header("content-length", "0")
         .body(Body::default())
         .expect("object list request should build");
     let list_objects_response = server.request(list_objects).await;
@@ -76,8 +80,8 @@ async fn should_complete_resumable_upload_given_live_server_when_using_gcs_json_
         ))
         .header("host", "storage.googleapis.com")
         .header("x-upload-content-type", "text/plain")
-        .header("x-goog-meta-owner", "jules")
-        .body(Body::default())
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"metadata":{"owner":"jules"}}"#))
         .expect("resumable init request should build");
     let start_upload_response = server.request(start_upload).await;
     assert_eq!(start_upload_response.status(), StatusCode::OK);
@@ -134,6 +138,7 @@ async fn should_enforce_gcs_generation_preconditions_and_return_json_not_found()
         .method("POST")
         .uri(&start_url)
         .header("host", "storage.googleapis.com")
+        .header("content-length", "0")
         .body(Body::default())
         .unwrap();
     let started = server.request(start).await;
@@ -145,6 +150,7 @@ async fn should_enforce_gcs_generation_preconditions_and_return_json_not_found()
         .method("PUT")
         .uri(location)
         .header("host", "storage.googleapis.com")
+        .header("content-length", "5")
         .body(Body::from("first"))
         .unwrap();
     let created = server.request(complete).await;
@@ -156,6 +162,7 @@ async fn should_enforce_gcs_generation_preconditions_and_return_json_not_found()
         .method("POST")
         .uri(&start_url)
         .header("host", "storage.googleapis.com")
+        .header("content-length", "0")
         .body(Body::default())
         .unwrap();
     let losing_start = server.request(losing_start).await;
@@ -172,6 +179,7 @@ async fn should_enforce_gcs_generation_preconditions_and_return_json_not_found()
         .method("PUT")
         .uri(losing_location)
         .header("host", "storage.googleapis.com")
+        .header("content-length", "5")
         .body(Body::from("loser"))
         .unwrap();
     assert_eq!(
@@ -210,7 +218,7 @@ async fn should_enforce_gcs_generation_preconditions_and_return_json_not_found()
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&text_body(missing).await).unwrap()["error"]
-            ["status"],
-        "NOT_FOUND"
+            ["errors"][0]["reason"],
+        "notFound"
     );
 }

@@ -82,7 +82,9 @@ def test_s3_multipart_and_versioning_workflows(sqrzl_server):
 
     upload = client.create_multipart_upload(Bucket=bucket, Key=key)
     parts = []
-    for part_number, payload in enumerate([b"part-one-", b"part-two"], start=1):
+    first_part = b"a" * (5 * 1024 * 1024)
+    final_part = b"part-two"
+    for part_number, payload in enumerate([first_part, final_part], start=1):
         response = client.upload_part(
             Bucket=bucket,
             Key=key,
@@ -97,7 +99,7 @@ def test_s3_multipart_and_versioning_workflows(sqrzl_server):
         UploadId=upload["UploadId"],
         MultipartUpload={"Parts": parts},
     )
-    assert client.get_object(Bucket=bucket, Key=key)["Body"].read() == b"part-one-part-two"
+    assert client.get_object(Bucket=bucket, Key=key)["Body"].read() == first_part + final_part
 
     client.put_object(Bucket=bucket, Key=key, Body=b"new-version")
     versions = client.list_object_versions(Bucket=bucket, Prefix=key)

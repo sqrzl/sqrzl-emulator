@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::Full;
-type Body = Full<Bytes>;
+type RequestBody = Full<Bytes>;
 use hyper::{Request as HyperRequest, Response};
 use sqrzl_emulator::providers::AdapterRegistry;
 use sqrzl_emulator::server::RequestExt;
@@ -55,21 +55,21 @@ pub fn request(
     uri: &str,
     headers: &[(&str, &str)],
     body: &[u8],
-) -> HyperRequest<Body> {
+) -> HyperRequest<RequestBody> {
     let mut builder = HyperRequest::builder().method(method).uri(uri);
     for (name, value) in headers {
         builder = builder.header(*name, *value);
     }
     builder
-        .body(Body::from(body.to_vec()))
+        .body(RequestBody::from(body.to_vec()))
         .expect("request should build")
 }
 
 pub async fn call(
     storage: Arc<dyn Storage>,
     auth_config: Arc<Config>,
-    request: HyperRequest<Body>,
-) -> Response<Body> {
+    request: HyperRequest<RequestBody>,
+) -> Response<sqrzl_emulator::body::Body> {
     call_with_registry(
         Arc::new(AdapterRegistry::default()),
         storage,
@@ -83,8 +83,8 @@ pub async fn call_with_registry(
     adapters: Arc<AdapterRegistry>,
     storage: Arc<dyn Storage>,
     auth_config: Arc<Config>,
-    request: HyperRequest<Body>,
-) -> Response<Body> {
+    request: HyperRequest<RequestBody>,
+) -> Response<sqrzl_emulator::body::Body> {
     let parsed = RequestExt::from_hyper(request)
         .await
         .expect("request should parse");
@@ -94,7 +94,7 @@ pub async fn call_with_registry(
         .expect("request should complete")
 }
 
-pub async fn body_bytes(response: Response<Body>) -> Vec<u8> {
+pub async fn body_bytes(response: Response<sqrzl_emulator::body::Body>) -> Vec<u8> {
     response
         .into_body()
         .collect()
@@ -104,7 +104,7 @@ pub async fn body_bytes(response: Response<Body>) -> Vec<u8> {
         .to_vec()
 }
 
-pub async fn body_text(response: Response<Body>) -> String {
+pub async fn body_text(response: Response<sqrzl_emulator::body::Body>) -> String {
     String::from_utf8(body_bytes(response).await).expect("body should be utf8")
 }
 

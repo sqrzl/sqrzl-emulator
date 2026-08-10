@@ -1,12 +1,15 @@
 use super::helpers::{
     apply_bucket_cors_headers, metadata_value, with_bucket_metadata, S3_CORS_XML_KEY,
-    S3_REQUEST_PAYMENT_KEY, S3_WEBSITE_XML_KEY,
+    S3_OBJECT_LOCK_ENABLED_KEY, S3_REQUEST_PAYMENT_KEY, S3_VERSIONING_STATUS_KEY,
+    S3_WEBSITE_XML_KEY,
 };
 use super::{
-    acl, bucket_service, check_authorization, header_utils, validation, xml_error_response,
-    xml_utils, AuthConfig, Body, ResponseBuilder, Storage,
+    acl, bucket_service, check_authorization, foreign_data_protection_mode_active, header_utils,
+    s3_foreign_history_conflict_response, validation, xml_error_response, xml_utils, AuthConfig,
+    Body, ResponseBuilder, Storage,
 };
 use crate::error::Error;
+use crate::providers::data_protection_activation_lock;
 use crate::server::http::Request;
 use http::StatusCode;
 use hyper::Response;
@@ -59,6 +62,15 @@ pub async fn bucket_put(
         return put_versioning(&storage, bucket, req, &req_id);
     }
 
+    if req.has_query_param("object-lock") {
+        return Ok(xml_error_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "NotImplemented",
+            "PutObjectLockConfiguration is not supported by this emulator subset.",
+            &req_id,
+        ));
+    }
+
     if req.has_query_param("acl") {
         return Ok(put_acl(&storage, bucket, req, &req_id));
     }
@@ -67,12 +79,14 @@ pub async fn bucket_put(
         return put_policy(&storage, bucket, req, &req_id);
     }
 
-    create_bucket(&storage, bucket, &req_id)
+    create_bucket(&storage, bucket, req, &req_id)
 }
 
 fn bucket_put_action(req: &Request) -> &'static str {
     if req.has_query_param("versioning") {
         "s3:PutBucketVersioning"
+    } else if req.has_query_param("object-lock") {
+        "s3:PutBucketObjectLockConfiguration"
     } else if req.has_query_param("lifecycle") {
         "s3:PutLifecycleConfiguration"
     } else if req.has_query_param("requestPayment") {
@@ -194,8 +208,39 @@ fn put_versioning(
         }
     };
 
+    let activation_lock = data_protection_activation_lock(bucket)?;
+    let _activation_guard = activation_lock
+        .lock()
+        .map_err(|_| "Failed to lock S3 data-protection activation".to_string())?;
+
+    if !enabled
+        && storage
+            .get_bucket(bucket)
+            .ok()
+            .and_then(|bucket| bucket.metadata.get(S3_OBJECT_LOCK_ENABLED_KEY).cloned())
+            .is_some_and(|value| value == "true")
+    {
+        return Ok(xml_error_response(
+            StatusCode::CONFLICT,
+            "InvalidBucketState",
+            "Versioning cannot be suspended on an Object Lock enabled bucket.",
+            req_id,
+        ));
+    }
+
+    if foreign_data_protection_mode_active(storage.as_ref(), bucket) {
+        return Ok(s3_foreign_history_conflict_response(req_id));
+    }
+
     let result = tokio::task::block_in_place(|| {
-        bucket_service::set_versioning(storage.as_ref(), bucket, enabled)
+        bucket_service::set_versioning(storage.as_ref(), bucket, enabled)?;
+        with_bucket_metadata(storage.as_ref(), bucket, |metadata| {
+            metadata.insert(
+                S3_VERSIONING_STATUS_KEY.to_string(),
+                if enabled { "Enabled" } else { "Suspended" }.to_string(),
+            );
+        })?;
+        Ok(())
     });
     Ok(bucket_write_response(
         result,
@@ -253,12 +298,47 @@ fn put_policy(
 fn create_bucket(
     storage: &Arc<dyn Storage>,
     bucket: &str,
+    req: &Request,
     req_id: &str,
 ) -> Result<Response<Body>, String> {
-    tokio::task::block_in_place(|| {
-        bucket_service::create_bucket(storage.as_ref(), bucket.to_string())
-    })?;
+    let object_lock_enabled = match req.header("x-amz-bucket-object-lock-enabled") {
+        None => false,
+        Some(value) if value.eq_ignore_ascii_case("true") => true,
+        Some(_) => {
+            return Ok(xml_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                "x-amz-bucket-object-lock-enabled must be true when supplied.",
+                req_id,
+            ));
+        }
+    };
+    let activation_lock = data_protection_activation_lock(bucket)?;
+    let _activation_guard = activation_lock
+        .lock()
+        .map_err(|_| "Failed to lock S3 data-protection activation".to_string())?;
+    let result = tokio::task::block_in_place(|| {
+        bucket_service::create_bucket(storage.as_ref(), bucket.to_string())?;
+        if object_lock_enabled {
+            bucket_service::set_versioning(storage.as_ref(), bucket, true)?;
+            with_bucket_metadata(storage.as_ref(), bucket, |metadata| {
+                metadata.insert(S3_OBJECT_LOCK_ENABLED_KEY.to_string(), "true".to_string());
+                metadata.insert(S3_VERSIONING_STATUS_KEY.to_string(), "Enabled".to_string());
+            })?;
+        }
+        Ok::<(), Error>(())
+    });
+    if matches!(result, Err(Error::BucketAlreadyExists)) {
+        return Ok(xml_error_response(
+            StatusCode::CONFLICT,
+            "BucketAlreadyOwnedByYou",
+            "Your previous request to create the named bucket succeeded and you already own it.",
+            req_id,
+        ));
+    }
+    result?;
     Ok(ResponseBuilder::new(StatusCode::OK)
+        .header("Location", &format!("/{bucket}"))
         .header("x-amz-request-id", req_id)
         .header("x-amz-id-2", &header_utils::generate_request_id())
         .empty())

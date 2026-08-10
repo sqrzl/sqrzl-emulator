@@ -13,12 +13,12 @@ async fn should_round_trip_namespace_bucket_and_object_given_live_server_when_us
 
     let namespace_request = Request::builder()
         .method("GET")
-        .uri(format!("{}/n/tenant", server.base_url))
+        .uri(format!("{}/n/", server.base_url))
         .body(Body::default())
         .expect("namespace request should build");
     let namespace_response = server.request(namespace_request).await;
     assert_eq!(namespace_response.status(), StatusCode::OK);
-    assert_eq!(text_body(namespace_response).await, "tenant");
+    assert_eq!(text_body(namespace_response).await, "sqrzl-emulator");
 
     let create_bucket = Request::builder()
         .method("POST")

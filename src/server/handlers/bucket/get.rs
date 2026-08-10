@@ -1,9 +1,12 @@
 use super::helpers::{
-    bucket_get_action, build_list_objects_v2_entries, list_objects_v2_start_index, S3_CORS_XML_KEY,
-    S3_REQUEST_PAYMENT_KEY, S3_WEBSITE_XML_KEY,
+    bucket_get_action, build_list_objects_v2_entries, decode_list_objects_v2_token,
+    encode_list_objects_v2_token, list_objects_v2_start_index, S3_CORS_XML_KEY,
+    S3_OBJECT_LOCK_ENABLED_KEY, S3_REQUEST_PAYMENT_KEY, S3_VERSIONING_STATUS_KEY,
+    S3_WEBSITE_XML_KEY,
 };
 use super::{
-    bucket_service, check_authorization, cors, header_utils, object_service, xml_error_response,
+    bucket_service, check_authorization, cors, header_utils, object_service,
+    s3_foreign_history_conflict, s3_foreign_history_conflict_response, xml_error_response,
     xml_utils, AuthConfig, Body, ResponseBuilder, Storage,
 };
 use crate::error::Error;
@@ -100,6 +103,12 @@ fn bucket_subresource_response(
         return Ok(Some(get_versioning(storage, bucket, req, req_id)));
     }
 
+    if req.has_query_param("object-lock") {
+        return Ok(Some(get_object_lock_configuration(
+            storage, bucket, req, req_id,
+        )));
+    }
+
     if req.has_query_param("uploads") {
         return Ok(Some(list_multipart_uploads(storage, bucket, req, req_id)));
     }
@@ -109,6 +118,45 @@ fn bucket_subresource_response(
     }
 
     Ok(None)
+}
+
+fn get_object_lock_configuration(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    req: &Request,
+    req_id: &str,
+) -> Response<Body> {
+    match tokio::task::block_in_place(|| bucket_service::get_bucket(storage.as_ref(), bucket)) {
+        Ok(bucket_record)
+            if bucket_record
+                .metadata
+                .get(S3_OBJECT_LOCK_ENABLED_KEY)
+                .is_some_and(|value| value == "true") =>
+        {
+            let xml = format!(
+                "{}\n<ObjectLockConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><ObjectLockEnabled>Enabled</ObjectLockEnabled></ObjectLockConfiguration>",
+                xml_utils::xml_declaration()
+            );
+            cors::apply_actual_request_headers(
+                storage.as_ref(),
+                bucket,
+                req,
+                ResponseBuilder::new(StatusCode::OK)
+                    .content_type("application/xml; charset=utf-8")
+                    .header("x-amz-request-id", req_id)
+                    .header("x-amz-id-2", &header_utils::generate_request_id()),
+            )
+            .body(xml.into_bytes())
+            .build()
+        }
+        Ok(_) => xml_error_response(
+            StatusCode::NOT_FOUND,
+            "ObjectLockConfigurationNotFoundError",
+            "Object Lock configuration does not exist for this bucket.",
+            req_id,
+        ),
+        Err(error) => crate::services::storage_error_response(&error, req_id),
+    }
 }
 
 fn get_request_payment(
@@ -255,11 +303,11 @@ fn get_versioning(
 ) -> Response<Body> {
     match tokio::task::block_in_place(|| bucket_service::get_bucket(storage.as_ref(), bucket)) {
         Ok(bucket_record) => {
-            let status = if bucket_record.versioning_enabled {
-                Some("Enabled")
-            } else {
-                Some("Suspended")
-            };
+            let status = bucket_record
+                .metadata
+                .get(S3_VERSIONING_STATUS_KEY)
+                .map(String::as_str)
+                .filter(|status| matches!(*status, "Enabled" | "Suspended"));
             bucket_xml_response(
                 storage.as_ref(),
                 bucket,
@@ -307,22 +355,60 @@ fn list_object_versions(
     req: &Request,
     req_id: &str,
 ) -> Response<Body> {
+    if s3_foreign_history_conflict(storage.as_ref(), bucket) {
+        return s3_foreign_history_conflict_response(req_id);
+    }
+
     let prefix = req.query_param("prefix");
     let key_marker = req.query_param("key-marker");
     let version_id_marker = req.query_param("version-id-marker");
-    let max_keys = max_keys_or_default(req);
+    let max_keys = match max_keys_or_error(req, req_id) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
 
     match tokio::task::block_in_place(|| {
         object_service::list_object_versions(storage.as_ref(), bucket, prefix)
     }) {
         Ok(mut versions) => {
             versions.sort_unstable_by(|left, right| {
-                right
-                    .last_modified
-                    .cmp(&left.last_modified)
-                    .then_with(|| left.key.cmp(&right.key))
+                left.key
+                    .cmp(&right.key)
+                    .then_with(|| right.last_modified.cmp(&left.last_modified))
                     .then_with(|| left.version_id.cmp(&right.version_id))
             });
+
+            let mut latest_key = None;
+            for version in &mut versions {
+                let is_latest = latest_key.as_deref() != Some(version.key.as_str());
+                if is_latest {
+                    latest_key = Some(version.key.clone());
+                }
+                version
+                    .provider_metadata
+                    .insert("s3_is_latest".to_string(), is_latest.to_string());
+            }
+
+            let start_index = match (key_marker, version_id_marker) {
+                (None, Some(_)) => {
+                    return xml_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "InvalidArgument",
+                        "A version-id-marker cannot be specified without a key-marker.",
+                        req_id,
+                    );
+                }
+                (Some(key), Some(version)) => versions
+                    .iter()
+                    .position(|item| item.key == key && item.version_id.as_deref() == Some(version))
+                    .map_or_else(
+                        || versions.partition_point(|item| item.key.as_str() <= key),
+                        |index| index + 1,
+                    ),
+                (Some(key), None) => versions.partition_point(|item| item.key.as_str() <= key),
+                (None, None) => 0,
+            };
+            let mut versions = versions.split_off(start_index.min(versions.len()));
 
             let truncated = versions.len() > max_keys;
             if truncated {
@@ -371,10 +457,27 @@ fn list_objects_v2(
     let continuation_token = req
         .query_param("continuation-token")
         .filter(|value| !value.is_empty());
+    let continuation_marker = match continuation_token {
+        Some(token) => match decode_list_objects_v2_token(token) {
+            Some(marker) => Some(marker),
+            None => {
+                return xml_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidArgument",
+                    "The continuation token provided is incorrect.",
+                    req_id,
+                );
+            }
+        },
+        None => None,
+    };
     let start_after = req
         .query_param("start-after")
         .filter(|value| !value.is_empty());
-    let max_keys = max_keys_or_default(req);
+    let max_keys = match max_keys_or_error(req, req_id) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
     let encoding_type = req.query_param("encoding-type");
     let fetch_owner = matches!(
         req.query_param("fetch-owner"),
@@ -387,12 +490,14 @@ fn list_objects_v2(
         Ok(result) => {
             let entries = build_list_objects_v2_entries(result.objects, prefix, delimiter);
             let start_index =
-                list_objects_v2_start_index(&entries, continuation_token, start_after);
+                list_objects_v2_start_index(&entries, continuation_marker.as_deref(), start_after);
             let page_end = (start_index.saturating_add(max_keys)).min(entries.len());
             let page_entries = entries.get(start_index..page_end).unwrap_or_default();
             let truncated = page_end < entries.len();
-            let next_continuation_token =
+            let next_continuation_marker =
                 next_continuation_token(&entries, page_entries, start_index, page_end, truncated);
+            let next_continuation_token =
+                next_continuation_marker.map(encode_list_objects_v2_token);
 
             let xml = xml_utils::list_objects_v2_xml(
                 page_entries,
@@ -403,7 +508,7 @@ fn list_objects_v2(
                 page_entries.len(),
                 truncated,
                 continuation_token,
-                next_continuation_token,
+                next_continuation_token.as_deref(),
                 start_after,
                 encoding_type,
                 fetch_owner,
@@ -424,9 +529,10 @@ fn list_objects_v1(
     let prefix = req.query_param("prefix");
     let delimiter = req.query_param("delimiter");
     let marker = req.query_param("marker");
-    let max_keys = req
-        .query_param("max-keys")
-        .and_then(|value| value.parse::<usize>().ok());
+    let max_keys = match max_keys_or_error(req, req_id) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
 
     match tokio::task::block_in_place(|| {
         object_service::list_objects(
@@ -435,7 +541,7 @@ fn list_objects_v1(
             prefix,
             delimiter,
             marker,
-            max_keys,
+            Some(max_keys),
         )
     }) {
         Ok(mut result) => {
@@ -459,14 +565,23 @@ fn list_objects_v1(
             );
             bucket_xml_response(storage.as_ref(), bucket, req, req_id, StatusCode::OK, xml)
         }
+        Err(Error::BucketNotFound) => no_such_bucket_response(req_id),
         Err(error) => internal_error_response(&error, req_id),
     }
 }
 
-fn max_keys_or_default(req: &Request) -> usize {
-    req.query_param("max-keys")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(1000)
+fn max_keys_or_error(req: &Request, req_id: &str) -> Result<usize, Box<Response<Body>>> {
+    let Some(raw) = req.query_param("max-keys") else {
+        return Ok(1_000);
+    };
+    raw.parse::<u32>().map(|value| value as usize).map_err(|_| {
+        Box::new(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidArgument",
+            "max-keys must be a non-negative integer.",
+            req_id,
+        ))
+    })
 }
 
 fn next_continuation_token<'a>(

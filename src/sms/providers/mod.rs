@@ -26,6 +26,13 @@ pub trait SmsAdapter: Send + Sync {
     fn payload_too_large(&self, max_request_bytes: usize) -> Response<Body> {
         crate::providers::payload_too_large_response(max_request_bytes)
     }
+    fn incomplete_body(&self) -> Response<Body> {
+        json_error(
+            http::StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "The request body ended before it was complete",
+        )
+    }
     fn handle<'a>(
         &'a self,
         store: Arc<dyn SmsStore>,
@@ -81,6 +88,20 @@ impl SmsAdapterRegistry {
             adapter
                 .matches_request_head(method, uri, headers)
                 .then(|| adapter.payload_too_large(max_request_bytes))
+        })
+    }
+
+    #[must_use]
+    pub fn render_incomplete_body(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        headers: &HeaderMap,
+    ) -> Option<Response<Body>> {
+        self.adapters.iter().find_map(|adapter| {
+            adapter
+                .matches_request_head(method, uri, headers)
+                .then(|| adapter.incomplete_body())
         })
     }
 }
@@ -186,15 +207,15 @@ mod tests {
     #[tokio::test]
     async fn should_capture_twilio_repeated_media_and_return_sdk_resource() {
         let store = store();
-        let request = request(
+        let structured_request = request(
             "POST",
-            "http://localhost/2010-04-01/Accounts/ACtest/Messages.json",
+            "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
             &[("content-type", "application/x-www-form-urlencoded")],
             "To=%2B15550000002&From=%2B15550000001&Body=hello+world&MediaUrl=https%3A%2F%2Fexample.com%2Fa.jpg&MediaUrl=https%3A%2F%2Fexample.com%2Fb.jpg",
         )
         .await;
         let response = SmsAdapterRegistry::default()
-            .route(store.clone(), auth(), request)
+            .route(store.clone(), auth(), structured_request)
             .await
             .unwrap()
             .unwrap();
@@ -206,6 +227,122 @@ mod tests {
             .unwrap();
         assert_eq!(messages.messages[0].body, "hello world");
         assert_eq!(messages.messages[0].media.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn should_return_twilio_accepted_only_while_messaging_service_selects_sender() {
+        // Arrange
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+        let service_only = request(
+            "POST",
+            "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            "To=%2B15550000002&MessagingServiceSid=MGaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&Body=hello",
+        )
+        .await;
+        let explicit_sender = request(
+            "POST",
+            "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            "To=%2B15550000003&From=%2B15550000001&MessagingServiceSid=MGaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&Body=hello",
+        )
+        .await;
+
+        // Act
+        let service_response = registry
+            .route(store.clone(), auth(), service_only)
+            .await
+            .unwrap()
+            .unwrap();
+        let sender_response = registry
+            .route(store, auth(), explicit_sender)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Assert
+        let service_payload: serde_json::Value =
+            serde_json::from_str(&body(service_response).await).unwrap();
+        let sender_payload: serde_json::Value =
+            serde_json::from_str(&body(sender_response).await).unwrap();
+        assert_eq!(service_payload["status"], "accepted");
+        assert_eq!(sender_payload["status"], "queued");
+    }
+
+    #[tokio::test]
+    async fn should_reject_twilio_body_over_1600_characters_without_capture() {
+        // Arrange
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+        let request_body = format!(
+            "To=%2B15550000002&From=%2B15550000001&Body={}",
+            "a".repeat(1_601)
+        );
+        let request = request(
+            "POST",
+            "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            &request_body,
+        )
+        .await;
+
+        // Act
+        let response = registry
+            .route(store.clone(), auth(), request)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload = body(response).await;
+        assert!(payload.contains("\"code\":21617"));
+        assert!(store.list_conversations().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_twilio_sids_media_and_unsupported_fields_without_capture() {
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+        let cases = [
+            (
+                "http://localhost/2010-04-01/Accounts/ACshort/Messages.json",
+                "To=%2B15550000002&From=%2B15550000001&Body=hello",
+            ),
+            (
+                "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+                "To=%2B15550000002&MessagingServiceSid=MGshort&Body=hello",
+            ),
+            (
+                "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+                "To=%2B15550000002&From=%2B15550000001&MediaUrl=ftp%3A%2F%2Fexample.com%2Fa.jpg",
+            ),
+            (
+                "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+                "To=%2B15550000002&From=%2B15550000001&Body=hello&ValidityPeriod=60",
+            ),
+        ];
+
+        for (uri, payload) in cases {
+            let request = request(
+                "POST",
+                uri,
+                &[("content-type", "application/x-www-form-urlencoded")],
+                payload,
+            )
+            .await;
+            let response = registry
+                .route(store.clone(), auth(), request)
+                .await
+                .expect("Twilio path should be claimed")
+                .unwrap();
+            assert!(matches!(
+                response.status(),
+                StatusCode::BAD_REQUEST | StatusCode::UNSUPPORTED_MEDIA_TYPE
+            ));
+        }
+        assert!(store.list_conversations().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -251,6 +388,225 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_apply_sns_json_protocol_selection_and_reject_malformed_structures() {
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+        let structured =
+            urlencoding::encode(r#"{"default":"fallback","sms":"provider-specific body"}"#);
+        let payload = format!(
+            "Action=Publish&Version=2010-03-31&PhoneNumber=%2B15550000020&MessageStructure=json&Message={structured}&MessageAttributes.entry.1.Name=AWS.SNS.SMS.SenderID&MessageAttributes.entry.1.Value.DataType=String&MessageAttributes.entry.1.Value.StringValue=Sqrzl"
+        );
+        let structured_request = request(
+            "POST",
+            "http://localhost/",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            &payload,
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), structured_request)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let stored = store
+            .list_messages("+15550000020", ListSmsParams::default())
+            .unwrap()
+            .messages
+            .remove(0);
+        assert_eq!(stored.body, "provider-specific body");
+        assert_eq!(stored.from, "Sqrzl");
+
+        for accepted in [
+            r#"{"default":"fallback","unknown":"ignored"}"#,
+            r#"{"default":"fallback","sms":7}"#,
+        ] {
+            let encoded = urlencoding::encode(accepted);
+            let payload = format!(
+                "Action=Publish&Version=2010-03-31&PhoneNumber=%2B15550000021&MessageStructure=json&Message={encoded}"
+            );
+            let accepted_request = request(
+                "POST",
+                "http://localhost/",
+                &[("content-type", "application/x-www-form-urlencoded")],
+                &payload,
+            )
+            .await;
+            let response = registry
+                .route(store.clone(), auth(), accepted_request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert!(store
+            .list_messages("+15550000021", ListSmsParams::default())
+            .unwrap()
+            .messages
+            .iter()
+            .all(|message| message.body == "fallback"));
+
+        for malformed in [
+            r#"{"sms":"missing default"}"#,
+            r#"{"default":"first","default":"second"}"#,
+            "[]",
+        ] {
+            let encoded = urlencoding::encode(malformed);
+            let payload = format!(
+                "Action=Publish&Version=2010-03-31&PhoneNumber=%2B15550000022&MessageStructure=json&Message={encoded}"
+            );
+            let request = request(
+                "POST",
+                "http://localhost/",
+                &[("content-type", "application/x-www-form-urlencoded")],
+                &payload,
+            )
+            .await;
+            let response = registry
+                .route(store.clone(), auth(), request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert!(store
+            .list_messages("+15550000022", ListSmsParams::default())
+            .unwrap()
+            .messages
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_claim_malformed_provider_requests_before_storage_routing() {
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+
+        let malformed_sns = request(
+            "POST",
+            "http://localhost/",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            "Version=2010-03-31&PhoneNumber=%2B15550000022&Message=hello",
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), malformed_sns)
+            .await
+            .expect("form-encoded SNS request should be claimed")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(body(response).await.contains("MissingAction"));
+
+        let unknown_target = request(
+            "POST",
+            "http://localhost/",
+            &[("x-amz-target", "PinpointSMSVoiceV2.Unknown")],
+            "{}",
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), unknown_target)
+            .await
+            .expect("AWS SMS Voice target should be claimed")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(body(response).await.contains("not supported"));
+
+        let missing_version = request(
+            "POST",
+            "http://localhost/sms",
+            &[("content-type", "application/json")],
+            r#"{"from":"+15550000001","smsRecipients":[{"to":"+15550000023"}],"message":"hello"}"#,
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), missing_version)
+            .await
+            .expect("ACS SMS path should be claimed")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/problem+json"
+        );
+
+        let unauthorized_voice = request(
+            "POST",
+            "http://localhost/",
+            &[("x-amz-target", "PinpointSMSVoiceV2.SendTextMessage")],
+            r#"{"DestinationPhoneNumber":"+15550000024","MessageBody":"hello"}"#,
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), enforced_auth(), unauthorized_voice)
+            .await
+            .expect("AWS SMS Voice request should be claimed")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers().get("x-amzn-errortype").unwrap(),
+            "AccessDeniedException"
+        );
+        assert!(store.list_conversations().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_validate_every_aws_sms_voice_field_before_capture() {
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+        let cases = [
+            (
+                "PinpointSMSVoiceV2.SendTextMessage",
+                r#"{"DestinationPhoneNumber":"012345","MessageBody":"hello"}"#,
+            ),
+            (
+                "PinpointSMSVoiceV2.SendTextMessage",
+                r#"{"DestinationPhoneNumber":"+15550000030","OriginationIdentity":"bad value","MessageBody":"hello"}"#,
+            ),
+            (
+                "PinpointSMSVoiceV2.SendTextMessage",
+                r#"{"DestinationPhoneNumber":"+15550000030","MessageBody":"   "}"#,
+            ),
+            (
+                "PinpointSMSVoiceV2.SendTextMessage",
+                r#"{"DestinationPhoneNumber":"+15550000030","MessageBody":"hello","TimeToLive":4}"#,
+            ),
+            (
+                "PinpointSMSVoiceV2.SendTextMessage",
+                r#"{"DestinationPhoneNumber":"+15550000030","MessageBody":"hello","DestinationCountryParameters":{"IN_TEMPLATE_ID":"has space"}}"#,
+            ),
+            (
+                "PinpointSMSVoiceV2.SendMediaMessage",
+                r#"{"DestinationPhoneNumber":"+15550000030","OriginationIdentity":"+15550000001","MediaUrls":[]}"#,
+            ),
+            (
+                "PinpointSMSVoiceV2.SendMediaMessage",
+                r#"{"DestinationPhoneNumber":"+15550000030","OriginationIdentity":"+15550000001","MediaUrls":["https://example.com/file.jpg"]}"#,
+            ),
+        ];
+
+        for (target, payload) in cases {
+            let request = request(
+                "POST",
+                "http://localhost/",
+                &[("x-amz-target", target)],
+                payload,
+            )
+            .await;
+            let response = registry
+                .route(store.clone(), auth(), request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{payload}");
+            assert_eq!(
+                response.headers().get("x-amzn-errortype").unwrap(),
+                "ValidationException"
+            );
+        }
+        assert!(store.list_conversations().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn should_reject_missing_aws_auth_and_malformed_phone_numbers() {
         let registry = SmsAdapterRegistry::default();
         let store = store();
@@ -272,7 +628,7 @@ mod tests {
             "POST",
             "http://localhost/",
             &[],
-            "Action=Publish&PhoneNumber=5550000002&Message=hello",
+            "Action=Publish&Version=2010-03-31&PhoneNumber=5550000002&Message=hello",
         )
         .await;
         let response = registry
@@ -326,7 +682,7 @@ mod tests {
         let registry = SmsAdapterRegistry::default();
         let cases = [
             (
-                "http://localhost/2010-04-01/Accounts/ACtest/Messages.json",
+                "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
                 HeaderMap::new(),
                 "\"code\":21617",
             ),
@@ -367,5 +723,270 @@ mod tests {
             assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
             assert!(body(response).await.contains(expected));
         }
+    }
+
+    #[tokio::test]
+    async fn should_render_provider_shaped_incomplete_body_responses() {
+        let registry = SmsAdapterRegistry::default();
+        let cases = [
+            (
+                "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+                HeaderMap::new(),
+                "\"code\":21606",
+                None,
+            ),
+            (
+                "http://localhost/",
+                HeaderMap::from_iter([(
+                    http::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded".parse().unwrap(),
+                )]),
+                "<ErrorResponse",
+                None,
+            ),
+            (
+                "http://localhost/",
+                HeaderMap::from_iter([(
+                    http::HeaderName::from_static("x-amz-target"),
+                    "PinpointSMSVoiceV2.SendTextMessage".parse().unwrap(),
+                )]),
+                "ended before it was complete",
+                Some(("x-amzn-errortype", "ValidationException")),
+            ),
+            (
+                "http://localhost/sms?api-version=2026-01-23",
+                HeaderMap::new(),
+                "\"Body\"",
+                None,
+            ),
+        ];
+
+        for (uri, headers, expected, expected_header) in cases {
+            let response = registry
+                .render_incomplete_body(&Method::POST, &uri.parse::<Uri>().unwrap(), &headers)
+                .expect("SMS request head should be recognized");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            if let Some((name, value)) = expected_header {
+                assert_eq!(response.headers()[name], value);
+            }
+            assert!(body(response).await.contains(expected));
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_sms_requests_without_persisting_them() {
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+
+        let twilio = request(
+            "POST",
+            "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            "To=%2B15550000002&From=%2B15550000001",
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), twilio)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let sns = request(
+            "POST",
+            "http://localhost/",
+            &[],
+            "Action=Publish&PhoneNumber=%2B15550000002&Message=hello",
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), sns)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let dry_run = request(
+            "POST",
+            "http://localhost/",
+            &[("x-amz-target", "PinpointSMSVoiceV2.SendTextMessage")],
+            r#"{"DestinationPhoneNumber":"+15550000002","MessageBody":"validate only","DryRun":true}"#,
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), dry_run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(store.list_conversations().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_support_sns_get_and_acs_per_recipient_results() {
+        if std::env::var("SQRZL_ACS_CONNECTION_STRING").is_ok() {
+            return;
+        }
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+
+        let sns = request(
+            "GET",
+            "http://localhost/?Action=Publish&Version=2010-03-31&PhoneNumber=%2B15550000002&Message=hello",
+            &[],
+            "",
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), sns)
+            .await
+            .expect("SNS GET query should route")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body(response)
+            .await
+            .contains("xmlns=\"https://sns.amazonaws.com"));
+
+        let acs = request(
+            "POST",
+            "http://localhost/sms?api-version=2026-01-23",
+            &[("content-type", "application/json")],
+            r#"{"from":"+15550000001","smsRecipients":[{"to":"+15550000003"},{"to":"invalid"}],"message":"mixed"}"#,
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), acs)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let payload: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+        assert_eq!(payload["value"][0]["httpStatusCode"], 202);
+        assert_eq!(payload["value"][1]["httpStatusCode"], 400);
+        assert_eq!(
+            store
+                .list_messages("+15550000003", ListSmsParams::default())
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
+        assert!(store
+            .list_messages("invalid", ListSmsParams::default())
+            .unwrap()
+            .messages
+            .is_empty());
+
+        let repeatable_body = r#"{"from":"+15550000001","smsRecipients":[{"to":"+15550000004","repeatabilityRequestId":"fda6d242-46aa-4247-8bf6-619a1206f9c3","repeatabilityFirstSent":"Mon, 01 Apr 2019 06:22:03 GMT"}],"message":"repeatable"}"#;
+        for _ in 0..2 {
+            let repeatable = request(
+                "POST",
+                "http://localhost/sms?api-version=2026-01-23",
+                &[("content-type", "application/json")],
+                repeatable_body,
+            )
+            .await;
+            let response = registry
+                .route(store.clone(), auth(), repeatable)
+                .await
+                .unwrap()
+                .unwrap();
+            let payload: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+            assert_eq!(payload["value"][0]["repeatabilityResult"], "accepted");
+        }
+        assert_eq!(
+            store
+                .list_messages("+15550000004", ListSmsParams::default())
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn should_validate_acs_sms_options_and_repeatability_without_duplicate_capture() {
+        if std::env::var("SQRZL_ACS_CONNECTION_STRING").is_ok() {
+            return;
+        }
+        let registry = SmsAdapterRegistry::default();
+        let store = store();
+        let original = r#"{"from":"+15550000001","smsRecipients":[{"to":"+15550000040","repeatabilityRequestId":"fda6d242-46aa-4247-8bf6-619a1206f9c3","repeatabilityFirstSent":"Mon, 01 Apr 2019 06:22:03 GMT"}],"message":"repeatable","smsSendOptions":{"enableDeliveryReport":true,"tag":"qualification","deliveryReportTimeoutInSeconds":60}}"#;
+
+        for _ in 0..2 {
+            let repeat = request(
+                "POST",
+                "http://localhost/sms?api-version=2026-01-23",
+                &[("content-type", "application/json")],
+                original,
+            )
+            .await;
+            let response = registry
+                .route(store.clone(), auth(), repeat)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let payload: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+            assert_eq!(payload["value"][0]["repeatabilityResult"], "accepted");
+        }
+
+        let changed = request(
+            "POST",
+            "http://localhost/sms?api-version=2026-01-23",
+            &[("content-type", "application/json")],
+            r#"{"from":"+15550000001","smsRecipients":[{"to":"+15550000040","repeatabilityRequestId":"fda6d242-46aa-4247-8bf6-619a1206f9c3","repeatabilityFirstSent":"Mon, 01 Apr 2019 06:22:03 GMT"}],"message":"changed","smsSendOptions":{"enableDeliveryReport":true,"tag":"qualification","deliveryReportTimeoutInSeconds":60}}"#,
+        )
+        .await;
+        let response = registry
+            .route(store.clone(), auth(), changed)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let payload: serde_json::Value = serde_json::from_str(&body(response).await).unwrap();
+        assert_eq!(payload["value"][0]["successful"], false);
+        assert_eq!(payload["value"][0]["repeatabilityResult"], "rejected");
+
+        let captured = store
+            .list_messages("+15550000040", ListSmsParams::default())
+            .unwrap()
+            .messages;
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0].metadata["sms_send_options"]["tag"],
+            "qualification"
+        );
+
+        for invalid_options in [
+            r#"{"messagingConnect":{}}"#,
+            r#"{"deliveryReportTimeoutInSeconds":59}"#,
+        ] {
+            let payload = format!(
+                r#"{{"from":"+15550000001","smsRecipients":[{{"to":"+15550000041"}}],"message":"invalid","smsSendOptions":{invalid_options}}}"#
+            );
+            let invalid = request(
+                "POST",
+                "http://localhost/sms?api-version=2026-01-23",
+                &[("content-type", "application/json")],
+                &payload,
+            )
+            .await;
+            let response = registry
+                .route(store.clone(), auth(), invalid)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                response.headers()["content-type"],
+                "application/problem+json"
+            );
+        }
+        assert!(store
+            .list_messages("+15550000041", ListSmsParams::default())
+            .unwrap()
+            .messages
+            .is_empty());
     }
 }

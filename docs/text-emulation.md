@@ -14,6 +14,29 @@ Supported provider entry points are:
 - Azure Communication Services `POST /sms?api-version=...` including
   one-to-many recipients.
 
+The accepted request fields are deliberately narrower than each provider's full
+product surface and are validated before capture:
+
+- Twilio accepts `To`, `From`, `MessagingServiceSid`, `Body`, repeated
+  `MediaUrl`, and `StatusCallback`. Status callbacks must pass Sqrzl's local
+  callback-host allowlist. Service-selected senders initially return
+  `accepted`/zero segments; explicit senders return `queued`.
+- SNS accepts direct `PhoneNumber` Publish with raw messages or
+  `MessageStructure=json`, plus up to ten MessageAttributes. It applies the
+  `sms` value with `default` fallback, ignores irrelevant structured protocol
+  keys as SNS does, and rejects duplicate JSON keys.
+- AWS SMS Voice v2 accepts the documented fields and constraints of
+  `SendTextMessage` and `SendMediaMessage`; media values are S3 references and
+  `DryRun` validates without capture.
+- ACS SMS accepts API versions `2021-03-07` and `2026-01-23`, 1-100 recipients,
+  per-recipient repeatability data, and delivery-report/tag/timeout options.
+  `messagingConnect` is explicitly unsupported.
+
+Malformed requests on these endpoints receive the provider's normal error
+envelope and never fall through to object-storage routing. Unsupported fields
+are rejected rather than silently dropped, except where ignoring a field is the
+documented provider behavior.
+
 The Texts admin surface can configure a callback destination per provider and
 local number, inject an inbound message, explicitly transition outbound delivery
 to delivered or failed, inspect every callback request and bounded response, and

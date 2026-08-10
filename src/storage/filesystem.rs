@@ -14,6 +14,9 @@ use uuid::Uuid;
 
 mod io;
 
+const MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY: &str = "__sqrzl_multipart_min_non_final_part_size";
+const S3_MINIMUM_NON_FINAL_PART_SIZE: u64 = 5 * 1024 * 1024;
+
 pub struct FilesystemStorage {
     base_path: PathBuf,
     index: Arc<LockFreeIndex>,
@@ -130,19 +133,57 @@ impl BucketStore for FilesystemStorage {
 }
 
 impl FilesystemStorage {
+    fn validate_version_id(version_id: &str) -> Result<()> {
+        let mut components = std::path::Path::new(version_id).components();
+        let is_single_normal_component =
+            matches!(components.next(), Some(std::path::Component::Normal(_)))
+                && components.next().is_none();
+        let has_cross_platform_separator = version_id
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | '\0'));
+        if !is_single_normal_component || has_cross_platform_separator {
+            return Err(Error::NoSuchVersion);
+        }
+        Ok(())
+    }
+
     fn object_condition_matches(
         &self,
         bucket: &str,
         key: &str,
         condition: &ObjectCondition,
     ) -> Result<bool> {
+        if let ObjectCondition::All(conditions) = condition {
+            for condition in conditions {
+                if !self.object_condition_matches(bucket, key, condition)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
         match (condition, self.get_object(bucket, key)) {
-            (ObjectCondition::Missing, Err(Error::KeyNotFound)) => Ok(true),
+            (
+                ObjectCondition::Missing | ObjectCondition::MissingOrEtagNotIn(_),
+                Err(Error::KeyNotFound),
+            ) => Ok(true),
             (ObjectCondition::Missing, Ok(_)) | (_, Err(Error::KeyNotFound)) => Ok(false),
             (ObjectCondition::Etag(expected), Ok(object)) => Ok(object.etag == *expected),
+            (ObjectCondition::EtagIn(expected), Ok(object)) => {
+                Ok(expected.iter().any(|etag| etag == &object.etag))
+            }
+            (ObjectCondition::EtagNotIn(rejected), Ok(object)) => {
+                Ok(!rejected.iter().any(|etag| etag == &object.etag))
+            }
+            (ObjectCondition::MissingOrEtagNotIn(rejected), Ok(object)) => {
+                Ok(!rejected.iter().any(|etag| etag == &object.etag))
+            }
             (ObjectCondition::Metadata { key, value }, Ok(object)) => {
                 Ok(object.metadata.get(key) == Some(value))
             }
+            (ObjectCondition::MetadataNot { key, value }, Ok(object)) => {
+                Ok(object.metadata.get(key) != Some(value))
+            }
+            (ObjectCondition::All(_), _) => unreachable!("handled above"),
             (_, Err(error)) => Err(error),
         }
     }
@@ -152,24 +193,40 @@ impl FilesystemStorage {
             return Err(Error::BucketNotFound);
         }
         let object_id = Self::compute_object_id(bucket, key);
-        if self.versioning_enabled(bucket) {
+        let versioning_enabled = self.versioning_enabled(bucket);
+        let versioning_suspended = self.versioning_suspended(bucket);
+        if versioning_enabled || versioning_suspended {
             match self.get_object(bucket, key) {
                 Ok(current_object) => {
                     let snapshot_version_id = current_object
                         .version_id
                         .clone()
-                        .unwrap_or_else(|| Uuid::new_v4().to_string());
-                    self.write_version_snapshot(
-                        bucket,
-                        &object_id,
-                        &snapshot_version_id,
-                        &current_object,
-                    )?;
+                        .unwrap_or_else(|| "null".to_string());
+                    if versioning_enabled || snapshot_version_id != "null" {
+                        self.write_version_snapshot(
+                            bucket,
+                            &object_id,
+                            &snapshot_version_id,
+                            &current_object,
+                        )?;
+                    }
                 }
                 Err(Error::KeyNotFound) => {}
                 Err(error) => return Err(error),
             }
-            object.version_id = Some(Uuid::new_v4().to_string());
+            if versioning_suspended {
+                let null_version = self.version_dir(bucket, &object_id, "null");
+                if null_version.exists() {
+                    fs::remove_dir_all(&null_version).map_err(|error| {
+                        Error::InternalError(format!(
+                            "Failed to replace suspended null version: {error}"
+                        ))
+                    })?;
+                }
+                object.version_id = Some("null".to_string());
+            } else {
+                object.version_id = Some(Uuid::new_v4().to_string());
+            }
         } else {
             object.version_id = None;
         }
@@ -181,8 +238,55 @@ impl FilesystemStorage {
     fn delete_object_locked(&self, bucket: &str, key: &str) -> Result<()> {
         let object_id = Self::compute_object_id(bucket, key);
         let object_id_dir = self.object_id_dir(bucket, &object_id);
-        self.get_object(bucket, key)?;
-        if self.versioning_enabled(bucket) {
+        let versioning_enabled = self.versioning_enabled(bucket);
+        let versioning_suspended = self.versioning_suspended(bucket);
+        if versioning_enabled || versioning_suspended {
+            if !self.bucket_exists(bucket)? {
+                return Err(Error::BucketNotFound);
+            }
+            match self.get_object(bucket, key) {
+                Ok(current_object) => {
+                    let current_version_id = current_object
+                        .version_id
+                        .clone()
+                        .unwrap_or_else(|| "null".to_string());
+                    if versioning_enabled || current_version_id != "null" {
+                        self.write_version_snapshot(
+                            bucket,
+                            &object_id,
+                            &current_version_id,
+                            &current_object,
+                        )?;
+                    }
+                }
+                Err(Error::KeyNotFound) => {}
+                Err(error) => return Err(error),
+            }
+            if versioning_suspended {
+                let null_version = self.version_dir(bucket, &object_id, "null");
+                if null_version.exists() {
+                    fs::remove_dir_all(&null_version).map_err(|error| {
+                        Error::InternalError(format!(
+                            "Failed to replace suspended null version: {error}"
+                        ))
+                    })?;
+                }
+            }
+            let delete_marker_id = if versioning_suspended {
+                "null".to_string()
+            } else {
+                Uuid::new_v4().to_string()
+            };
+            let mut delete_marker = Object::new(
+                key.to_string(),
+                Vec::new(),
+                "application/x-sqrzl-delete-marker".to_string(),
+            );
+            delete_marker.version_id = Some(delete_marker_id.clone());
+            delete_marker
+                .provider_metadata
+                .insert("s3_delete_marker".to_string(), "true".to_string());
+            self.write_version_snapshot(bucket, &object_id, &delete_marker_id, &delete_marker)?;
             let object_data_path = self.object_data_path(bucket, &object_id);
             let metadata_path = self.object_metadata_path(bucket, &object_id);
             if object_data_path.exists() {
@@ -197,10 +301,90 @@ impl FilesystemStorage {
                 let _ = fs::remove_dir_all(&object_id_dir);
             }
         } else {
+            self.get_object(bucket, key)?;
             fs::remove_dir_all(&object_id_dir)
                 .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
         }
         self.index.remove(bucket, key);
+        Ok(())
+    }
+
+    fn restore_latest_live_version(&self, bucket: &str, key: &str, object_id: &str) -> Result<()> {
+        if self.object_data_path(bucket, object_id).exists() {
+            self.index.insert(bucket, key);
+            return Ok(());
+        }
+
+        let latest = self
+            .list_object_versions_for_key(bucket, key)?
+            .into_iter()
+            .max_by(|left, right| {
+                left.last_modified
+                    .cmp(&right.last_modified)
+                    .then_with(|| left.version_id.cmp(&right.version_id))
+            });
+        let Some(latest) = latest else {
+            self.index.remove(bucket, key);
+            return Ok(());
+        };
+        if latest
+            .provider_metadata
+            .get("s3_delete_marker")
+            .is_some_and(|value| value == "true")
+        {
+            self.index.remove(bucket, key);
+            return Ok(());
+        }
+
+        let version_id = latest.version_id.ok_or_else(|| {
+            Error::InternalError("Historical object version is missing a version id".to_string())
+        })?;
+        let restored = self.get_object_version(bucket, key, &version_id)?;
+        self.write_object_files(bucket, object_id, &restored)?;
+        fs::remove_dir_all(self.version_dir(bucket, object_id, &version_id))
+            .map_err(|e| Error::InternalError(format!("Failed to promote object version: {e}")))?;
+        self.index.insert(bucket, key);
+        Ok(())
+    }
+
+    fn assign_null_version_ids_to_unversioned_objects(&self, bucket: &str) -> Result<()> {
+        let entries = fs::read_dir(self.bucket_dir(bucket)).map_err(|error| {
+            Error::InternalError(format!(
+                "Failed to scan bucket while configuring versioning: {error}"
+            ))
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                Error::InternalError(format!(
+                    "Failed to inspect object while configuring versioning: {error}"
+                ))
+            })?;
+            if !entry.path().is_dir()
+                || entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
+            let metadata_path = entry.path().join("object.meta.json");
+            let Ok(object) = Self::read_object_metadata(&metadata_path) else {
+                continue;
+            };
+            let object_lock = self.object_lock(bucket, &object.key)?;
+            let _guard = object_lock.lock().map_err(|_| {
+                Error::InternalError(
+                    "Failed to lock object while configuring versioning".to_string(),
+                )
+            })?;
+            let Ok(mut current) = Self::read_object_metadata(&metadata_path) else {
+                continue;
+            };
+            if current.version_id.is_none() {
+                current.version_id = Some("null".to_string());
+                Self::write_object_metadata(&metadata_path, &current)?;
+            }
+        }
         Ok(())
     }
 }
@@ -229,6 +413,42 @@ impl ObjectStore for FilesystemStorage {
             return Ok(false);
         }
         self.put_object_locked(bucket, &key, object)?;
+        Ok(true)
+    }
+
+    fn replace_object_metadata_if_unchanged(
+        &self,
+        bucket: &str,
+        key: &str,
+        observed: &Object,
+        updated: &Object,
+    ) -> Result<bool> {
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for metadata update".to_string())
+        })?;
+        let object_id = Self::compute_object_id(bucket, key);
+        let metadata_path = self.object_metadata_path(bucket, &object_id);
+        if !metadata_path.exists() {
+            return Ok(false);
+        }
+
+        let mut current = Self::read_object_metadata(&metadata_path)?;
+        if current.etag != observed.etag
+            || current.last_modified != observed.last_modified
+            || current.version_id != observed.version_id
+            || current.content_type != observed.content_type
+            || current.metadata != observed.metadata
+            || current.provider_metadata != observed.provider_metadata
+        {
+            return Ok(false);
+        }
+        current.content_type.clone_from(&updated.content_type);
+        current.metadata.clone_from(&updated.metadata);
+        current
+            .provider_metadata
+            .clone_from(&updated.provider_metadata);
+        Self::write_object_metadata(&metadata_path, &current)?;
         Ok(true)
     }
 
@@ -707,7 +927,10 @@ impl MultipartStore for FilesystemStorage {
             key,
             None,
             HashMap::new(),
-            HashMap::new(),
+            HashMap::from([(
+                MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY.to_string(),
+                S3_MINIMUM_NON_FINAL_PART_SIZE.to_string(),
+            )]),
         )
     }
 
@@ -831,14 +1054,14 @@ impl MultipartStore for FilesystemStorage {
 
         self.ensure_uploads_cache_loaded(bucket)?;
         let upload = {
-            let mut cache = self
+            let cache = self
                 .uploads_cache
                 .lock()
                 .map_err(|_| Error::InternalError("Failed to lock uploads cache".to_string()))?;
             let uploads = cache
-                .get_mut(bucket)
+                .get(bucket)
                 .ok_or_else(|| Error::InternalError("Missing uploads cache entry".to_string()))?;
-            uploads.remove(upload_id).ok_or(Error::NoSuchUpload)?
+            uploads.get(upload_id).cloned().ok_or(Error::NoSuchUpload)?
         };
         let crate::models::MultipartUpload {
             key,
@@ -854,12 +1077,25 @@ impl MultipartStore for FilesystemStorage {
             return Err(Error::InvalidPartOrder);
         }
 
-        // Validate parts are sequential starting from 1
-        for (i, part) in parts.iter().enumerate() {
-            let expected_part = u32::try_from(i + 1).map_err(|_| Error::InvalidPartOrder)?;
-            if part.part_number != expected_part {
-                return Err(Error::InvalidPartOrder);
-            }
+        // S3 accepts any uploaded part numbers from 1 through 10,000 as long
+        // as the completion manifest orders the selected parts strictly
+        // ascending; it does not require a sequence starting at part 1.
+        if parts
+            .windows(2)
+            .any(|pair| pair[0].part_number >= pair[1].part_number)
+        {
+            return Err(Error::InvalidPartOrder);
+        }
+        let minimum_non_final_part_size = provider_metadata
+            .get(MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY)
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        if parts
+            .iter()
+            .take(parts.len().saturating_sub(1))
+            .any(|part| part.size < minimum_non_final_part_size)
+        {
+            return Err(Error::EntityTooSmall);
         }
 
         // Read all parts and concatenate
@@ -884,7 +1120,10 @@ impl MultipartStore for FilesystemStorage {
         // Compute final ETag: MD5(concat(part_etags)) + "-" + part_count
         let mut etag_hash = md5::Context::new();
         for part in &parts {
-            etag_hash.consume(part.etag.as_bytes());
+            let raw_digest = hex::decode(part.etag.trim_matches('"')).map_err(|error| {
+                Error::InternalError(format!("Invalid multipart part ETag: {error}"))
+            })?;
+            etag_hash.consume(raw_digest);
         }
         let final_etag = format!("{:x}-{}", etag_hash.finalize(), parts.len());
 
@@ -900,6 +1139,16 @@ impl MultipartStore for FilesystemStorage {
             obj.storage_class.clone_from(storage_class);
         }
         self.put_object(bucket, key, obj)?;
+        {
+            let mut cache = self
+                .uploads_cache
+                .lock()
+                .map_err(|_| Error::InternalError("Failed to lock uploads cache".to_string()))?;
+            let uploads = cache
+                .get_mut(bucket)
+                .ok_or_else(|| Error::InternalError("Missing uploads cache entry".to_string()))?;
+            uploads.remove(upload_id);
+        }
         self.remove_upload_record(bucket, upload_id)?;
 
         Ok(final_etag)
@@ -935,7 +1184,8 @@ impl VersionStore for FilesystemStorage {
 
         // Mark bucket as versioning-enabled by creating a marker file
         let versioning_marker = self.versioning_marker(bucket);
-        Self::atomic_write(&versioning_marker, b"")?;
+        Self::atomic_write(&versioning_marker, b"enabled")?;
+        self.assign_null_version_ids_to_unversioned_objects(bucket)?;
         Ok(())
     }
 
@@ -944,9 +1194,12 @@ impl VersionStore for FilesystemStorage {
             return Err(Error::BucketNotFound);
         }
 
-        // Remove the versioning marker
+        // Preserve the distinction between a never-versioned bucket and one whose
+        // versioning is suspended. Suspended buckets retain non-null history and
+        // replace a single null version on subsequent writes and deletes.
         let versioning_marker = self.versioning_marker(bucket);
-        let _ = fs::remove_file(versioning_marker);
+        Self::atomic_write(&versioning_marker, b"suspended")?;
+        self.assign_null_version_ids_to_unversioned_objects(bucket)?;
         Ok(())
     }
 
@@ -959,6 +1212,7 @@ impl VersionStore for FilesystemStorage {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
         }
+        Self::validate_version_id(version_id)?;
 
         let object_id = Self::compute_object_id(bucket, key);
         let version_data_path = self.version_data_path(bucket, &object_id, version_id);
@@ -1108,6 +1362,7 @@ impl VersionStore for FilesystemStorage {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
         }
+        Self::validate_version_id(version_id)?;
 
         let object_id = Self::compute_object_id(bucket, key);
         let version_data_path = self.version_data_path(bucket, &object_id, version_id);
@@ -1136,6 +1391,8 @@ impl VersionStore for FilesystemStorage {
 
             self.index.remove(bucket, key);
 
+            self.restore_latest_live_version(bucket, key, &object_id)?;
+
             if !self.version_entries_exist(bucket, &object_id)? {
                 let version_dir = self.object_id_dir(bucket, &object_id);
                 let _ = fs::remove_dir_all(&version_dir);
@@ -1147,6 +1404,8 @@ impl VersionStore for FilesystemStorage {
         let version_dir = self.version_dir(bucket, &object_id, version_id);
         fs::remove_dir_all(&version_dir)
             .map_err(|e| Error::InternalError(format!("Failed to delete version: {e}")))?;
+
+        self.restore_latest_live_version(bucket, key, &object_id)?;
 
         if !self.object_data_path(bucket, &object_id).exists()
             && !self.version_entries_exist(bucket, &object_id)?
@@ -1210,6 +1469,54 @@ mod tests {
         );
         assert_eq!(fetched.metadata.get("owner"), Some(&"alice".to_string()));
         assert_eq!(fetched.metadata.get("purpose"), Some(&"test".to_string()));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_reject_atomic_condition_set_when_any_metadata_predicate_fails() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "condition-all-bucket";
+        let key = "object.txt";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        let current = Object::new_with_metadata(
+            key.to_string(),
+            b"current".to_vec(),
+            "text/plain".to_string(),
+            HashMap::from([
+                ("generation".to_string(), "7".to_string()),
+                ("metageneration".to_string(), "2".to_string()),
+            ]),
+        );
+        storage
+            .put_object(bucket, key.to_string(), current)
+            .unwrap();
+        let replacement = Object::new(
+            key.to_string(),
+            b"replacement".to_vec(),
+            "text/plain".to_string(),
+        );
+        let condition = ObjectCondition::All(vec![
+            ObjectCondition::Metadata {
+                key: "generation".to_string(),
+                value: "7".to_string(),
+            },
+            ObjectCondition::Metadata {
+                key: "metageneration".to_string(),
+                value: "999".to_string(),
+            },
+        ]);
+
+        // Act
+        let written = storage
+            .put_object_if(bucket, key.to_string(), replacement, &condition)
+            .unwrap();
+
+        // Assert
+        assert!(!written);
+        assert_eq!(storage.get_object(bucket, key).unwrap().data, b"current");
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1374,6 +1681,97 @@ mod tests {
         assert_eq!(docs_after_nested_delete.objects[0].key, "docs/readme.txt");
         assert!(root_after_all_deletes.common_prefixes.is_empty());
         assert!(root_after_all_deletes.objects.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_compute_s3_multipart_etag_from_raw_part_md5_digests() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "multipart-etag-bucket";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        let upload = storage
+            .create_multipart_upload(bucket, "combined.bin".to_string())
+            .unwrap();
+        storage
+            .upload_part(bucket, &upload.upload_id, 1, b"hello".to_vec())
+            .unwrap();
+
+        // Act
+        let etag = storage
+            .complete_multipart_upload(bucket, &upload.upload_id)
+            .unwrap();
+
+        // Assert
+        assert_eq!(etag, "62109206880d38a4010a98e11243924a-1");
+        assert_eq!(
+            storage.get_object(bucket, "combined.bin").unwrap().etag,
+            etag
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_complete_single_noninitial_s3_multipart_part() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "multipart-noninitial-part-bucket";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        let upload = storage
+            .create_multipart_upload(bucket, "combined.bin".to_string())
+            .unwrap();
+        storage
+            .upload_part(bucket, &upload.upload_id, 7, b"payload".to_vec())
+            .unwrap();
+
+        // Act
+        let etag = storage
+            .complete_multipart_upload(bucket, &upload.upload_id)
+            .unwrap();
+
+        // Assert
+        assert!(etag.ends_with("-1"));
+        assert_eq!(
+            storage.get_object(bucket, "combined.bin").unwrap().data,
+            b"payload"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_reject_small_non_final_multipart_part_without_consuming_upload() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "multipart-minimum-bucket";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        let upload = storage
+            .create_multipart_upload(bucket, "combined.bin".to_string())
+            .unwrap();
+        storage
+            .upload_part(bucket, &upload.upload_id, 1, b"too-small".to_vec())
+            .unwrap();
+        storage
+            .upload_part(bucket, &upload.upload_id, 2, b"final".to_vec())
+            .unwrap();
+
+        // Act
+        let result = storage.complete_multipart_upload(bucket, &upload.upload_id);
+
+        // Assert
+        assert!(matches!(result, Err(Error::EntityTooSmall)));
+        assert!(storage
+            .get_multipart_upload(bucket, &upload.upload_id)
+            .is_ok());
+        assert!(matches!(
+            storage.get_object(bucket, "combined.bin"),
+            Err(Error::KeyNotFound)
+        ));
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1555,6 +1953,263 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_unsafe_version_ids_without_aliasing_current_or_historical_data() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "safe-version-path-bucket";
+        let key = "doc.txt";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        storage.enable_versioning(bucket).unwrap();
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(key.to_string(), b"v1".to_vec(), "text/plain".to_string()),
+            )
+            .unwrap();
+        let first_version_id = storage
+            .get_object(bucket, key)
+            .unwrap()
+            .version_id
+            .expect("first version id should exist");
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(key.to_string(), b"v2".to_vec(), "text/plain".to_string()),
+            )
+            .unwrap();
+        let versions_before = storage.list_object_versions_for_key(bucket, key).unwrap();
+
+        // Act
+        for invalid_version_id in ["", ".", "..", "../other", "other/version", "other\\version"] {
+            assert!(matches!(
+                storage.get_object_version(bucket, key, invalid_version_id),
+                Err(Error::NoSuchVersion)
+            ));
+            assert!(matches!(
+                storage.delete_object_version(bucket, key, invalid_version_id),
+                Err(Error::NoSuchVersion)
+            ));
+        }
+
+        // Assert
+        assert_eq!(storage.get_object(bucket, key).unwrap().data, b"v2");
+        assert_eq!(
+            storage
+                .get_object_version(bucket, key, &first_version_id)
+                .unwrap()
+                .data,
+            b"v1"
+        );
+        assert_eq!(
+            storage
+                .list_object_versions_for_key(bucket, key)
+                .unwrap()
+                .len(),
+            versions_before.len()
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_replace_provider_metadata_without_changing_version_identity_or_history() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "provider-metadata-cas-bucket";
+        let key = "doc.txt";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        storage.enable_versioning(bucket).unwrap();
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(key.to_string(), b"v1".to_vec(), "text/plain".to_string()),
+            )
+            .unwrap();
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(key.to_string(), b"v2".to_vec(), "text/plain".to_string()),
+            )
+            .unwrap();
+        let observed = storage.get_object(bucket, key).unwrap();
+        let versions_before = storage.list_object_versions_for_key(bucket, key).unwrap();
+        let replacement = HashMap::from([("lease-state".to_string(), "leased".to_string())]);
+        let replacement_user_metadata = HashMap::from([("owner".to_string(), "sdk".to_string())]);
+        let mut updated = observed.clone();
+        updated.content_type = "application/json".to_string();
+        updated.metadata.clone_from(&replacement_user_metadata);
+        updated.provider_metadata.clone_from(&replacement);
+
+        // Act
+        let replaced = storage
+            .replace_object_metadata_if_unchanged(bucket, key, &observed, &updated)
+            .unwrap();
+        let mut stale_updated = observed.clone();
+        stale_updated.provider_metadata =
+            HashMap::from([("lease-state".to_string(), "released".to_string())]);
+        let stale_replacement = storage
+            .replace_object_metadata_if_unchanged(bucket, key, &observed, &stale_updated)
+            .unwrap();
+
+        // Assert
+        assert!(replaced);
+        assert!(!stale_replacement);
+        let stored = storage.get_object(bucket, key).unwrap();
+        assert_eq!(stored.data, observed.data);
+        assert_eq!(stored.etag, observed.etag);
+        assert_eq!(stored.last_modified, observed.last_modified);
+        assert_eq!(stored.version_id, observed.version_id);
+        assert_eq!(stored.content_type, "application/json");
+        assert_eq!(stored.metadata, replacement_user_metadata);
+        assert_eq!(stored.provider_metadata, replacement);
+        assert_eq!(
+            storage
+                .list_object_versions_for_key(bucket, key)
+                .unwrap()
+                .len(),
+            versions_before.len()
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn suspended_version_fixture() -> (
+        std::path::PathBuf,
+        FilesystemStorage,
+        &'static str,
+        &'static str,
+        String,
+    ) {
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "suspended-version-bucket";
+        let key = "doc.txt";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(
+                    key.to_string(),
+                    b"pre-versioning".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        assert!(storage
+            .get_object(bucket, key)
+            .unwrap()
+            .version_id
+            .is_none());
+        storage.enable_versioning(bucket).unwrap();
+        assert_eq!(
+            storage
+                .get_object(bucket, key)
+                .unwrap()
+                .version_id
+                .as_deref(),
+            Some("null")
+        );
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(
+                    key.to_string(),
+                    b"versioned".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let versioned_id = storage
+            .get_object(bucket, key)
+            .unwrap()
+            .version_id
+            .expect("enabled write should have a version id");
+        assert_ne!(versioned_id, "null");
+        storage.suspend_versioning(bucket).unwrap();
+        let reopened = FilesystemStorage::new(&base);
+        (base, reopened, bucket, key, versioned_id)
+    }
+
+    #[test]
+    fn should_replace_one_null_version_while_preserving_history_when_versioning_is_suspended() {
+        // Arrange
+        let (base, reopened, bucket, key, versioned_id) = suspended_version_fixture();
+
+        // Act
+        reopened
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(
+                    key.to_string(),
+                    b"first-null".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        reopened
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(
+                    key.to_string(),
+                    b"replacement-null".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+
+        // Assert
+        let current = reopened.get_object(bucket, key).unwrap();
+        assert_eq!(current.version_id.as_deref(), Some("null"));
+        assert_eq!(current.data, b"replacement-null");
+        assert!(!reopened.get_bucket(bucket).unwrap().versioning_enabled);
+        let versions = reopened.list_object_versions_for_key(bucket, key).unwrap();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(
+            versions
+                .iter()
+                .filter(|version| version.version_id.as_deref() == Some("null"))
+                .count(),
+            1
+        );
+        assert!(versions
+            .iter()
+            .any(|version| version.version_id.as_deref() == Some(versioned_id.as_str())));
+
+        reopened.delete_object(bucket, key).unwrap();
+        reopened.delete_object(bucket, key).unwrap();
+        let deleted_versions = reopened.list_object_versions_for_key(bucket, key).unwrap();
+        assert_eq!(deleted_versions.len(), 2);
+        assert_eq!(
+            deleted_versions
+                .iter()
+                .filter(|version| version.version_id.as_deref() == Some("null"))
+                .count(),
+            1
+        );
+        assert!(deleted_versions.iter().any(|version| {
+            version.version_id.as_deref() == Some("null")
+                && version.provider_metadata.get("s3_delete_marker") == Some(&"true".to_string())
+        }));
+
+        reopened.delete_object_version(bucket, key, "null").unwrap();
+        let restored = reopened.get_object(bucket, key).unwrap();
+        assert_eq!(restored.version_id.as_deref(), Some(versioned_id.as_str()));
+        assert_eq!(restored.data, b"versioned");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn should_preserve_history_when_deleting_current_object() {
         // Arrange
         let base = temp_path();
@@ -1601,10 +2256,13 @@ mod tests {
             storage.get_object(bucket, key),
             Err(Error::KeyNotFound)
         ));
-        assert!(matches!(
-            storage.get_object_version(bucket, key, &current_version_id),
-            Err(Error::NoSuchVersion)
-        ));
+        assert_eq!(
+            storage
+                .get_object_version(bucket, key, &current_version_id)
+                .unwrap()
+                .data,
+            b"v2".to_vec()
+        );
         assert_eq!(
             storage
                 .get_object_version(bucket, key, &first_version_id)
@@ -1618,8 +2276,93 @@ mod tests {
             .into_iter()
             .filter_map(|obj| obj.version_id)
             .collect();
-        assert_eq!(version_ids.len(), 1);
+        assert_eq!(version_ids.len(), 3);
         assert!(version_ids.contains(&first_version_id));
+        assert!(version_ids.contains(&current_version_id));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_create_another_delete_marker_when_versioned_object_is_deleted_repeatedly() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "repeated-delete-marker-bucket";
+        let key = "object.txt";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        storage.enable_versioning(bucket).unwrap();
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(key.to_string(), b"value".to_vec(), "text/plain".to_string()),
+            )
+            .unwrap();
+
+        // Act
+        storage.delete_object(bucket, key).unwrap();
+        storage.delete_object(bucket, key).unwrap();
+
+        // Assert
+        let versions = storage.list_object_versions_for_key(bucket, key).unwrap();
+        let delete_marker_ids = versions
+            .iter()
+            .filter(|version| {
+                version.provider_metadata.get("s3_delete_marker") == Some(&"true".to_string())
+            })
+            .filter_map(|version| version.version_id.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(delete_marker_ids.len(), 2);
+        assert_ne!(delete_marker_ids[0], delete_marker_ids[1]);
+        assert!(matches!(
+            storage.get_object(bucket, key),
+            Err(Error::KeyNotFound)
+        ));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_reveal_previous_data_when_latest_delete_marker_is_removed() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "restore-delete-marker-bucket";
+        let key = "object.txt";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        storage.enable_versioning(bucket).unwrap();
+        storage
+            .put_object(
+                bucket,
+                key.to_string(),
+                Object::new(
+                    key.to_string(),
+                    b"recoverable".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        storage.delete_object(bucket, key).unwrap();
+        let marker_version_id = storage
+            .list_object_versions_for_key(bucket, key)
+            .unwrap()
+            .into_iter()
+            .find(|version| {
+                version.provider_metadata.get("s3_delete_marker") == Some(&"true".to_string())
+            })
+            .and_then(|version| version.version_id)
+            .expect("delete marker should have a version id");
+
+        // Act
+        storage
+            .delete_object_version(bucket, key, &marker_version_id)
+            .unwrap();
+
+        // Assert
+        let restored = storage.get_object(bucket, key).unwrap();
+        assert_eq!(restored.data, b"recoverable");
+        assert!(!restored.provider_metadata.contains_key("s3_delete_marker"));
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1672,7 +2415,15 @@ mod tests {
 
         storage.delete_object(bucket, key).unwrap();
         let historical_versions = storage.list_object_versions_for_key(bucket, key).unwrap();
-        assert_eq!(historical_versions.len(), 2);
+        assert_eq!(historical_versions.len(), 4);
+        assert_eq!(
+            historical_versions
+                .iter()
+                .filter(|version| version.provider_metadata.get("s3_delete_marker")
+                    == Some(&"true".to_string()))
+                .count(),
+            1
+        );
         assert!(historical_versions.iter().all(|version| version.key == key));
 
         let _ = std::fs::remove_dir_all(&base);

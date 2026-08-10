@@ -76,10 +76,10 @@ impl TwilioSmsAdapter {
                     "from": from,
                     "messaging_service_sid": messaging_service_sid,
                     "num_media": media_count.to_string(),
-                    "num_segments": "1",
+                    "num_segments": if messaging_service_sid.is_some() && from.is_none() { "0" } else { "1" },
                     "price": null,
-                    "price_unit": "USD",
-                    "status": "queued",
+                    "price_unit": null,
+                    "status": if messaging_service_sid.is_some() && from.is_none() { "accepted" } else { "queued" },
                     "subresource_uris": {"media": format!("/2010-04-01/Accounts/{account_sid}/Messages/{}/Media.json", message.provider_message_id)},
                     "to": to,
                     "uri": format!("/2010-04-01/Accounts/{account_sid}/Messages/{}.json", message.provider_message_id)
@@ -142,8 +142,28 @@ impl TwilioSmsAdapter {
             .build()
     }
 
+    // Twilio's form validation must complete before the one store mutation.
+    #[allow(clippy::too_many_lines)]
     fn send(store: &dyn SmsStore, request: &SmsRequest, account_sid: &str) -> Response<Body> {
         let fields = decode_form(&request.body);
+        if !request
+            .header("content-type")
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|value| {
+                value
+                    .trim()
+                    .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+            })
+        {
+            return Self::error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                21_606,
+                "Message creation requires application/x-www-form-urlencoded content.",
+            );
+        }
+        if let Err(message) = validate_send_fields(&fields) {
+            return Self::error(StatusCode::BAD_REQUEST, 21_606, &message);
+        }
         let Some(to) = form_value(&fields, "To") else {
             return Self::error(
                 StatusCode::BAD_REQUEST,
@@ -170,11 +190,11 @@ impl TwilioSmsAdapter {
         if from.is_some_and(|value| !valid_sender(value)) {
             return Self::error(StatusCode::BAD_REQUEST, 21_612, "Invalid 'From' sender.");
         }
-        if messaging_service_sid.is_some_and(|value| !value.starts_with("MG")) {
+        if messaging_service_sid.is_some_and(|value| !valid_twilio_sid(value, "MG")) {
             return Self::error(
                 StatusCode::BAD_REQUEST,
                 21_606,
-                "MessagingServiceSid must start with MG.",
+                "MessagingServiceSid must be a valid MG SID.",
             );
         }
         let media_urls = fields
@@ -182,11 +202,33 @@ impl TwilioSmsAdapter {
             .filter(|(name, _)| name == "MediaUrl")
             .map(|(_, value)| value.clone())
             .collect::<Vec<_>>();
+        let body = form_value(&fields, "Body").filter(|value| !value.is_empty());
+        if body.is_none() && media_urls.is_empty() {
+            return Self::error(
+                StatusCode::BAD_REQUEST,
+                21_602,
+                "Either 'Body' or 'MediaUrl' is required.",
+            );
+        }
+        if body.is_some_and(|value| value.chars().count() > 1_600) {
+            return Self::error(
+                StatusCode::BAD_REQUEST,
+                21_617,
+                "The concatenated message body exceeds the 1600 character limit.",
+            );
+        }
         if media_urls.len() > 10 {
             return Self::error(
                 StatusCode::BAD_REQUEST,
                 21_651,
                 "At most 10 MediaUrl values are supported.",
+            );
+        }
+        if media_urls.iter().any(|value| !valid_http_uri(value)) {
+            return Self::error(
+                StatusCode::BAD_REQUEST,
+                21_606,
+                "Every MediaUrl must be an absolute HTTP or HTTPS URI.",
             );
         }
         if let Some(callback) = form_value(&fields, "StatusCallback") {
@@ -196,7 +238,7 @@ impl TwilioSmsAdapter {
         }
 
         let metadata = Self::message_metadata(&fields, messaging_service_sid);
-        let body = form_value(&fields, "Body").unwrap_or("").to_string();
+        let body = body.unwrap_or("").to_string();
         let message = match store.store_message(NewSmsMessage {
             batch_id: None,
             provider: SmsProvider::Twilio,
@@ -269,6 +311,20 @@ impl TwilioSmsAdapter {
     }
 }
 
+fn valid_twilio_sid(value: &str, prefix: &str) -> bool {
+    value.len() == 34
+        && value.starts_with(prefix)
+        && value[prefix.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_http_uri(value: &str) -> bool {
+    value.parse::<Uri>().is_ok_and(|uri| {
+        matches!(uri.scheme_str(), Some("http" | "https")) && uri.authority().is_some()
+    })
+}
+
 impl SmsAdapter for TwilioSmsAdapter {
     fn name(&self) -> &'static str {
         "twilio"
@@ -291,6 +347,14 @@ impl SmsAdapter for TwilioSmsAdapter {
         )
     }
 
+    fn incomplete_body(&self) -> Response<Body> {
+        Self::error(
+            StatusCode::BAD_REQUEST,
+            21_606,
+            "The request body ended before it was complete.",
+        )
+    }
+
     fn handle<'a>(
         &'a self,
         store: Arc<dyn SmsStore>,
@@ -305,6 +369,13 @@ impl SmsAdapter for TwilioSmsAdapter {
                     "Resource not found.",
                 ));
             };
+            if !valid_twilio_sid(account, "AC") {
+                return Ok(Self::error(
+                    StatusCode::BAD_REQUEST,
+                    20_001,
+                    "AccountSid must be a valid AC SID.",
+                ));
+            }
             if !Self::authorized(&request, account) {
                 return Ok(Self::error(
                     StatusCode::UNAUTHORIZED,
@@ -323,4 +394,31 @@ impl SmsAdapter for TwilioSmsAdapter {
             }
         })
     }
+}
+
+fn validate_send_fields(fields: &[(String, String)]) -> Result<(), String> {
+    const SUPPORTED: &[&str] = &[
+        "To",
+        "From",
+        "MessagingServiceSid",
+        "Body",
+        "MediaUrl",
+        "StatusCallback",
+    ];
+    let mut singular = HashMap::<&str, usize>::new();
+    for (name, _) in fields {
+        if !SUPPORTED.contains(&name.as_str()) {
+            return Err(format!(
+                "Parameter {name} is not supported by this Twilio SMS/MMS emulator"
+            ));
+        }
+        if name != "MediaUrl" {
+            let count = singular.entry(name.as_str()).or_default();
+            *count += 1;
+            if *count > 1 {
+                return Err(format!("Parameter {name} must not be repeated"));
+            }
+        }
+    }
+    Ok(())
 }

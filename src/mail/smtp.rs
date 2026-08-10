@@ -89,6 +89,7 @@ where
     write_line(&mut writer, "220 sqrzl-emulator SMTP ready").await?;
 
     let mut transaction = Transaction::default();
+    let mut greeted = false;
 
     while let Some(line) = next_line(&mut reader).await? {
         let Some((command, rest)) = split_command(&line) else {
@@ -97,10 +98,21 @@ where
         };
 
         match command.as_str() {
-            "EHLO" | "HELO" => write_line(&mut writer, "250 sqrzl-emulator").await?,
-            "MAIL" => {
+            "EHLO" | "HELO" => {
+                if rest.is_empty() {
+                    write_line(&mut writer, "501 Domain/address required").await?;
+                    continue;
+                }
+                greeted = true;
                 transaction = Transaction::default();
-                match parse_address(rest, "FROM:") {
+                write_line(&mut writer, "250 sqrzl-emulator").await?;
+            }
+            "MAIL" => {
+                if !greeted || transaction.from.is_some() {
+                    write_line(&mut writer, "503 Bad sequence of commands").await?;
+                    continue;
+                }
+                match parse_address(rest, "FROM:", true) {
                     Some(address) => {
                         transaction.from = Some(address);
                         write_line(&mut writer, "250 OK").await?;
@@ -108,7 +120,10 @@ where
                     None => write_line(&mut writer, "501 Syntax error in MAIL FROM").await?,
                 }
             }
-            "RCPT" => match parse_address(rest, "TO:") {
+            "RCPT" if transaction.from.is_none() => {
+                write_line(&mut writer, "503 Bad sequence of commands").await?;
+            }
+            "RCPT" => match parse_address(rest, "TO:", false) {
                 Some(address) => {
                     transaction.recipients.push(address);
                     write_line(&mut writer, "250 OK").await?;
@@ -122,7 +137,8 @@ where
                 }
                 write_line(&mut writer, "354 Start mail input; end with <CRLF>.<CRLF>").await?;
                 let raw = match read_data(&mut reader, max_message_bytes).await {
-                    Ok(raw) => raw,
+                    Ok(Some(raw)) => raw,
+                    Ok(None) => return Ok(()),
                     Err(Error::InvalidRequest(message)) => {
                         write_line(&mut writer, &format!("552 {message}")).await?;
                         transaction = Transaction::default();
@@ -182,7 +198,7 @@ fn split_command(line: &str) -> Option<(String, &str)> {
 
 /// Parses `FROM:<addr>` / `TO:<addr>` envelope arguments, case-insensitively on
 /// the prefix, tolerating an optional space before `<addr>`.
-fn parse_address(rest: &str, prefix: &str) -> Option<Address> {
+fn parse_address(rest: &str, prefix: &str, allow_null: bool) -> Option<Address> {
     let rest = rest.trim();
     // `get` (rather than slicing directly) avoids panicking on a UTF-8 boundary
     // if a malformed client sends multi-byte characters before the prefix.
@@ -190,20 +206,35 @@ fn parse_address(rest: &str, prefix: &str) -> Option<Address> {
     if !head.eq_ignore_ascii_case(prefix) {
         return None;
     }
-    let without_prefix = &rest[prefix.len()..];
-    let email = without_prefix
-        .trim()
-        .trim_start_matches('<')
-        .split(['>', ' '])
-        .next()?
-        .trim();
-    if email.is_empty() {
+    let without_prefix = rest[prefix.len()..].trim();
+    let path = without_prefix.strip_prefix('<')?;
+    let close = path.find('>')?;
+    let email = path[..close].trim();
+    let parameters = &path[close + 1..];
+    if !parameters.is_empty()
+        && !parameters
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_whitespace)
+    {
+        return None;
+    }
+    if allow_null && email.is_empty() {
+        // RFC 5321 reserves the null reverse-path for delivery-status and
+        // other bounce traffic. An empty Address records that envelope value;
+        // the outer Option still distinguishes it from MAIL not being issued.
+        return Some(Address::new(""));
+    }
+    if email.is_empty() || email.contains(['<', '>', '\r', '\n']) {
         return None;
     }
     Some(Address::new(email))
 }
 
-async fn read_data<R>(reader: &mut BufReader<R>, max_message_bytes: usize) -> Result<Vec<u8>>
+async fn read_data<R>(
+    reader: &mut BufReader<R>,
+    max_message_bytes: usize,
+) -> Result<Option<Vec<u8>>>
 where
     R: AsyncRead + Unpin,
 {
@@ -213,7 +244,7 @@ where
     loop {
         let byte = match reader.read_u8().await {
             Ok(byte) => byte,
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
             Err(error) => return Err(Error::InternalError(error.to_string())),
         };
 
@@ -232,13 +263,13 @@ where
         }
 
         if byte == b'\n' {
-            if line.ends_with(b"\n") {
+            let ended_with_crlf = line.ends_with(b"\r\n");
+            if ended_with_crlf {
+                line.truncate(line.len() - 2);
+            } else {
                 line.pop();
             }
-            if line.ends_with(b"\r") {
-                line.pop();
-            }
-            if line == b"." {
+            if ended_with_crlf && line == b"." {
                 break;
             }
             if !too_large {
@@ -260,7 +291,7 @@ where
             "message exceeds the {max_message_bytes}-byte emulator limit"
         )))
     } else {
-        Ok(raw)
+        Ok(Some(raw))
     }
 }
 
@@ -308,12 +339,7 @@ fn build_message(transaction: &Transaction, raw: &[u8]) -> Message {
     let cc = parse_header_address_list(headers.get("cc").map_or("", |value| value));
     let bcc = parse_header_address_list(headers.get("bcc").map_or("", |value| value));
     let subject = headers.get("subject").cloned().unwrap_or_default();
-    let from = transaction
-        .from
-        .as_ref()
-        .filter(|value| !value.email.is_empty())
-        .cloned()
-        .unwrap_or(from);
+    let from = transaction.from.clone().unwrap_or(from);
 
     Message {
         source_protocol: SourceProtocol::Smtp,
@@ -325,11 +351,14 @@ fn build_message(transaction: &Transaction, raw: &[u8]) -> Message {
         },
         cc,
         bcc,
+        reply_to: Vec::new(),
         subject,
         headers,
         body_text: Some(body.trim().to_string()),
         body_html: None,
         attachments: Vec::new(),
+        user_engagement_tracking_disabled: None,
+        provider_metadata: HashMap::new(),
         raw_mime: Some(raw.to_vec()),
         thread_id: None,
     }
@@ -426,6 +455,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_accept_the_rfc_5321_null_reverse_path() {
+        let mail = temp_store();
+        let (client, server) = tokio::io::duplex(4096);
+        let session = tokio::spawn(handle_session(server, mail.clone(), 4096));
+        let mut client_reader = ClientBufReader::new(client);
+
+        let mut greeting = String::new();
+        client_reader.read_line(&mut greeting).await.unwrap();
+        send(&mut client_reader, "EHLO client.example.com").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "MAIL FROM:<>").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "RCPT TO:<alice@example.com>").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "DATA").await;
+        assert_reply(&mut client_reader, "354").await;
+        send(&mut client_reader, "From: original@example.com").await;
+        send(&mut client_reader, "Subject: delivery failure").await;
+        send(&mut client_reader, "").await;
+        send(&mut client_reader, "bounce").await;
+        send(&mut client_reader, ".").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "QUIT").await;
+        assert_reply(&mut client_reader, "221").await;
+        session.await.expect("session task should not panic").ok();
+
+        let messages = mail
+            .list_messages("alice@example.com", ListMessagesParams::default())
+            .expect("list should succeed");
+        assert_eq!(messages.messages.len(), 1);
+        assert_eq!(messages.messages[0].message.from.email, "");
+    }
+
+    #[tokio::test]
     async fn should_reject_data_when_no_recipient_was_given() {
         let mail = temp_store();
         let (client, server) = tokio::io::duplex(4096);
@@ -435,6 +498,9 @@ mod tests {
 
         let mut greeting = String::new();
         client_reader.read_line(&mut greeting).await.unwrap();
+
+        send(&mut client_reader, "EHLO client.example.com").await;
+        assert_reply(&mut client_reader, "250").await;
 
         send(&mut client_reader, "MAIL FROM:<sender@example.com>").await;
         assert_reply(&mut client_reader, "250").await;
@@ -457,6 +523,8 @@ mod tests {
 
         let mut greeting = String::new();
         client_reader.read_line(&mut greeting).await.unwrap();
+        send(&mut client_reader, "EHLO client.example.com").await;
+        assert_reply(&mut client_reader, "250").await;
         send(&mut client_reader, "MAIL FROM:<sender@example.com>").await;
         assert_reply(&mut client_reader, "250").await;
         send(&mut client_reader, "RCPT TO:<alice@example.com>").await;
@@ -473,6 +541,64 @@ mod tests {
         assert!(mail
             .list_messages("alice@example.com", ListMessagesParams::default())
             .unwrap()
+            .messages
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_reject_out_of_sequence_envelope_commands() {
+        let mail = temp_store();
+        let (client, server) = tokio::io::duplex(4096);
+        let session = tokio::spawn(handle_session(server, mail, 4096));
+        let mut client_reader = ClientBufReader::new(client);
+
+        let mut greeting = String::new();
+        client_reader.read_line(&mut greeting).await.unwrap();
+
+        send(&mut client_reader, "RCPT TO:<alice@example.com>").await;
+        assert_reply(&mut client_reader, "503").await;
+
+        send(&mut client_reader, "EHLO client.example.com").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "MAIL FROM:<sender@example.com>").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "MAIL FROM:<other@example.com>").await;
+        assert_reply(&mut client_reader, "503").await;
+
+        send(&mut client_reader, "QUIT").await;
+        assert_reply(&mut client_reader, "221").await;
+        session.await.expect("session task should not panic").ok();
+    }
+
+    #[tokio::test]
+    async fn should_discard_data_when_the_client_disconnects_before_the_terminator() {
+        let mail = temp_store();
+        let (client, server) = tokio::io::duplex(4096);
+        let session = tokio::spawn(handle_session(server, mail.clone(), 4096));
+        let mut client_reader = ClientBufReader::new(client);
+
+        let mut greeting = String::new();
+        client_reader.read_line(&mut greeting).await.unwrap();
+        send(&mut client_reader, "EHLO client.example.com").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "MAIL FROM:<sender@example.com>").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "RCPT TO:<alice@example.com>").await;
+        assert_reply(&mut client_reader, "250").await;
+        send(&mut client_reader, "DATA").await;
+        assert_reply(&mut client_reader, "354").await;
+        send(&mut client_reader, "Subject: incomplete").await;
+        send(&mut client_reader, "").await;
+        client_reader
+            .get_mut()
+            .shutdown()
+            .await
+            .expect("client should half-close");
+
+        session.await.expect("session task should not panic").ok();
+        assert!(mail
+            .list_messages("alice@example.com", ListMessagesParams::default())
+            .expect("list should succeed")
             .messages
             .is_empty());
     }
@@ -501,12 +627,27 @@ mod tests {
         // Arrange
         // Act
         // Assert
-        let parsed = parse_address("from: <sender@example.com>", "FROM:").expect("should parse");
+        let parsed =
+            parse_address("from: <sender@example.com>", "FROM:", true).expect("should parse");
         assert_eq!(parsed.email, "sender@example.com");
 
-        let parsed = parse_address("TO:<alice@example.com>", "TO:").expect("should parse");
+        let parsed = parse_address("TO:<alice@example.com>", "TO:", false).expect("should parse");
         assert_eq!(parsed.email, "alice@example.com");
 
-        assert!(parse_address("TO:", "TO:").is_none());
+        assert!(parse_address("TO:", "TO:", false).is_none());
+        assert_eq!(
+            parse_address("FROM:<>", "FROM:", true)
+                .expect("null reverse-path should parse")
+                .email,
+            ""
+        );
+        assert_eq!(
+            parse_address("FROM:<> BODY=8BITMIME", "FROM:", true)
+                .expect("null reverse-path with ESMTP parameters should parse")
+                .email,
+            ""
+        );
+        assert!(parse_address("FROM:sender@example.com", "FROM:", true).is_none());
+        assert!(parse_address("FROM:<sender@example.com>garbage", "FROM:", true).is_none());
     }
 }

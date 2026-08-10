@@ -10,7 +10,6 @@ use crate::storage::Storage;
 use ::http::Method;
 use hyper::service::{service_fn, Service};
 use hyper::{Request, Response, StatusCode};
-use std::convert::Infallible;
 use std::sync::Arc;
 use tracing::error;
 
@@ -29,12 +28,8 @@ pub async fn serve_h1_connection<S>(
     service: S,
 ) -> Result<(), hyper::Error>
 where
-    S: Service<
-            hyper::Request<hyper::body::Incoming>,
-            Response = Response<Body>,
-            Error = Infallible,
-        > + Send
-        + 'static,
+    S: Service<hyper::Request<hyper::body::Incoming>, Response = Response<Body>> + Send + 'static,
+    S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     S::Future: Send + 'static,
 {
     hyper::server::conn::http1::Builder::new()
@@ -160,80 +155,108 @@ fn handler_error(kind: &str, error: &str) -> Response<Body> {
 async fn handle_request<B>(
     state: RequestState,
     req: Request<B>,
-) -> Result<Response<Body>, Infallible>
+) -> Result<Response<Body>, std::io::Error>
 where
     B: hyper::body::Body<Data = bytes::Bytes> + Send + Unpin + 'static,
     B::Error: std::fmt::Display,
 {
-    match http::Request::from_hyper_with_max_body(req, Some(state.auth_config.max_request_bytes))
+    let response = match http::Request::from_hyper_with_max_body(
+        req,
+        Some(state.auth_config.max_request_bytes),
+    )
+    .await
+    {
+        Ok(parsed_req) => route_parsed_request(state, parsed_req).await,
+        Err(error) => request_parse_error_response(&state, error),
+    };
+    if response.body().aborts_connection() {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "Sqrzl response-loss failpoint",
+        ))
+    } else {
+        Ok(response)
+    }
+}
+
+async fn route_parsed_request(state: RequestState, parsed_req: RequestExt) -> Response<Body> {
+    if parsed_req.path() == "/healthz" {
+        return if parsed_req.method() == Method::GET {
+            crate::health::response(state.storage.as_ref(), state.auth_config.as_ref())
+        } else {
+            simple_text_response(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed")
+        };
+    }
+
+    if let Some(response) = state
+        .sms_adapters
+        .route(
+            state.sms.clone(),
+            state.auth_config.clone(),
+            parsed_req.clone(),
+        )
         .await
     {
-        Ok(parsed_req) if parsed_req.path() == "/healthz" => {
-            if parsed_req.method() == Method::GET {
-                Ok(crate::health::response(
-                    state.storage.as_ref(),
-                    state.auth_config.as_ref(),
-                ))
-            } else {
-                Ok(simple_text_response(
-                    StatusCode::METHOD_NOT_ALLOWED,
-                    "Method Not Allowed",
-                ))
-            }
-        }
-        Ok(parsed_req) => {
+        return response.unwrap_or_else(|error| handler_error("SMS", &error));
+    }
+
+    if let Some(response) = state
+        .mail_adapters
+        .route(
+            state.mail.clone(),
+            state.auth_config.clone(),
+            parsed_req.clone(),
+        )
+        .await
+    {
+        return response.unwrap_or_else(|error| handler_error("Mail", &error));
+    }
+
+    state
+        .adapters
+        .handle(state.storage, state.auth_config, parsed_req)
+        .await
+        .unwrap_or_else(|error| handler_error("Storage", &error))
+}
+
+fn request_parse_error_response(state: &RequestState, error: RequestParseError) -> Response<Body> {
+    match error {
+        RequestParseError::BodyRead {
+            message,
+            method,
+            uri,
+            headers,
+        } => {
+            error!("Failed to read request body: {message}");
             if let Some(response) = state
                 .sms_adapters
-                .route(
-                    state.sms.clone(),
-                    state.auth_config.clone(),
-                    parsed_req.clone(),
-                )
-                .await
+                .render_incomplete_body(&method, &uri, &headers)
             {
-                return match response {
-                    Ok(response) => Ok(response),
-                    Err(e) => Ok(handler_error("SMS", &e)),
-                };
+                return response;
             }
-
             if let Some(response) = state
                 .mail_adapters
-                .route(
-                    state.mail.clone(),
-                    state.auth_config.clone(),
-                    parsed_req.clone(),
-                )
-                .await
+                .render_incomplete_body(&method, &uri, &headers)
             {
-                return match response {
-                    Ok(response) => Ok(response),
-                    Err(e) => Ok(handler_error("Mail", &e)),
-                };
+                return response;
             }
-
-            match state
+            state
                 .adapters
-                .handle(state.storage, state.auth_config, parsed_req)
-                .await
-            {
-                Ok(response) => Ok(response),
-                Err(e) => Ok(handler_error("Storage", &e)),
-            }
+                .render_incomplete_body(&method, &uri, &headers)
         }
-        Err(RequestParseError::BodyTooLarge {
+        RequestParseError::BodyTooLarge {
             max_request_bytes,
             method,
             uri,
             headers,
-        }) => {
+        } => {
             if let Some(sms_response) = state.sms_adapters.render_payload_too_large(
                 &method,
                 &uri,
                 &headers,
                 max_request_bytes,
             ) {
-                return Ok(sms_response);
+                return sms_response;
             }
             if let Some(mail_response) = state.mail_adapters.render_payload_too_large(
                 &method,
@@ -241,16 +264,12 @@ where
                 &headers,
                 max_request_bytes,
             ) {
-                return Ok(mail_response);
+                return mail_response;
             }
 
-            Ok(state
+            state
                 .adapters
-                .render_payload_too_large(&method, &uri, &headers, max_request_bytes))
-        }
-        Err(e) => {
-            error!("Failed to parse request: {}", e);
-            Ok(simple_text_response(StatusCode::BAD_REQUEST, "Bad Request"))
+                .render_payload_too_large(&method, &uri, &headers, max_request_bytes)
         }
     }
 }
@@ -322,6 +341,63 @@ mod adapter_routing_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn should_route_dotted_s3_virtual_host_to_the_complete_bucket_name() {
+        let storage = temp_storage();
+        storage.create_bucket("my".to_string()).unwrap();
+        storage.create_bucket("my.bucket".to_string()).unwrap();
+        let request = HyperRequest::builder()
+            .method("PUT")
+            .uri("http://localhost/object")
+            .header("host", "my.bucket.s3.amazonaws.com")
+            .header("content-length", "7")
+            .body(Body::from("payload"))
+            .expect("virtual-hosted request should build");
+
+        let response = call(storage.clone(), request).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            storage.get_object("my.bucket", "object").unwrap().data,
+            b"payload"
+        );
+        assert!(storage.get_object("my", "object").is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_preserve_s3_object_key_identity_through_the_http_surface() {
+        let storage = temp_storage();
+        storage.create_bucket("key-bucket".to_string()).unwrap();
+        let cases = [
+            ("space%20name.txt", "space name.txt"),
+            ("percent%25name.txt", "percent%name.txt"),
+            ("nested%2Fname.txt", "nested/name.txt"),
+            ("snowman-%E2%98%83.txt", "snowman-☃.txt"),
+            ("a//b", "a//b"),
+            ("dir/", "dir/"),
+            ("/leading", "/leading"),
+        ];
+
+        for (encoded, expected) in cases {
+            let request = HyperRequest::builder()
+                .method("PUT")
+                .uri(format!("http://localhost/{encoded}"))
+                .header("host", "key-bucket.s3.amazonaws.com")
+                .header("content-length", "1")
+                .body(Body::from("x"))
+                .expect("virtual-hosted object request should build");
+
+            let response = call(storage.clone(), request).await;
+
+            assert_eq!(response.status(), StatusCode::OK, "{encoded}");
+            assert_eq!(
+                storage.get_object("key-bucket", expected).unwrap().data,
+                b"x",
+                "{encoded}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn should_route_azure_requests_through_azure_adapter() {
         let storage = temp_storage();
 
@@ -360,6 +436,7 @@ mod adapter_routing_tests {
             .method("PUT")
             .uri("http://localhost/media")
             .header("host", "storage.googleapis.com")
+            .header("content-length", "0")
             .body(Body::default())
             .expect("request should build");
         let resp = call(storage.clone(), create).await;
@@ -369,6 +446,7 @@ mod adapter_routing_tests {
             .method("GET")
             .uri("http://localhost/")
             .header("host", "storage.googleapis.com")
+            .header("content-length", "0")
             .body(Body::default())
             .expect("request should build");
         let resp = call(storage, get).await;
@@ -389,10 +467,15 @@ mod adapter_routing_tests {
 
         let req = HyperRequest::builder()
             .method("GET")
-            .uri("http://localhost/n/testnamespace")
+            .uri("http://localhost/n/")
             .body(Body::default())
             .expect("request should build");
         let resp = call(storage, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(resp.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain"));
         let body = resp
             .into_body()
             .collect()
@@ -401,7 +484,7 @@ mod adapter_routing_tests {
             .to_bytes();
         assert!(String::from_utf8(body.to_vec())
             .expect("utf8")
-            .contains("testnamespace"));
+            .contains("sqrzl-emulator"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -497,6 +580,164 @@ mod adapter_routing_tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_truncated_storage_request_bodies_before_any_mutation() {
+        // Arrange
+        let storage = temp_storage();
+        let cases = [
+            (
+                "truncated-s3",
+                "object",
+                "PUT",
+                "http://localhost/truncated-s3/object",
+                None,
+                "application/xml",
+                "IncompleteBody",
+            ),
+            (
+                "truncated-azure",
+                "object",
+                "PUT",
+                "http://localhost/devstoreaccount1/truncated-azure/object",
+                Some(("x-ms-version", "2023-11-03")),
+                "application/xml",
+                "InvalidHeaderValue",
+            ),
+            (
+                "truncated-gcs-json",
+                "object",
+                "POST",
+                "http://localhost/upload/storage/v1/b/truncated-gcs-json/o?uploadType=media&name=object",
+                None,
+                "application/json",
+                "invalidArgument",
+            ),
+            (
+                "truncated-gcs-xml",
+                "object",
+                "PUT",
+                "http://localhost/truncated-gcs-xml/object",
+                Some(("host", "storage.googleapis.com")),
+                "application/xml",
+                "IncompleteBody",
+            ),
+            (
+                "truncated-oci",
+                "object",
+                "PUT",
+                "http://localhost/n/sqrzl/b/truncated-oci/o/object",
+                None,
+                "application/json",
+                "InvalidParameter",
+            ),
+        ];
+        for (bucket, ..) in cases {
+            storage.create_bucket(bucket.to_string()).unwrap();
+        }
+
+        // Act
+        // Assert
+        for (bucket, key, method, uri, provider_header, content_type, expected_body) in cases {
+            let mut builder = HyperRequest::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-length", "10");
+            if bucket == "truncated-azure" {
+                builder = builder.header("x-ms-blob-type", "BlockBlob");
+            }
+            if let Some((name, value)) = provider_header {
+                builder = builder.header(name, value);
+            }
+            let request = builder
+                .body(Body::truncated(bytes::Bytes::from_static(b"short"), 10))
+                .expect("truncated request should build");
+
+            let response = call(storage.clone(), request).await;
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert!(response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with(content_type));
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("provider framing body should read")
+                .to_bytes();
+            let rendered = String::from_utf8_lossy(&body);
+            assert!(
+                rendered.contains(expected_body),
+                "{bucket}: expected body marker {expected_body:?}, got {rendered}"
+            );
+            assert!(storage.get_object(bucket, key).is_err());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_route_truncated_messaging_bodies_without_capturing_messages() {
+        // Arrange
+        let root = std::env::temp_dir().join(format!(
+            "sqrzl-truncated-messaging-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mail = Arc::new(
+            crate::mail::FilesystemMailStore::open(&root).expect("mail store should open"),
+        );
+        let sms =
+            Arc::new(crate::sms::FilesystemSmsStore::open(&root).expect("SMS store should open"));
+        let state = RequestState {
+            storage: temp_storage(),
+            auth_config: auth_disabled(),
+            adapters: Arc::new(AdapterRegistry::default()),
+            sms: sms.clone(),
+            sms_adapters: Arc::new(SmsAdapterRegistry::default()),
+            mail: mail.clone(),
+            mail_adapters: Arc::new(MailAdapterRegistry::default()),
+        };
+        let cases = [
+            (
+                "http://localhost/v3/mail/send",
+                "errors",
+                "sendgrid",
+            ),
+            (
+                "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+                "21606",
+                "twilio",
+            ),
+        ];
+
+        // Act
+        // Assert
+        for (uri, expected_body, provider) in cases {
+            let request = HyperRequest::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-length", "10")
+                .body(Body::truncated(bytes::Bytes::from_static(b"short"), 10))
+                .expect("truncated messaging request should build");
+            let response = handle_request(state.clone(), request)
+                .await
+                .expect("truncated messaging request should respond");
+
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{provider}");
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("messaging framing body should read")
+                .to_bytes();
+            assert!(
+                String::from_utf8_lossy(&body).contains(expected_body),
+                "wrong {provider} error body"
+            );
+        }
+        assert!(mail.list_mailboxes().unwrap().is_empty());
+        assert!(sms.list_conversations().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]

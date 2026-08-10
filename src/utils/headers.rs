@@ -16,13 +16,15 @@ pub fn generate_request_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-/// Format a timestamp as RFC2822 (Last-Modified)
+/// Format a timestamp as the IMF-fixdate HTTP-date used by cloud providers.
 #[must_use]
 pub fn format_last_modified_at(last_modified: &DateTime<Utc>) -> String {
-    last_modified.to_rfc2822()
+    last_modified
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string()
 }
 
-/// Format current time as RFC2822 (Last-Modified)
+/// Format the current time as an IMF-fixdate HTTP-date.
 #[must_use]
 pub fn format_last_modified() -> String {
     format_last_modified_at(&Utc::now())
@@ -83,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn should_format_parseable_rfc2822_timestamp_in_utc_when_format_last_modified_called() {
+    fn should_format_imf_fixdate_timestamp_in_utc_when_format_last_modified_called() {
         // Arrange
         let before = Utc::now();
 
@@ -94,7 +96,7 @@ mod tests {
         let after = Utc::now();
 
         // Assert
-        assert!(formatted.ends_with("+0000"));
+        assert!(formatted.ends_with(" GMT"));
 
         let parsed_utc = parsed.with_timezone(&Utc);
         let tolerance = ChronoDuration::seconds(10);
@@ -103,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn should_format_supplied_rfc2822_timestamp_in_utc_when_format_last_modified_at_called() {
+    fn should_format_supplied_imf_fixdate_timestamp_when_format_last_modified_at_called() {
         // Arrange
         let timestamp = Utc.with_ymd_and_hms(2024, 4, 10, 12, 34, 56).unwrap();
 
@@ -113,6 +115,7 @@ mod tests {
             .expect("formatted timestamp should parse as RFC2822");
 
         // Assert
+        assert_eq!(formatted, "Wed, 10 Apr 2024 12:34:56 GMT");
         assert_eq!(parsed.with_timezone(&Utc), timestamp);
     }
 

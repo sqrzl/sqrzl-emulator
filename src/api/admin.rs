@@ -527,7 +527,17 @@ fn get_object_metadata(
 }
 
 fn delete_object(storage: &Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
-    tokio::task::block_in_place(|| object_service::delete_object(storage.as_ref(), bucket, key))?;
+    tokio::task::block_in_place(|| {
+        object_service::delete_object(storage.as_ref(), bucket, key)?;
+        let versions = storage.list_object_versions_for_key(bucket, key)?;
+        for version_id in versions
+            .iter()
+            .filter_map(|version| version.version_id.as_deref())
+        {
+            storage.delete_object_version(bucket, key, version_id)?;
+        }
+        Ok::<(), Error>(())
+    })?;
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 

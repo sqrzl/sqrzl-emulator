@@ -46,6 +46,10 @@ pub struct Attachment {
     pub filename: String,
     pub content_type: String,
     pub content: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disposition: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +93,8 @@ pub struct Message {
     #[serde(default)]
     pub bcc: Vec<Address>,
     #[serde(default)]
+    pub reply_to: Vec<Address>,
+    #[serde(default)]
     pub subject: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
@@ -98,6 +104,10 @@ pub struct Message {
     pub body_html: Option<String>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_engagement_tracking_disabled: Option<bool>,
+    #[serde(default)]
+    pub provider_metadata: HashMap<String, serde_json::Value>,
     /// The full captured payload, where the source protocol makes one available
     /// (SMTP DATA), for raw download/inspection.
     #[serde(default)]

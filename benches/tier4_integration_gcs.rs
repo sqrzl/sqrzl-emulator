@@ -25,6 +25,7 @@ async fn create_xml_bucket(server: &LiveServer, bucket: &str) {
         .method("PUT")
         .uri(format!("{}/{}", server.base_url, bucket))
         .header("host", GCS_HOST)
+        .header("content-length", "0")
         .body(Body::default())
         .expect("xml bucket create request should build");
     let response = server.request(request).await;
@@ -40,6 +41,7 @@ async fn create_json_bucket(server: &LiveServer, bucket: &str) {
         ))
         .header("host", GCS_HOST)
         .header("content-type", "application/json")
+        .header("content-length", bucket.len() + 11)
         .body(Body::from(
             serde_json::json!({ "name": bucket }).to_string(),
         ))
@@ -71,6 +73,7 @@ fn xml_put_object(ctx: &mut StressContext) {
             .uri(&object_url)
             .header("host", GCS_HOST)
             .header("content-type", "text/plain")
+            .header("content-length", payload.len())
             .body(Body::from(payload.clone()))
             .expect("object put request should build");
         let response = runtime.block_on(server.request(request));
@@ -106,6 +109,7 @@ fn xml_get_object(ctx: &mut StressContext) {
             .uri(&object_url)
             .header("host", GCS_HOST)
             .header("content-type", "text/plain")
+            .header("content-length", payload.len())
             .body(Body::from(payload.clone()))
             .expect("seed put request should build");
         let response = server.request(request).await;
@@ -118,6 +122,7 @@ fn xml_get_object(ctx: &mut StressContext) {
             .method("GET")
             .uri(&object_url)
             .header("host", GCS_HOST)
+            .header("content-length", "0")
             .body(Body::default())
             .expect("object get request should build");
         let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
@@ -156,6 +161,7 @@ fn xml_list_objects(ctx: &mut StressContext) {
                 ))
                 .header("host", GCS_HOST)
                 .header("content-type", "text/plain")
+                .header("content-length", payload.len())
                 .body(Body::from(payload.clone()))
                 .expect("seed put request should build");
             let response = server.request(request).await;
@@ -170,6 +176,7 @@ fn xml_list_objects(ctx: &mut StressContext) {
             .method("GET")
             .uri(&list_url)
             .header("host", GCS_HOST)
+            .header("content-length", "0")
             .body(Body::default())
             .expect("object list request should build");
         let (status, listing) = runtime.block_on(server.response_text_with_status(request));
@@ -210,6 +217,7 @@ fn json_resumable_upload(ctx: &mut StressContext) {
             .header("host", GCS_HOST)
             .header("x-upload-content-type", "text/plain")
             .header("x-goog-meta-owner", "bench")
+            .header("content-length", "0")
             .body(Body::default())
             .expect("resumable init request should build");
         let init_response = runtime.block_on(server.request(init_request));
@@ -226,6 +234,7 @@ fn json_resumable_upload(ctx: &mut StressContext) {
             .method("PUT")
             .uri(upload_location)
             .header("host", GCS_HOST)
+            .header("content-length", payload.len())
             .body(Body::from(payload.clone()))
             .expect("resumable upload request should build");
         let upload_response = runtime.block_on(server.request(upload_request));

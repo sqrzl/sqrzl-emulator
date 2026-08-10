@@ -64,7 +64,7 @@ async fn should_reject_invalid_signed_gcs_request_given_auth_enforced_when_signa
         request(
             "GET",
             "http://localhost/missing?GoogleAccessId=wrong-access&Expires=4102444800&Signature=bad",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )

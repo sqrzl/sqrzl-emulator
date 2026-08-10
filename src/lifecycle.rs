@@ -10,6 +10,72 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
+const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
+const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
+const AZURE_VERSIONING_KEY: &str = "azure_versioning_enabled";
+const AZURE_SOFT_DELETE_DAYS_KEY: &str = "azure_soft_delete_days";
+const S3_OBJECT_LOCK_MODE_KEY: &str = "s3_object_lock_mode";
+const S3_OBJECT_LOCK_UNTIL_KEY: &str = "s3_object_lock_until";
+const S3_OBJECT_LOCK_LEGAL_HOLD_KEY: &str = "s3_object_lock_legal_hold";
+const AZURE_IMMUTABILITY_UNTIL_KEY: &str = "azure_immutability_until";
+const AZURE_LEGAL_HOLD_KEY: &str = "azure_legal_hold";
+
+fn positive_duration_or_invalid(metadata: &HashMap<String, String>, key: &str) -> bool {
+    metadata
+        .get(key)
+        .is_some_and(|value| value.parse::<u64>().map_or(true, |value| value > 0))
+}
+
+fn foreign_provider_data_protection_active(
+    storage: &dyn Storage,
+    bucket: &str,
+) -> Result<bool, Error> {
+    let bucket = storage.get_bucket(bucket)?;
+    Ok(
+        positive_duration_or_invalid(&bucket.metadata, GCS_SOFT_DELETE_SECONDS_KEY)
+            || positive_duration_or_invalid(&bucket.metadata, GCS_RETENTION_SECONDS_KEY)
+            || bucket
+                .metadata
+                .get(AZURE_VERSIONING_KEY)
+                .is_some_and(|value| !value.eq_ignore_ascii_case("false"))
+            || positive_duration_or_invalid(&bucket.metadata, AZURE_SOFT_DELETE_DAYS_KEY),
+    )
+}
+
+fn parse_lock_timestamp(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .or_else(|_| DateTime::parse_from_rfc2822(value))
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn object_has_active_data_protection(object: &crate::models::Object, now: DateTime<Utc>) -> bool {
+    let s3_legal_hold = object
+        .provider_metadata
+        .get(S3_OBJECT_LOCK_LEGAL_HOLD_KEY)
+        .is_some_and(|value| !value.eq_ignore_ascii_case("OFF"));
+    let s3_retention = object
+        .provider_metadata
+        .get(S3_OBJECT_LOCK_UNTIL_KEY)
+        .is_some_and(|value| parse_lock_timestamp(value).is_none_or(|until| until > now));
+    let incomplete_s3_retention = object
+        .provider_metadata
+        .contains_key(S3_OBJECT_LOCK_MODE_KEY)
+        && !object
+            .provider_metadata
+            .contains_key(S3_OBJECT_LOCK_UNTIL_KEY);
+    let azure_legal_hold = object
+        .provider_metadata
+        .get(AZURE_LEGAL_HOLD_KEY)
+        .is_some_and(|value| !value.eq_ignore_ascii_case("false"));
+    let azure_retention = object
+        .provider_metadata
+        .get(AZURE_IMMUTABILITY_UNTIL_KEY)
+        .is_some_and(|value| parse_lock_timestamp(value).is_none_or(|until| until > now));
+
+    s3_legal_hold || s3_retention || incomplete_s3_retention || azure_legal_hold || azure_retention
+}
+
 /// Check if an object should be deleted due to lifecycle rules
 /// This is called eagerly when accessing objects to enforce expiration immediately
 ///
@@ -36,8 +102,24 @@ pub fn check_object_expiration(
         }
     };
 
+    if foreign_provider_data_protection_active(storage.as_ref(), bucket)? {
+        debug!(
+            bucket = bucket,
+            "Skipping S3 lifecycle expiration for a foreign-provider protected bucket"
+        );
+        return Ok(false);
+    }
+
     // Get the object to check expiration
     let object = storage.get_object(bucket, key)?;
+    if object_has_active_data_protection(&object, now) {
+        debug!(
+            bucket = bucket,
+            key = key,
+            "Skipping S3 lifecycle expiration for a protected object"
+        );
+        return Ok(false);
+    }
 
     // Get object tags
     let tags = storage.get_object_tags(bucket, key).unwrap_or_default();
@@ -228,6 +310,14 @@ impl LifecycleExecutor {
         config: &LifecycleConfiguration,
         now: DateTime<Utc>,
     ) -> Result<(), Error> {
+        if foreign_provider_data_protection_active(self.storage.as_ref(), bucket_name)? {
+            debug!(
+                bucket = bucket_name,
+                "Skipping S3 lifecycle rules for a foreign-provider protected bucket"
+            );
+            return Ok(());
+        }
+
         for rule in &config.rules {
             // Skip disabled rules
             if rule.status != Status::Enabled {
@@ -266,6 +356,14 @@ impl LifecycleExecutor {
 
             if let Some(expiration) = &rule.expiration {
                 if should_expire(object.last_modified, expiration, now) {
+                    if object_has_active_data_protection(&object, now) {
+                        debug!(
+                            bucket = bucket_name,
+                            key = object.key,
+                            "Skipping lifecycle expiration for a protected object"
+                        );
+                        continue;
+                    }
                     info!(
                         bucket = bucket_name,
                         key = object.key,
@@ -407,6 +505,16 @@ impl LifecycleExecutor {
                 continue;
             }
 
+            if object_has_active_data_protection(&version, now) {
+                debug!(
+                    bucket = bucket_name,
+                    key = version_group.key,
+                    version_id = version.version_id.as_deref().unwrap_or("unknown"),
+                    "Skipping lifecycle expiration for a protected noncurrent version"
+                );
+                continue;
+            }
+
             if let Some(version_id) = version.version_id.as_deref() {
                 info!(
                     bucket = bucket_name,
@@ -440,8 +548,8 @@ impl LifecycleExecutor {
 mod tests {
     use super::*;
     use crate::models::lifecycle::{
-        Filter, LifecycleConfiguration, NoncurrentVersionExpiration, Rule, Status, StorageClass,
-        Transition,
+        Expiration, Filter, LifecycleConfiguration, NoncurrentVersionExpiration, Rule, Status,
+        StorageClass, Transition,
     };
     use crate::models::Object;
     use crate::storage::FilesystemStorage;
@@ -586,5 +694,207 @@ mod tests {
         let transitioned = storage.get_object("bucket", "archive/report.txt").unwrap();
         assert_eq!(transitioned.storage_class, "GLACIER");
         assert_eq!(transitioned.data, b"payload".to_vec());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_eagerly_expire_objects_from_gcs_retained_buckets() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("retained".to_string()).unwrap();
+        let mut bucket = storage.get_bucket("retained").unwrap();
+        bucket
+            .metadata
+            .insert(GCS_RETENTION_SECONDS_KEY.to_string(), "3600".to_string());
+        storage
+            .update_bucket_metadata("retained", bucket.metadata)
+            .unwrap();
+
+        let mut object = Object::new(
+            "protected.txt".to_string(),
+            b"must remain".to_vec(),
+            "text/plain".to_string(),
+        );
+        object.last_modified = Utc::now() - chrono::Duration::days(10);
+        storage
+            .put_object("retained", "protected.txt".to_string(), object)
+            .unwrap();
+        storage
+            .put_bucket_lifecycle(
+                "retained",
+                LifecycleConfiguration {
+                    rules: vec![Rule {
+                        id: Some("expire-current".to_string()),
+                        status: Status::Enabled,
+                        filter: None,
+                        expiration: Some(Expiration {
+                            days: Some(1),
+                            date: None,
+                            expired_object_delete_marker: None,
+                        }),
+                        noncurrent_version_expiration: None,
+                        transitions: vec![],
+                    }],
+                },
+            )
+            .unwrap();
+
+        // Act
+        let expired = check_object_expiration(&storage, "retained", "protected.txt").unwrap();
+
+        // Assert
+        assert!(!expired);
+        assert_eq!(
+            storage
+                .get_object("retained", "protected.txt")
+                .unwrap()
+                .data,
+            b"must remain".to_vec()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_expire_gcs_soft_delete_history_through_s3_lifecycle() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("soft-delete".to_string()).unwrap();
+        let mut bucket = storage.get_bucket("soft-delete").unwrap();
+        bucket.metadata.insert(
+            GCS_SOFT_DELETE_SECONDS_KEY.to_string(),
+            "604800".to_string(),
+        );
+        storage
+            .update_bucket_metadata("soft-delete", bucket.metadata)
+            .unwrap();
+        storage.enable_versioning("soft-delete").unwrap();
+
+        let now = Utc.with_ymd_and_hms(2024, 4, 10, 12, 0, 0).unwrap();
+        let mut first = Object::new(
+            "object".to_string(),
+            b"first".to_vec(),
+            "application/octet-stream".to_string(),
+        );
+        first.last_modified = now - chrono::Duration::days(40);
+        storage
+            .put_object("soft-delete", "object".to_string(), first)
+            .unwrap();
+        let first_version_id = storage
+            .get_object("soft-delete", "object")
+            .unwrap()
+            .version_id
+            .expect("first version should have an id");
+
+        let mut second = Object::new(
+            "object".to_string(),
+            b"second".to_vec(),
+            "application/octet-stream".to_string(),
+        );
+        second.last_modified = now - chrono::Duration::days(1);
+        storage
+            .put_object("soft-delete", "object".to_string(), second)
+            .unwrap();
+
+        let config = LifecycleConfiguration {
+            rules: vec![Rule {
+                id: Some("purge-history".to_string()),
+                status: Status::Enabled,
+                filter: None,
+                expiration: None,
+                noncurrent_version_expiration: Some(NoncurrentVersionExpiration {
+                    noncurrent_days: 30,
+                }),
+                transitions: vec![],
+            }],
+        };
+
+        // Act
+        LifecycleExecutor::new(storage.clone(), Duration::from_hours(1))
+            .apply_lifecycle_rules("soft-delete", &config, now)
+            .unwrap();
+
+        // Assert
+        assert_eq!(
+            storage
+                .get_object_version("soft-delete", "object", &first_version_id)
+                .unwrap()
+                .data,
+            b"first".to_vec()
+        );
+        assert_eq!(
+            storage.get_object("soft-delete", "object").unwrap().data,
+            b"second".to_vec()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_expire_locked_s3_noncurrent_versions() {
+        // Arrange
+        let storage = temp_storage();
+        storage.create_bucket("object-lock".to_string()).unwrap();
+        storage.enable_versioning("object-lock").unwrap();
+
+        let now = Utc.with_ymd_and_hms(2024, 4, 10, 12, 0, 0).unwrap();
+        let mut first = Object::new(
+            "object".to_string(),
+            b"locked".to_vec(),
+            "application/octet-stream".to_string(),
+        );
+        first.last_modified = now - chrono::Duration::days(40);
+        first.provider_metadata.insert(
+            S3_OBJECT_LOCK_MODE_KEY.to_string(),
+            "COMPLIANCE".to_string(),
+        );
+        first.provider_metadata.insert(
+            S3_OBJECT_LOCK_UNTIL_KEY.to_string(),
+            (now + chrono::Duration::days(10)).to_rfc3339(),
+        );
+        storage
+            .put_object("object-lock", "object".to_string(), first)
+            .unwrap();
+        let first_version_id = storage
+            .get_object("object-lock", "object")
+            .unwrap()
+            .version_id
+            .expect("first version should have an id");
+
+        let mut second = Object::new(
+            "object".to_string(),
+            b"current".to_vec(),
+            "application/octet-stream".to_string(),
+        );
+        second.last_modified = now - chrono::Duration::days(1);
+        storage
+            .put_object("object-lock", "object".to_string(), second)
+            .unwrap();
+
+        let config = LifecycleConfiguration {
+            rules: vec![Rule {
+                id: Some("purge-history".to_string()),
+                status: Status::Enabled,
+                filter: None,
+                expiration: None,
+                noncurrent_version_expiration: Some(NoncurrentVersionExpiration {
+                    noncurrent_days: 30,
+                }),
+                transitions: vec![],
+            }],
+        };
+
+        // Act
+        LifecycleExecutor::new(storage.clone(), Duration::from_hours(1))
+            .apply_lifecycle_rules("object-lock", &config, now)
+            .unwrap();
+
+        // Assert
+        assert_eq!(
+            storage
+                .get_object_version("object-lock", "object", &first_version_id)
+                .unwrap()
+                .data,
+            b"locked".to_vec()
+        );
+        assert_eq!(
+            storage.get_object("object-lock", "object").unwrap().data,
+            b"current".to_vec()
+        );
     }
 }

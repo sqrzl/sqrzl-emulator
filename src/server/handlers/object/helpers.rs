@@ -2,7 +2,6 @@ use crate::body::Body;
 use crate::server::http::{Request, ResponseBuilder};
 use crate::services::xml_error_response;
 use crate::utils::headers as header_utils;
-use crate::utils::xml as xml_utils;
 use http::StatusCode;
 use hyper::Response;
 use std::collections::HashMap;
@@ -54,28 +53,6 @@ pub(super) fn parse_tagging_header(tag_header: &str) -> Result<HashMap<String, S
     Ok(tags)
 }
 
-pub(super) fn copy_source_range_data(
-    source_obj: &crate::models::Object,
-    range_header: &str,
-) -> Result<Vec<u8>, String> {
-    let (start, end_opt) =
-        parse_range(range_header).ok_or_else(|| "Invalid copy source range".to_string())?;
-
-    let source_len = source_obj.data.len() as u64;
-    if source_len == 0 || start >= source_len {
-        return Err("Invalid copy source range".to_string());
-    }
-
-    let end = end_opt.unwrap_or(source_len - 1).min(source_len - 1);
-    if end < start {
-        return Err("Invalid copy source range".to_string());
-    }
-
-    let start_idx = usize::try_from(start).map_err(|_| "Invalid copy source range".to_string())?;
-    let end_idx = usize::try_from(end).map_err(|_| "Invalid copy source range".to_string())?;
-    Ok(source_obj.data[start_idx..=end_idx].to_vec())
-}
-
 pub(super) fn add_version_header(
     builder: ResponseBuilder,
     version_id: Option<&str>,
@@ -87,18 +64,83 @@ pub(super) fn add_version_header(
     }
 }
 
-fn normalize_etag(value: &str) -> &str {
+fn normalize_weak_etag(value: &str) -> &str {
     let value = value.trim();
     let value = value.strip_prefix("W/").unwrap_or(value);
     value.trim_matches('"')
 }
 
-fn etag_list_matches(header_value: &str, etag: &str) -> bool {
-    let normalized_etag = normalize_etag(etag);
+fn normalize_strong_etag(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.starts_with("W/")).then_some(value.trim_matches('"'))
+}
+
+pub(super) fn quoted_etag(value: &str) -> String {
+    format!("\"{}\"", normalize_weak_etag(value))
+}
+
+pub(super) fn mutation_condition(req: &Request) -> Option<crate::storage::ObjectCondition> {
+    if let Some(value) = req.header("if-match") {
+        if value.trim() == "*" {
+            return Some(crate::storage::ObjectCondition::EtagNotIn(Vec::new()));
+        }
+        return Some(crate::storage::ObjectCondition::EtagIn(
+            value
+                .split(',')
+                .filter_map(normalize_strong_etag)
+                .map(str::to_string)
+                .collect(),
+        ));
+    }
+    req.header("if-none-match").map(|value| {
+        if value.trim() == "*" {
+            crate::storage::ObjectCondition::Missing
+        } else {
+            crate::storage::ObjectCondition::MissingOrEtagNotIn(
+                value
+                    .split(',')
+                    .map(normalize_weak_etag)
+                    .map(str::to_string)
+                    .collect(),
+            )
+        }
+    })
+}
+
+pub(super) fn mutation_if_match_condition(
+    req: &Request,
+) -> Option<crate::storage::ObjectCondition> {
+    let value = req.header("if-match")?;
+    if value.trim() == "*" {
+        return Some(crate::storage::ObjectCondition::EtagNotIn(Vec::new()));
+    }
+    Some(crate::storage::ObjectCondition::EtagIn(
+        value
+            .split(',')
+            .filter_map(normalize_strong_etag)
+            .map(str::to_string)
+            .collect(),
+    ))
+}
+
+fn strong_etag_list_matches(header_value: &str, etag: &str) -> bool {
+    let Some(normalized_etag) = normalize_strong_etag(etag) else {
+        return false;
+    };
+
+    header_value.split(',').any(|candidate| {
+        candidate.trim() == "*"
+            || normalize_strong_etag(candidate)
+                .is_some_and(|candidate| candidate == normalized_etag)
+    })
+}
+
+fn weak_etag_list_matches(header_value: &str, etag: &str) -> bool {
+    let normalized_etag = normalize_weak_etag(etag);
 
     header_value
         .split(',')
-        .map(normalize_etag)
+        .map(normalize_weak_etag)
         .any(|candidate| candidate == "*" || candidate == normalized_etag)
 }
 
@@ -110,7 +152,7 @@ pub(super) fn object_response_headers(
     let last_modified = header_utils::format_last_modified_at(&obj.last_modified);
 
     builder = builder
-        .header("ETag", &obj.etag)
+        .header("ETag", &quoted_etag(&obj.etag))
         .header("Last-Modified", &last_modified)
         .header("x-amz-request-id", req_id)
         .header("x-amz-id-2", &header_utils::generate_request_id())
@@ -148,7 +190,7 @@ pub(super) fn object_response_headers(
     builder
 }
 
-fn parse_lock_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+pub(super) fn parse_lock_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .or_else(|_| chrono::DateTime::parse_from_rfc2822(value))
         .ok()
@@ -164,6 +206,12 @@ pub(super) fn object_is_locked(obj: &crate::models::Object) -> bool {
             .get(S3_OBJECT_LOCK_UNTIL_KEY)
             .and_then(|value| parse_lock_timestamp(value))
             .is_some_and(|value| value > chrono::Utc::now())
+}
+
+pub(super) fn clear_object_lock_metadata(obj: &mut crate::models::Object) {
+    obj.provider_metadata.remove(S3_OBJECT_LOCK_MODE_KEY);
+    obj.provider_metadata.remove(S3_OBJECT_LOCK_UNTIL_KEY);
+    obj.provider_metadata.remove(S3_OBJECT_LOCK_LEGAL_HOLD_KEY);
 }
 
 pub(super) fn locked_object_response(req_id: &str) -> Response<Body> {
@@ -309,18 +357,13 @@ pub(super) fn apply_s3_request_contracts(
     Ok(())
 }
 
-fn precondition_failed_response(req_id: &str) -> Response<Body> {
-    let xml = xml_utils::error_xml(
+pub(super) fn precondition_failed_response(req_id: &str) -> Response<Body> {
+    xml_error_response(
+        StatusCode::PRECONDITION_FAILED,
         "PreconditionFailed",
         "At least one of the pre-conditions you specified did not hold",
         req_id,
-    );
-
-    ResponseBuilder::new(StatusCode::PRECONDITION_FAILED)
-        .content_type("application/xml; charset=utf-8")
-        .header("x-amz-request-id", req_id)
-        .body(xml.into_bytes())
-        .build()
+    )
 }
 
 fn not_modified_response(obj: &crate::models::Object, req_id: &str) -> Response<Body> {
@@ -333,7 +376,7 @@ pub(super) fn check_object_conditionals(
     req_id: &str,
 ) -> Option<Response<Body>> {
     if let Some(if_match) = req.header("if-match") {
-        if !etag_list_matches(if_match, &obj.etag) {
+        if !strong_etag_list_matches(if_match, &obj.etag) {
             return Some(precondition_failed_response(req_id));
         }
     }
@@ -347,7 +390,7 @@ pub(super) fn check_object_conditionals(
     }
 
     if let Some(if_none_match) = req.header("if-none-match") {
-        if etag_list_matches(if_none_match, &obj.etag) {
+        if weak_etag_list_matches(if_none_match, &obj.etag) {
             return Some(not_modified_response(obj, req_id));
         }
     }
@@ -370,7 +413,7 @@ pub(super) fn check_put_conditionals(
 ) -> Option<Response<Body>> {
     if let Some(existing_obj) = existing_obj {
         if let Some(if_match) = req.header("if-match") {
-            if !etag_list_matches(if_match, &existing_obj.etag) {
+            if !strong_etag_list_matches(if_match, &existing_obj.etag) {
                 return Some(precondition_failed_response(req_id));
             }
         }
@@ -384,12 +427,17 @@ pub(super) fn check_put_conditionals(
         }
 
         if let Some(if_none_match) = req.header("if-none-match") {
-            if etag_list_matches(if_none_match, &existing_obj.etag) {
+            if weak_etag_list_matches(if_none_match, &existing_obj.etag) {
                 return Some(precondition_failed_response(req_id));
             }
         }
     } else if req.header("if-match").is_some() {
-        return Some(precondition_failed_response(req_id));
+        return Some(xml_error_response(
+            StatusCode::NOT_FOUND,
+            "NoSuchKey",
+            "The specified key does not exist.",
+            req_id,
+        ));
     }
 
     None
@@ -401,38 +449,19 @@ pub(super) fn check_copy_conditionals(
     req_id: &str,
 ) -> Option<Response<Body>> {
     // x-amz-copy-source-if-match: copy if source ETag matches
+    let copy_source_if_match_satisfied = req
+        .header("x-amz-copy-source-if-match")
+        .is_some_and(|match_etag| strong_etag_list_matches(match_etag, &source_obj.etag));
     if let Some(match_etag) = req.header("x-amz-copy-source-if-match") {
-        if source_obj.etag != match_etag {
-            let xml = xml_utils::error_xml(
-                "PreconditionFailed",
-                "At least one of the pre-conditions you specified did not hold",
-                req_id,
-            );
-            return Some(
-                ResponseBuilder::new(StatusCode::PRECONDITION_FAILED)
-                    .content_type("application/xml; charset=utf-8")
-                    .header("x-amz-request-id", req_id)
-                    .body(xml.into_bytes())
-                    .build(),
-            );
+        if !strong_etag_list_matches(match_etag, &source_obj.etag) {
+            return Some(precondition_failed_response(req_id));
         }
     }
 
     // x-amz-copy-source-if-none-match: copy if source ETag does NOT match
     if let Some(none_match) = req.header("x-amz-copy-source-if-none-match") {
-        if source_obj.etag == none_match {
-            let xml = xml_utils::error_xml(
-                "PreconditionFailed",
-                "At least one of the pre-conditions you specified did not hold",
-                req_id,
-            );
-            return Some(
-                ResponseBuilder::new(StatusCode::PRECONDITION_FAILED)
-                    .content_type("application/xml; charset=utf-8")
-                    .header("x-amz-request-id", req_id)
-                    .body(xml.into_bytes())
-                    .build(),
-            );
+        if weak_etag_list_matches(none_match, &source_obj.etag) {
+            return Some(precondition_failed_response(req_id));
         }
     }
 
@@ -440,34 +469,55 @@ pub(super) fn check_copy_conditionals(
     if let Some(modified_since) = req.header("x-amz-copy-source-if-modified-since") {
         if let Ok(since_dt) = chrono::DateTime::parse_from_rfc2822(modified_since) {
             if source_obj.last_modified <= since_dt.with_timezone(&chrono::Utc) {
-                return Some(
-                    ResponseBuilder::new(StatusCode::NOT_MODIFIED)
-                        .header("x-amz-request-id", req_id)
-                        .empty(),
-                );
+                return Some(precondition_failed_response(req_id));
             }
         }
     }
 
     // x-amz-copy-source-if-unmodified-since: copy if NOT modified after date
-    if let Some(unmodified_since) = req.header("x-amz-copy-source-if-unmodified-since") {
-        if let Ok(since_dt) = chrono::DateTime::parse_from_rfc2822(unmodified_since) {
-            if source_obj.last_modified > since_dt.with_timezone(&chrono::Utc) {
-                let xml = xml_utils::error_xml(
-                    "PreconditionFailed",
-                    "At least one of the pre-conditions you specified did not hold",
-                    req_id,
-                );
-                return Some(
-                    ResponseBuilder::new(StatusCode::PRECONDITION_FAILED)
-                        .content_type("application/xml; charset=utf-8")
-                        .header("x-amz-request-id", req_id)
-                        .body(xml.into_bytes())
-                        .build(),
-                );
+    if !copy_source_if_match_satisfied {
+        if let Some(unmodified_since) = req.header("x-amz-copy-source-if-unmodified-since") {
+            if let Ok(since_dt) = chrono::DateTime::parse_from_rfc2822(unmodified_since) {
+                if source_obj.last_modified > since_dt.with_timezone(&chrono::Utc) {
+                    return Some(precondition_failed_response(req_id));
+                }
             }
         }
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn should_prefer_matching_copy_etag_over_failed_unmodified_since() {
+        // Arrange
+        let source = crate::models::Object::new(
+            "source".to_string(),
+            b"value".to_vec(),
+            "application/octet-stream".to_string(),
+        );
+        let request = Request::from_hyper(
+            hyper::Request::builder()
+                .uri("http://localhost/destination")
+                .header("x-amz-copy-source-if-match", format!("\"{}\"", source.etag))
+                .header(
+                    "x-amz-copy-source-if-unmodified-since",
+                    "Thu, 01 Jan 1970 00:00:00 GMT",
+                )
+                .body(Body::default())
+                .expect("request should build"),
+        )
+        .await
+        .expect("request should parse");
+
+        // Act
+        let rejected = check_copy_conditionals(&request, &source, "request-id");
+
+        // Assert
+        assert!(rejected.is_none());
+    }
 }

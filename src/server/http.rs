@@ -21,7 +21,12 @@ pub struct Request {
 
 #[derive(Debug)]
 pub enum RequestParseError {
-    BodyRead(String),
+    BodyRead {
+        message: String,
+        method: Method,
+        uri: Uri,
+        headers: HeaderMap,
+    },
     BodyTooLarge {
         max_request_bytes: usize,
         method: Method,
@@ -33,7 +38,7 @@ pub enum RequestParseError {
 impl fmt::Display for RequestParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BodyRead(message) => write!(f, "{message}"),
+            Self::BodyRead { message, .. } => write!(f, "{message}"),
             Self::BodyTooLarge {
                 max_request_bytes, ..
             } => write!(
@@ -112,15 +117,20 @@ impl Request {
         let body_bytes = collect_body(body, max_request_bytes)
             .await
             .map_err(|err| match err {
-                RequestParseError::BodyTooLarge {
-                    max_request_bytes, ..
-                } => RequestParseError::BodyTooLarge {
-                    max_request_bytes,
+                CollectBodyError::BodyTooLarge { max_request_bytes } => {
+                    RequestParseError::BodyTooLarge {
+                        max_request_bytes,
+                        method,
+                        uri,
+                        headers,
+                    }
+                }
+                CollectBodyError::BodyRead(message) => RequestParseError::BodyRead {
+                    message,
                     method,
                     uri,
                     headers,
                 },
-                RequestParseError::BodyRead(message) => RequestParseError::BodyRead(message),
             })?;
 
         let mut query_params = HashMap::new();
@@ -176,10 +186,15 @@ impl Request {
     }
 }
 
+enum CollectBodyError {
+    BodyRead(String),
+    BodyTooLarge { max_request_bytes: usize },
+}
+
 async fn collect_body<B>(
     mut body: B,
     max_request_bytes: Option<usize>,
-) -> Result<Bytes, RequestParseError>
+) -> Result<Bytes, CollectBodyError>
 where
     B: hyper::body::Body<Data = Bytes> + Unpin,
     B::Error: std::fmt::Display,
@@ -189,21 +204,16 @@ where
             .collect()
             .await
             .map(http_body_util::Collected::to_bytes)
-            .map_err(|err| RequestParseError::BodyRead(err.to_string()));
+            .map_err(|err| CollectBodyError::BodyRead(err.to_string()));
     };
 
     let mut bytes = BytesMut::new();
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|err| RequestParseError::BodyRead(err.to_string()))?;
+        let frame = frame.map_err(|err| CollectBodyError::BodyRead(err.to_string()))?;
         if let Some(data) = frame.data_ref() {
             let next_len = bytes.len().saturating_add(data.len());
             if next_len > max_request_bytes {
-                return Err(RequestParseError::BodyTooLarge {
-                    max_request_bytes,
-                    method: Method::GET,
-                    uri: Uri::from_static("/"),
-                    headers: HeaderMap::new(),
-                });
+                return Err(CollectBodyError::BodyTooLarge { max_request_bytes });
             }
             bytes.extend_from_slice(data);
         }
@@ -373,6 +383,103 @@ mod tests {
             route => panic!("unexpected route: {route:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn should_decode_s3_object_paths_once_without_collapsing_key_components() {
+        let cases = [
+            ("space%20name.txt", "space name.txt"),
+            ("percent%25name.txt", "percent%name.txt"),
+            ("nested%2Fname.txt", "nested/name.txt"),
+            ("snowman-%E2%98%83.txt", "snowman-☃.txt"),
+            ("literal%252Fescape.txt", "literal%2Fescape.txt"),
+            ("dir/", "dir/"),
+            ("a//b", "a//b"),
+            ("/leading-slash", "/leading-slash"),
+        ];
+
+        for (encoded, expected) in cases {
+            let path_style = HyperRequest::builder()
+                .method("GET")
+                .uri(format!("http://localhost/bucket/{encoded}"))
+                .body(Body::default())
+                .expect("path-style request should build");
+            let path_style = Request::from_hyper(path_style)
+                .await
+                .expect("path-style request should parse");
+            match Router::route(&path_style) {
+                RouteMatch::ObjectGet(bucket, key) => {
+                    assert_eq!(bucket, "bucket");
+                    assert_eq!(key, expected);
+                }
+                route => panic!("unexpected path-style route: {route:?}"),
+            }
+
+            let virtual_hosted = HyperRequest::builder()
+                .method("GET")
+                .uri(format!("http://localhost/{encoded}"))
+                .header("host", "bucket.s3.amazonaws.com")
+                .body(Body::default())
+                .expect("virtual-hosted request should build");
+            let virtual_hosted = Request::from_hyper(virtual_hosted)
+                .await
+                .expect("virtual-hosted request should parse");
+            match Router::route(&virtual_hosted) {
+                RouteMatch::ObjectGet(bucket, key) => {
+                    assert_eq!(bucket, "bucket");
+                    assert_eq!(key, expected);
+                }
+                route => panic!("unexpected virtual-hosted route: {route:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_malformed_s3_object_path_encoding() {
+        let request = HyperRequest::builder()
+            .method("PUT")
+            .uri("http://localhost/bucket/bad%2")
+            .body(Body::default())
+            .expect("request should build");
+        let parsed = Request::from_hyper(request)
+            .await
+            .expect("request should parse");
+
+        assert!(matches!(
+            Router::route(&parsed),
+            RouteMatch::InvalidObjectPath
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_preserve_dotted_s3_virtual_bucket_and_ignore_custom_endpoint_hosts() {
+        let dotted = HyperRequest::builder()
+            .method("PUT")
+            .uri("http://localhost/object")
+            .header("host", "my.bucket.s3.us-east-1.amazonaws.com")
+            .body(Body::default())
+            .expect("dotted virtual-host request should build");
+        let dotted = Request::from_hyper(dotted)
+            .await
+            .expect("dotted virtual-host request should parse");
+        assert!(matches!(
+            Router::route(&dotted),
+            RouteMatch::ObjectPut(bucket, key) if bucket == "my.bucket" && key == "object"
+        ));
+
+        let custom = HyperRequest::builder()
+            .method("PUT")
+            .uri("http://localhost/path-bucket/object")
+            .header("host", "tenant.example.com")
+            .body(Body::default())
+            .expect("custom-endpoint request should build");
+        let custom = Request::from_hyper(custom)
+            .await
+            .expect("custom-endpoint request should parse");
+        assert!(matches!(
+            Router::route(&custom),
+            RouteMatch::ObjectPut(bucket, key) if bucket == "path-bucket" && key == "object"
+        ));
+    }
 }
 
 /// Router for S3 API endpoints
@@ -381,90 +488,82 @@ pub struct Router;
 impl Router {
     fn bucket_from_host(host: &str) -> Option<String> {
         let host_without_port = host.split(':').next().unwrap_or(host);
-
-        if host_without_port.eq_ignore_ascii_case("localhost")
-            || host_without_port.parse::<std::net::IpAddr>().is_ok()
-        {
-            return None;
+        let lowercase = host_without_port.to_ascii_lowercase();
+        if let Some(bucket) = lowercase.strip_suffix(".localhost") {
+            return (!bucket.is_empty()).then(|| host_without_port[..bucket.len()].to_string());
         }
 
-        let labels: Vec<&str> = host_without_port.split('.').collect();
-        if labels.len() < 2 {
-            return None;
-        }
+        let marker = lowercase.find(".s3")?;
+        let endpoint = &lowercase[marker + 1..];
+        let aws_domain =
+            endpoint.ends_with(".amazonaws.com") || endpoint.ends_with(".amazonaws.com.cn");
+        let bucket_endpoint = endpoint == "s3.amazonaws.com"
+            || (aws_domain
+                && (endpoint.starts_with("s3.")
+                    || endpoint.starts_with("s3-")
+                    || endpoint.starts_with("s3-accelerate."))
+                && !endpoint.starts_with("s3-accesspoint")
+                && !endpoint.starts_with("s3-control")
+                && !endpoint.starts_with("s3-object-lambda")
+                && !endpoint.starts_with("s3-outposts"));
+        (marker > 0 && bucket_endpoint).then(|| host_without_port[..marker].to_string())
+    }
 
-        let candidate = labels[0];
-        if candidate.is_empty()
-            || candidate.eq_ignore_ascii_case("s3")
-            || candidate.eq_ignore_ascii_case("blob")
-            || candidate.eq_ignore_ascii_case("storage")
-        {
-            return None;
+    fn bucket_route(method: &Method, bucket: String) -> RouteMatch {
+        match *method {
+            Method::GET | Method::OPTIONS => RouteMatch::BucketGet(bucket),
+            Method::PUT => RouteMatch::BucketPut(bucket),
+            Method::DELETE => RouteMatch::BucketDelete(bucket),
+            Method::HEAD => RouteMatch::BucketHead(bucket),
+            Method::POST => RouteMatch::BucketPost(bucket),
+            _ => RouteMatch::NotFound,
         }
+    }
 
-        Some(candidate.to_string())
+    fn object_route(method: &Method, bucket: String, encoded_key: &str) -> RouteMatch {
+        let Ok(key) = crate::utils::request::decode_uri_path(encoded_key) else {
+            return RouteMatch::InvalidObjectPath;
+        };
+        match *method {
+            Method::GET | Method::OPTIONS => RouteMatch::ObjectGet(bucket, key),
+            Method::PUT => RouteMatch::ObjectPut(bucket, key),
+            Method::DELETE => RouteMatch::ObjectDelete(bucket, key),
+            Method::HEAD => RouteMatch::ObjectHead(bucket, key),
+            Method::POST => RouteMatch::ObjectPost(bucket, key),
+            _ => RouteMatch::NotFound,
+        }
     }
 
     pub fn route(req: &Request) -> RouteMatch {
         let method = req.method();
-        let path = req.path();
-        let parts: Vec<&str> = path
-            .trim_start_matches('/')
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
+        let path = req.path().strip_prefix('/').unwrap_or(req.path());
         let host_bucket = req.host().and_then(Self::bucket_from_host);
 
-        match parts.as_slice() {
-            // List buckets: GET /
-            [] if method == Method::GET && host_bucket.is_none() => RouteMatch::ListBuckets,
-            [] if host_bucket.is_some() => match *method {
-                Method::GET | Method::OPTIONS => {
-                    RouteMatch::BucketGet(host_bucket.unwrap_or_default())
-                }
-                Method::PUT => RouteMatch::BucketPut(host_bucket.unwrap_or_default()),
-                Method::DELETE => RouteMatch::BucketDelete(host_bucket.unwrap_or_default()),
-                Method::HEAD => RouteMatch::BucketHead(host_bucket.unwrap_or_default()),
-                Method::POST => RouteMatch::BucketPost(host_bucket.unwrap_or_default()),
-                _ => RouteMatch::NotFound,
-            },
+        // Virtual-hosted-style object operations take precedence over path-style parsing.
+        if let Some(bucket) = host_bucket {
+            return if path.is_empty() {
+                Self::bucket_route(method, bucket)
+            } else {
+                Self::object_route(method, bucket, path)
+            };
+        }
 
-            // Virtual-hosted-style object operations take precedence over path-style parsing.
-            key if !key.is_empty() && host_bucket.is_some() => {
-                let key = key.join("/");
-                let bucket = host_bucket.unwrap_or_default();
-                match *method {
-                    Method::GET | Method::OPTIONS => RouteMatch::ObjectGet(bucket, key),
-                    Method::PUT => RouteMatch::ObjectPut(bucket, key),
-                    Method::DELETE => RouteMatch::ObjectDelete(bucket, key),
-                    Method::HEAD => RouteMatch::ObjectHead(bucket, key),
-                    Method::POST => RouteMatch::ObjectPost(bucket, key),
-                    _ => RouteMatch::NotFound,
-                }
+        if path.is_empty() {
+            return if method == Method::GET {
+                RouteMatch::ListBuckets
+            } else {
+                RouteMatch::NotFound
+            };
+        }
+
+        match path.split_once('/') {
+            Some((bucket, key)) if !bucket.is_empty() && !key.is_empty() => {
+                Self::object_route(method, bucket.to_string(), key)
             }
-
-            // Bucket operations
-            [bucket] => match *method {
-                Method::GET | Method::OPTIONS => RouteMatch::BucketGet(bucket.to_string()),
-                Method::PUT => RouteMatch::BucketPut(bucket.to_string()),
-                Method::DELETE => RouteMatch::BucketDelete(bucket.to_string()),
-                Method::HEAD => RouteMatch::BucketHead(bucket.to_string()),
-                Method::POST => RouteMatch::BucketPost(bucket.to_string()),
-                _ => RouteMatch::NotFound,
-            },
-
-            // Object operations
-            [bucket, key @ ..] if !key.is_empty() => {
-                let key = key.join("/");
-                match *method {
-                    Method::GET | Method::OPTIONS => RouteMatch::ObjectGet(bucket.to_string(), key),
-                    Method::PUT => RouteMatch::ObjectPut(bucket.to_string(), key),
-                    Method::DELETE => RouteMatch::ObjectDelete(bucket.to_string(), key),
-                    Method::HEAD => RouteMatch::ObjectHead(bucket.to_string(), key),
-                    Method::POST => RouteMatch::ObjectPost(bucket.to_string(), key),
-                    _ => RouteMatch::NotFound,
-                }
+            Some((bucket, "")) if !bucket.is_empty() => {
+                Self::bucket_route(method, bucket.to_string())
             }
+            None => Self::bucket_route(method, path.to_string()),
             _ => RouteMatch::NotFound,
         }
     }
@@ -483,5 +582,6 @@ pub enum RouteMatch {
     ObjectDelete(String, String),
     ObjectHead(String, String),
     ObjectPost(String, String),
+    InvalidObjectPath,
     NotFound,
 }

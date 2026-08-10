@@ -121,6 +121,67 @@ pub fn generate_message_id() -> String {
 /// Returns [`Error::InvalidRequest`] when `message` has no recipients, or
 /// propagates the underlying store's error.
 pub fn fan_out<S: MailStore + ?Sized>(store: &S, message: &Message) -> Result<Vec<StoredMessage>> {
+    fan_out_with_id(store, message, &generate_message_id())
+}
+
+/// Atomically captures every message in one provider request. If any fan-out
+/// fails, all copies created for earlier messages in the batch are removed.
+pub(crate) fn fan_out_batch<S: MailStore + ?Sized>(
+    store: &S,
+    messages: &[Message],
+) -> Result<Vec<Vec<StoredMessage>>> {
+    let mut captured: Vec<(String, Vec<String>)> = Vec::with_capacity(messages.len());
+    let mut result = Vec::with_capacity(messages.len());
+    for message in messages {
+        let message_id = generate_message_id();
+        match fan_out_with_id(store, message, &message_id) {
+            Ok(stored) => {
+                let mailboxes = message
+                    .recipients()
+                    .into_iter()
+                    .map(model::Address::mailbox_key)
+                    .chain(std::iter::once(ALL_MAILBOX.to_string()))
+                    .collect::<Vec<_>>();
+                captured.push((message_id, mailboxes));
+                result.push(stored);
+            }
+            Err(error) => {
+                let rollback_errors = captured
+                    .into_iter()
+                    .flat_map(|(id, mailboxes)| {
+                        mailboxes
+                            .into_iter()
+                            .map(move |mailbox| (id.clone(), mailbox))
+                    })
+                    .filter_map(|(id, mailbox)| {
+                        store
+                            .delete_message(&mailbox, &id)
+                            .err()
+                            .map(|rollback| format!("{mailbox}/{id}: {rollback}"))
+                    })
+                    .collect::<Vec<_>>();
+                if rollback_errors.is_empty() {
+                    return Err(error);
+                }
+                return Err(Error::InternalError(format!(
+                    "mail batch failed ({error}); rollback failed for {}",
+                    rollback_errors.join(", ")
+                )));
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Stores one message under a caller-supplied provider identifier.
+///
+/// This is used by provider APIs whose operation identifier is also their
+/// durable lookup key (for example, ACS Email long-running operations).
+pub(crate) fn fan_out_with_id<S: MailStore + ?Sized>(
+    store: &S,
+    message: &Message,
+    message_id: &str,
+) -> Result<Vec<StoredMessage>> {
     let mut mailboxes: Vec<String> = message
         .recipients()
         .into_iter()
@@ -135,14 +196,60 @@ pub fn fan_out<S: MailStore + ?Sized>(store: &S, message: &Message) -> Result<Ve
         ));
     }
 
-    let message_id = generate_message_id();
-    store.ensure_mailbox(ALL_MAILBOX)?;
-    store.store_message(ALL_MAILBOX, &message_id, message.clone())?;
+    let mut targets = Vec::with_capacity(mailboxes.len() + 1);
+    targets.push(ALL_MAILBOX.to_string());
+    targets.extend(mailboxes);
 
-    let mut stored = Vec::with_capacity(mailboxes.len());
-    for mailbox in mailboxes {
-        store.ensure_mailbox(&mailbox)?;
-        stored.push(store.store_message(&mailbox, &message_id, message.clone())?);
+    // Complete every validation and directory-creation step before the first
+    // message copy is visible. Generated IDs are unique, and caller-supplied
+    // IDs must not overwrite an earlier provider operation.
+    for mailbox in &targets {
+        store.ensure_mailbox(mailbox)?;
+        match store.get_message(mailbox, message_id) {
+            Err(Error::MessageNotFound) => {}
+            Ok(_) => {
+                return Err(Error::InvalidRequest(format!(
+                    "message id {message_id} already exists"
+                )))
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    let mut written = Vec::with_capacity(targets.len());
+    let mut stored = Vec::with_capacity(targets.len().saturating_sub(1));
+    for mailbox in &targets {
+        match store.store_message(mailbox, message_id, message.clone()) {
+            Ok(copy) => {
+                written.push(mailbox.as_str());
+                if mailbox != ALL_MAILBOX {
+                    stored.push(copy);
+                }
+            }
+            Err(error) => {
+                // `store_message` can fail after making its target visible
+                // (for example while writing a raw MIME sidecar), so include
+                // the current target as well as every completed copy.
+                let mut rollback_targets = written;
+                rollback_targets.push(mailbox.as_str());
+                let rollback_errors = rollback_targets
+                    .into_iter()
+                    .filter_map(|target| {
+                        store
+                            .delete_message(target, message_id)
+                            .err()
+                            .map(|rollback| format!("{target}: {rollback}"))
+                    })
+                    .collect::<Vec<_>>();
+                if rollback_errors.is_empty() {
+                    return Err(error);
+                }
+                return Err(Error::InternalError(format!(
+                    "mail fan-out failed ({error}); rollback failed for {}",
+                    rollback_errors.join(", ")
+                )));
+            }
+        }
     }
 
     Ok(stored)
@@ -151,6 +258,66 @@ pub fn fan_out<S: MailStore + ?Sized>(store: &S, message: &Message) -> Result<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FailAfterWriteStore {
+        inner: FilesystemMailStore,
+        fail_on_store: usize,
+        store_calls: AtomicUsize,
+    }
+
+    impl MailStore for FailAfterWriteStore {
+        fn store_message(
+            &self,
+            mailbox: &str,
+            message_id: &str,
+            message: Message,
+        ) -> Result<StoredMessage> {
+            let stored = self.inner.store_message(mailbox, message_id, message)?;
+            if self.store_calls.fetch_add(1, Ordering::SeqCst) + 1 == self.fail_on_store {
+                return Err(Error::InternalError("injected store failure".to_string()));
+            }
+            Ok(stored)
+        }
+
+        fn get_message(&self, mailbox: &str, message_id: &str) -> Result<StoredMessage> {
+            self.inner.get_message(mailbox, message_id)
+        }
+
+        fn list_messages(
+            &self,
+            mailbox: &str,
+            params: ListMessagesParams,
+        ) -> Result<ListMessagesResult> {
+            self.inner.list_messages(mailbox, params)
+        }
+
+        fn delete_message(&self, mailbox: &str, message_id: &str) -> Result<()> {
+            self.inner.delete_message(mailbox, message_id)
+        }
+
+        fn delete_mailbox(&self, mailbox: &str) -> Result<()> {
+            self.inner.delete_mailbox(mailbox)
+        }
+
+        fn update_delivery_status(
+            &self,
+            mailbox: &str,
+            message_id: &str,
+            status: DeliveryStatus,
+        ) -> Result<()> {
+            self.inner
+                .update_delivery_status(mailbox, message_id, status)
+        }
+
+        fn list_mailboxes(&self) -> Result<Vec<MailboxInfo>> {
+            self.inner.list_mailboxes()
+        }
+
+        fn ensure_mailbox(&self, mailbox: &str) -> Result<()> {
+            self.inner.ensure_mailbox(mailbox)
+        }
+    }
 
     fn message_to(addresses: &[&str]) -> Message {
         Message {
@@ -159,11 +326,14 @@ mod tests {
             to: addresses.iter().map(|a| Address::new(*a)).collect(),
             cc: Vec::new(),
             bcc: Vec::new(),
+            reply_to: Vec::new(),
             subject: "hi".to_string(),
             headers: std::collections::HashMap::new(),
             body_text: Some("hello".to_string()),
             body_html: None,
             attachments: Vec::new(),
+            user_engagement_tracking_disabled: None,
+            provider_metadata: std::collections::HashMap::new(),
             raw_mime: None,
             thread_id: None,
         }
@@ -194,6 +364,56 @@ mod tests {
 
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].mailbox, "bob@example.com");
+    }
+
+    #[test]
+    fn should_leave_no_captured_copies_when_fan_out_validation_fails() {
+        // Arrange
+        let store = FilesystemMailStore::open(temp_dir()).expect("store should open");
+        let message = message_to(&["alice@example.com", ""]);
+
+        // Act
+        fan_out_with_id(&store, &message, "atomic-message")
+            .expect_err("an empty recipient mailbox should fail before capture");
+
+        // Assert
+        assert!(store
+            .list_messages(ALL_MAILBOX, ListMessagesParams::default())
+            .expect("all mailbox should remain readable")
+            .messages
+            .is_empty());
+        assert!(store
+            .list_messages("alice@example.com", ListMessagesParams::default())
+            .expect("recipient mailbox should remain readable")
+            .messages
+            .is_empty());
+    }
+
+    #[test]
+    fn should_roll_back_every_personalization_when_a_batch_store_fails_after_writing() {
+        // Arrange
+        let store = FailAfterWriteStore {
+            inner: FilesystemMailStore::open(temp_dir()).expect("store should open"),
+            fail_on_store: 3,
+            store_calls: AtomicUsize::new(0),
+        };
+        let messages = [
+            message_to(&["alice@example.com"]),
+            message_to(&["bob@example.com"]),
+        ];
+
+        // Act
+        fan_out_batch(&store, &messages)
+            .expect_err("the injected second-personalization failure should surface");
+
+        // Assert
+        for mailbox in [ALL_MAILBOX, "alice@example.com", "bob@example.com"] {
+            assert!(store
+                .list_messages(mailbox, ListMessagesParams::default())
+                .expect("mailbox should remain readable")
+                .messages
+                .is_empty());
+        }
     }
 
     fn temp_dir() -> std::path::PathBuf {

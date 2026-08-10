@@ -7,7 +7,8 @@ use std::hash::BuildHasher;
 mod parse;
 
 pub use self::parse::{
-    parse_acl_xml, parse_lifecycle_xml, parse_tagging_xml, parse_versioning_xml,
+    parse_acl_xml, parse_complete_multipart_upload_xml, parse_lifecycle_xml, parse_tagging_xml,
+    parse_versioning_xml,
 };
 
 /// Wrap content in XML declaration
@@ -260,7 +261,7 @@ pub fn list_objects_v2_xml(
   <Contents>
     <Key>{}</Key>
     <LastModified>{}</LastModified>
-    <ETag>\"{}\"</ETag>
+    <ETag>"{}"</ETag>
     <Size>{}</Size>
     {}<StorageClass>{}</StorageClass>
   </Contents>"#,
@@ -304,31 +305,58 @@ pub fn list_objects_v2_xml(
 /// Error response
 #[must_use]
 pub fn error_xml(code: &str, message: &str, request_id: &str) -> String {
+    error_xml_with_host_id(code, message, request_id, "")
+}
+
+/// S3 REST error response with both correlation identifiers.
+#[must_use]
+pub fn error_xml_with_host_id(
+    code: &str,
+    message: &str,
+    request_id: &str,
+    host_id: &str,
+) -> String {
+    let host_id = if host_id.is_empty() {
+        String::new()
+    } else {
+        format!("\n  <HostId>{}</HostId>", escape_xml(host_id))
+    };
     format!(
         r"{}
 <Error>
   <Code>{}</Code>
   <Message>{}</Message>
-  <RequestId>{}</RequestId>
+  <RequestId>{}</RequestId>{}
 </Error>",
         xml_declaration(),
         escape_xml(code),
         escape_xml(message),
-        escape_xml(request_id)
+        escape_xml(request_id),
+        host_id
     )
 }
 
 /// Versioning configuration response
 #[must_use]
 pub fn versioning_status_xml(status: Option<&str>) -> String {
-    let status_str = status.unwrap_or("Suspended");
-    format!(
-        r#"{}
+    status.map_or_else(
+        || {
+            format!(
+                r#"{}
+<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>"#,
+                xml_declaration()
+            )
+        },
+        |status| {
+            format!(
+                r#"{}
 <VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Status>{}</Status>
 </VersioningConfiguration>"#,
-        xml_declaration(),
-        escape_xml(status_str)
+                xml_declaration(),
+                escape_xml(status)
+            )
+        },
     )
 }
 
@@ -351,10 +379,38 @@ pub fn list_versions_xml(
     for obj in versions {
         let version_id = obj.version_id.as_deref().unwrap_or("null");
         let last_modified = obj.last_modified.format("%Y-%m-%dT%H:%M:%S%.3fZ");
-        let is_latest = seen_keys.insert(obj.key.as_str());
-        let _ = write!(
-            versions_xml,
-            r"
+        let is_latest = obj.provider_metadata.get("s3_is_latest").map_or_else(
+            || seen_keys.insert(obj.key.as_str()),
+            |value| value == "true",
+        );
+        if obj
+            .provider_metadata
+            .get("s3_delete_marker")
+            .map(String::as_str)
+            == Some("true")
+        {
+            let _ = write!(
+                versions_xml,
+                r"
+  <DeleteMarker>
+    <Key>{}</Key>
+    <VersionId>{}</VersionId>
+    <IsLatest>{}</IsLatest>
+    <LastModified>{}</LastModified>
+    <Owner>
+      <ID>sqrzl-emulator</ID>
+      <DisplayName>Sqrzl Emulator</DisplayName>
+    </Owner>
+  </DeleteMarker>",
+                escape_xml(&obj.key),
+                escape_xml(version_id),
+                if is_latest { "true" } else { "false" },
+                last_modified,
+            );
+        } else {
+            let _ = write!(
+                versions_xml,
+                r"
   <Version>
     <Key>{}</Key>
     <VersionId>{}</VersionId>
@@ -368,14 +424,15 @@ pub fn list_versions_xml(
     </Owner>
     <StorageClass>{}</StorageClass>
   </Version>",
-            escape_xml(&obj.key),
-            escape_xml(version_id),
-            if is_latest { "true" } else { "false" },
-            last_modified,
-            escape_xml(&obj.etag),
-            obj.size,
-            escape_xml(&obj.storage_class)
-        );
+                escape_xml(&obj.key),
+                escape_xml(version_id),
+                if is_latest { "true" } else { "false" },
+                last_modified,
+                escape_xml(&format!("\"{}\"", obj.etag.trim_matches('"'))),
+                obj.size,
+                escape_xml(&obj.storage_class)
+            );
+        }
     }
 
     let mut result = format!(
@@ -963,13 +1020,13 @@ mod tests {
     }
 
     #[test]
-    fn should_default_to_suspended_status_when_no_status_is_provided() {
+    fn should_omit_status_when_versioning_was_never_configured() {
         // Arrange
         // Act
         let xml = versioning_status_xml(None);
         // Assert
         let expected = format!(
-            "{}\n<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n  <Status>Suspended</Status>\n</VersioningConfiguration>",
+            "{}\n<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>",
             xml_declaration()
         );
 

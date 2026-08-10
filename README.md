@@ -9,6 +9,11 @@ A browser UI is included for inspecting buckets, mailboxes, and texts.
 Sqrzl is a development tool, not a production storage service. Provider
 compatibility is intentionally scoped; see the
 [compatibility matrix](compatibility-matrix.json) for current coverage.
+Within that documented scope, Sqrzl treats the provider's HTTP or SMTP wire
+contract as authoritative: request validation, mutation atomicity, status
+codes, headers, response documents, identity tokens, and failure behavior are
+provider-specific. An unsupported request variant must be rejected; it must not
+be accepted through a normalized approximation or silently ignored.
 
 ## Start with Docker Compose
 
@@ -139,7 +144,7 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
 | `SQRZL_UI_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9001` | Admin UI listener inside the container. Normally keep this at `9001`. |
 | `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum buffered HTTP request body or SMTP `DATA` payload. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
-| `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names must be 3–63 characters using lowercase ASCII letters, digits, and single hyphens; they cannot start or end with a hyphen. |
+| `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names use the Amazon S3 general-purpose rules: 3–63 lowercase letters, digits, periods, or hyphens; an alphanumeric first and last character; no adjacent periods, IP-address form, or AWS-reserved affix. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
 | `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
 | `SQRZL_SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
@@ -189,11 +194,11 @@ All provider APIs use the storage listener, normally
 | Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. For the simplest smoke setup, use no credential and leave Sqrzl auth disabled. |
 | GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. When enabled, bearer tokens equal to either configured Sqrzl credential are accepted for local qualification. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
-| OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/<namespace>/b/<bucket>/...`; the default namespace response is `sqrzl-emulator`. |
-| SMTP | SMTP server `localhost:2525` | Plaintext local capture; SMTP AUTH and STARTTLS are intentionally unsupported. |
-| SendGrid Mail Send | API base `http://localhost:9000` | Supports `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
-| Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports `SendEmail` through `POST /v2/email/outbound-emails` with SigV4. |
-| ACS Email | Connection-string endpoint `http://localhost:9000` | Supports `POST /emails:send` and operation polling with ACS HMAC authentication. |
+| OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/<namespace>/b/<bucket>/...`; the default namespace response is `sqrzl-emulator`. Use auth-disabled mode: OCI RSA-SHA256 verification is explicitly unsupported and non-provider signature approximations are rejected. |
+| SMTP | SMTP server `localhost:2525` | Plaintext local capture with strict envelope paths and null reverse-path support; SMTP AUTH and STARTTLS are intentionally unsupported. |
+| SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
+| Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4; Raw, Template, and attachments are rejected. |
+| ACS Email | Connection-string endpoint `http://localhost:9000` | Supports the matrix-listed `POST /emails:send` subset, operation polling, caller operation IDs, repeatability, and ACS HMAC authentication. |
 | Twilio Messages | API base `http://localhost:9000` | Supports outbound SMS/MMS references plus admin-driven inbound and delivery simulation. |
 | Amazon SNS | Endpoint URL `http://localhost:9000` | Supports direct `PhoneNumber` SMS `Publish` only. |
 | AWS SMS Voice v2 | Endpoint URL `http://localhost:9000` | Supports `SendTextMessage` and `SendMediaMessage`. |
@@ -202,11 +207,124 @@ All provider APIs use the storage listener, normally
 For lease and compare-and-swap qualification, the GCS JSON endpoint supports
 `ifGenerationMatch` (including create-only value `0`) on uploads and conditional
 object mutations. Azure Blob writes and deletes enforce `If-Match` and
-`If-None-Match: *`. These checks are atomic per object, missing resources use
+`If-None-Match` with quoted ETags or `*`. S3 PUT supports `If-Match` and the
+required `If-None-Match: *` form; S3 DELETE supports `If-Match` (the S3 API does
+not define `If-None-Match` for DeleteObject). These checks are atomic per object, missing resources use
 provider-shaped `404` responses, and returned GCS generations and quoted Azure
-ETags can be fed back into later conditional requests. Sqrzl models only the
-current object: historical GCS generations and the full HTTP conditional-header
-matrix remain outside this local emulator contract.
+ETags can be fed back into later conditional requests. Conditional operations
+target the current object; historical GCS generation retrieval and the full
+HTTP conditional-header matrix remain outside this local emulator contract.
+
+## Protocol conformance and deterministic failures
+
+Sqrzl keeps mutation responses provider-specific: S3 object PUT/DELETE use
+`200`/`204`, Azure Put/Delete Blob use `201`/`202`, and GCS uploads/deletes use
+`200`/`204`. S3 zero-byte object PUTs require an explicit `Content-Length: 0`;
+missing framing returns S3-shaped `411 MissingContentLength`. Azure Put Blob,
+Put Block, Put Block List, Append Block, and Put Page requests and accepted GCS
+JSON/XML upload paths also require `Content-Length`; GCS accepts
+`Transfer-Encoding: chunked` instead, while missing framing returns that
+surface's `411` error shape. Azure committed and uncommitted block bytes remain
+distinct, including `Committed`, `Uncommitted`, and `Latest` block-list
+selection. Declared body length mismatches are rejected before a provider
+mutation is dispatched. GCS JSON object metadata reports stored
+bytes in its JSON `size` field while the HTTP `Content-Length` describes the
+JSON document. GCS JSON metadata updates preserve the object's generation,
+increment metageneration, and issue new `etag` and `updated` identity values.
+GCS JSON uploads validate CRC32C as standard Base64 over four big-endian bytes:
+multipart requests may supply `crc32c` in object metadata, while media and final
+resumable requests use `X-Goog-Hash`. Malformed, conflicting, mismatched, or
+unsupported checksum tokens fail before mutation, and a failed final resumable
+checksum leaves the session retriable. Successful JSON object resources expose
+the server-calculated `crc32c`. Current-generation JSON metadata, media, and
+delete selectors must equal the stored generation; historical generation access
+remains outside the accepted subset.
+
+Tests can request one deterministic adverse response with
+`x-sqrzl-failpoint`:
+
+| Value | Phase and effect |
+| --- | --- |
+| `redirect-301`, `redirect-302`, `redirect-303`, `redirect-307`, `redirect-308` | Before commit; returns that redirect without mutating storage. Override the default dead-end target with `x-sqrzl-redirect-location`. |
+| `conditional-request-conflict` | Before commit on conditional S3 PUT or multipart completion; returns `409 ConditionalRequestConflict` without mutating storage so clients can exercise the concurrent-delete race outcome. |
+| `throttle`, `transient-500`, `transient-502`, `transient-503`, `transient-504` | Before commit; provider-shaped throttling or transient `5xx`, with `Retry-After: 1`. S3/Azure throttle as `503`; GCS/OCI throttle as `429`. |
+| `timeout-before-commit` | Delays before dispatch. |
+| `timeout-after-commit` | Dispatches first, then delays the response. |
+| `response-loss-after-commit` | Commits a mutation, then closes with an intentionally incomplete response. |
+| `truncate-response` | Returns half the body while retaining the original declared length. |
+| `repeated-pagination-token`, `malformed-pagination-token` | Rewrites the provider continuation token deterministically. |
+
+The conformance suite treats GCS JSON and GCS XML as separate front doors. It
+exercises every redirect status and transient `5xx` above, framing mismatch,
+before/after-commit timeout, committed response loss, truncation, throttling,
+missing-object shape, and both pagination-token rewrites across S3, Azure Blob,
+GCS JSON, GCS XML, and OCI Object Storage.
+
+The same five-front-door suite writes WAL-, SST-, and catalog-shaped objects,
+reopens the filesystem backend with fresh in-memory caches, verifies their raw
+bytes, publishes a replacement catalog, and retires the old catalog and WAL.
+That proves protocol CRUD persistence and retirement only; engine WAL replay,
+SST coverage, catalog interpretation, and recovery remain client-suite work.
+
+Timeout failpoints default to 1000 ms; set
+`x-sqrzl-failpoint-delay-ms` to a positive test-specific delay. These control
+headers are emulator-only and are never claims about a provider control plane.
+
+Provider-owned data-protection/history modes are mutually exclusive for a given
+bucket/container. Once S3 versioning/Object Lock, GCS retention/soft delete, or
+Azure versioning/soft delete owns that namespace, conflicting activation and
+protected mutations through another provider front door return that front
+door's `409` response without changing data or mode metadata. In particular,
+enabling S3 versioning never converts or unlocks a GCS- or Azure-protected
+bucket.
+
+S3 versioning preserves overwritten versions and creates delete markers;
+suspended buckets preserve non-null history while replacing the single `null`
+version on each PUT or simple DELETE. The accepted S3, Azure, GCS, and OCI
+current-object HEAD/LIST paths remain strongly consistent, so Sqrzl does not
+expose a stale-view failpoint for surfaces whose real providers promise strong
+reads.
+Create an S3 Object Lock mode bucket with the provider header
+`x-amz-bucket-object-lock-enabled: true`; this enables versioning permanently.
+Object-level lock headers are rejected outside that bucket mode, and Object
+Lock PUTs in the accepted subset require a validated `Content-MD5`. Bucket
+default retention updates, SDK checksum-algorithm variants, version-scoped
+tagging, and Object Lock parameters on multipart initiation are explicitly
+unsupported without mutation rather than silently approximated.
+GCS JSON bucket create/PATCH accepts unlocked `retentionPolicy` durations greater
+than zero and less than 100 years, plus `softDeletePolicy` durations from 7 days
+through less than 90 days. Soft-delete uses durable object versions and active
+retention rejects replacement or deletion through both JSON and XML object
+surfaces. Policy locking, per-object retention, writable server-owned policy
+fields, and disabling an enabled soft-delete policy are explicitly rejected as
+`501 UNIMPLEMENTED` rather than approximated.
+For focused Azure data-plane tests, create a container with
+`x-sqrzl-azure-versioning-enabled: true` or
+`x-sqrzl-azure-soft-delete-days: <1-365>`. These are emulator mode selectors,
+not Azure request headers. Azure versions can be read or deleted
+with `versionid=<id>`. These `x-sqrzl-*` controls intentionally avoid pretending
+that Sqrzl implements Azure's full account-level service-properties API.
+Container deletion models Azure's asynchronous deleting-name state: the
+container disappears from reads and listings immediately, while recreating the
+same name returns `409 ContainerBeingDeleted` until the lazy purge deadline.
+The local-only `x-sqrzl-azure-delete-delay-ms` DELETE header can set a
+nonnegative deterministic delay for tests; omitting it uses Azure's documented
+30-second same-name exclusion window. Azure container/blob subresources outside
+the documented accepted subset return `501 FeatureNotSupported` before ordinary
+container or blob CRUD can run.
+
+OCI bucket tiers accept `Standard` and `Archive`; object tiers accept
+`Standard`, `InfrequentAccess`, and `Archive`, with an omitted object tier
+inheriting the bucket default. Archive buckets reject non-Archive objects.
+OCI list paging treats `start` as inclusive and `startAfter` as exclusive,
+counts common prefixes toward `limit`, and returns the next unreturned name in
+`nextStartWith`. OCI request correlation echoes a valid
+`opc-client-request-id`, while malformed Signature authorization is rejected as
+`401 NotAuthenticated` and a valid RSA-SHA256 shape is explicitly unsupported.
+Object and multipart paths are decoded exactly once without collapsing empty
+key components. Version-scoped object requests, conditional multipart
+completion, and selective multipart commits are rejected explicitly without
+touching the current object or consuming the upload session.
 
 See [SMS and MMS emulation](docs/text-emulation.md) for callback security,
 simulation behavior, media handling, and explicit unsupported scope.
@@ -292,7 +410,7 @@ Common problems:
 | Data disappears after restart | Mount a named volume or bind mount at `/app/blobs`; container-local writable layers are disposable. |
 | Host port is already in use | Change the host side of the Compose mapping, such as `"19000:9000"`. |
 | Upload receives `413` | Increase `SQRZL_MAX_REQUEST_BYTES` to a positive byte count and recreate the container. |
-| Startup bucket is rejected | Use the common 3–63 character lowercase letter/digit/hyphen naming subset described in the environment table. |
+| Startup bucket is rejected | Use the Amazon S3 general-purpose bucket-name rules summarized in the environment table. |
 
 ## Development and contract references
 

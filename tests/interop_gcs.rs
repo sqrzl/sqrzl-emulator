@@ -17,7 +17,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_gcs_requests
         request(
             "PUT",
             "http://localhost/interop-gcs",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -31,6 +31,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_gcs_requests
             &[
                 ("host", "storage.googleapis.com"),
                 ("content-type", "text/plain"),
+                ("content-length", "9"),
             ],
             b"gcs smoke",
         ),
@@ -43,7 +44,7 @@ async fn should_round_trip_bucket_and_object_operations_given_basic_gcs_requests
             request(
                 "GET",
                 "http://localhost/interop-gcs/hello.txt",
-                &[("host", "storage.googleapis.com")],
+                &[("host", "storage.googleapis.com"), ("content-length", "0")],
                 b"",
             ),
         )
@@ -62,7 +63,7 @@ async fn should_return_custom_metadata_given_gcs_metadata_headers_when_requestin
         request(
             "PUT",
             "http://localhost/interop-gcs",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -77,6 +78,7 @@ async fn should_return_custom_metadata_given_gcs_metadata_headers_when_requestin
                 ("host", "storage.googleapis.com"),
                 ("content-type", "text/plain"),
                 ("x-goog-meta-owner", "sdk"),
+                ("content-length", "9"),
             ],
             b"gcs smoke",
         ),
@@ -88,7 +90,7 @@ async fn should_return_custom_metadata_given_gcs_metadata_headers_when_requestin
         request(
             "HEAD",
             "http://localhost/interop-gcs/hello.txt",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -111,7 +113,7 @@ async fn should_return_not_found_given_missing_lease_object_when_requesting_obje
         request(
             "PUT",
             "http://localhost/cassie",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -122,7 +124,7 @@ async fn should_return_not_found_given_missing_lease_object_when_requesting_obje
         request(
             "HEAD",
             "http://localhost/cassie/midge_primary_lease.json",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -141,7 +143,7 @@ async fn should_return_not_found_given_missing_lease_object_when_requesting_obje
         request(
             "PUT",
             "http://localhost/cassie",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -152,14 +154,18 @@ async fn should_return_not_found_given_missing_lease_object_when_requesting_obje
         request(
             "GET",
             "http://localhost/cassie/midge_primary_lease.json",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
     .await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(body_bytes(response).await.is_empty());
+    assert!(response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("application/xml"));
+    assert!(body_text(response).await.contains("NoSuchKey"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -171,7 +177,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_gcs_objec
         request(
             "PUT",
             "http://localhost/interop-gcs",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -185,6 +191,7 @@ async fn should_return_requested_slice_given_range_header_when_reading_gcs_objec
             &[
                 ("host", "storage.googleapis.com"),
                 ("content-type", "text/plain"),
+                ("content-length", "9"),
             ],
             b"gcs smoke",
         ),
@@ -197,7 +204,11 @@ async fn should_return_requested_slice_given_range_header_when_reading_gcs_objec
             request(
                 "GET",
                 "http://localhost/interop-gcs/hello.txt",
-                &[("host", "storage.googleapis.com"), ("range", "bytes=0-2")],
+                &[
+                    ("host", "storage.googleapis.com"),
+                    ("content-length", "0"),
+                    ("range", "bytes=0-2"),
+                ],
                 b"",
             ),
         )
@@ -216,7 +227,7 @@ async fn should_list_matching_objects_given_existing_keys_when_querying_gcs_buck
         request(
             "PUT",
             "http://localhost/interop-gcs",
-            &[("host", "storage.googleapis.com")],
+            &[("host", "storage.googleapis.com"), ("content-length", "0")],
             b"",
         ),
     )
@@ -230,6 +241,7 @@ async fn should_list_matching_objects_given_existing_keys_when_querying_gcs_buck
             &[
                 ("host", "storage.googleapis.com"),
                 ("content-type", "text/plain"),
+                ("content-length", "9"),
             ],
             b"gcs smoke",
         ),
@@ -242,7 +254,7 @@ async fn should_list_matching_objects_given_existing_keys_when_querying_gcs_buck
             request(
                 "GET",
                 "http://localhost/interop-gcs",
-                &[("host", "storage.googleapis.com")],
+                &[("host", "storage.googleapis.com"), ("content-length", "0")],
                 b"",
             ),
         )
@@ -282,9 +294,10 @@ async fn should_complete_resumable_upload_given_json_api_session_when_finalizing
                 ("host", "storage.googleapis.com:8443"),
                 ("x-forwarded-proto", "https"),
                 ("x-upload-content-type", "text/plain"),
-                ("x-goog-meta-owner", "jules"),
+                ("content-type", "application/json"),
+                ("content-length", "30"),
             ],
-            b"",
+            br#"{"metadata":{"owner":"jules"}}"#,
         ),
     )
     .await;
@@ -305,6 +318,7 @@ async fn should_complete_resumable_upload_given_json_api_session_when_finalizing
             &[
                 ("host", "storage.googleapis.com:8443"),
                 ("x-forwarded-proto", "https"),
+                ("content-length", "8"),
             ],
             b"json api",
         ),

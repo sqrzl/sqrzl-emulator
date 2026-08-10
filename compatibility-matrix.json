@@ -19,7 +19,36 @@
         "status": "partial",
         "verified_by": [
           "api::server::tests::object_upload_download",
-          "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
+          "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows",
+          "provider_conformance::should_require_explicit_zero_length_for_s3_object_put",
+          "provider_conformance::should_reject_content_length_mismatch_on_every_storage_front_door",
+          "provider_conformance::should_return_provider_specific_missing_object_responses",
+          "provider_conformance::should_keep_redirects_precommit_on_every_storage_front_door",
+          "provider_conformance::should_return_every_redirect_before_mutation_on_every_storage_front_door",
+          "provider_conformance::should_distinguish_timeout_before_and_after_commit_on_every_front_door",
+          "provider_conformance::should_commit_before_response_loss_on_every_storage_front_door",
+          "provider_conformance::should_expose_s3_conditional_request_conflict_without_mutation",
+          "provider_conformance::should_not_apply_failed_s3_conditional_delete",
+          "provider_conformance::should_not_treat_if_none_match_as_an_s3_delete_precondition",
+          "provider_conformance::should_return_s3_not_found_for_if_match_put_without_current_object",
+          "provider_conformance::should_reject_non_wildcard_s3_if_none_match_put",
+          "provider_conformance::should_return_provider_shaped_throttling_without_mutation",
+          "provider_conformance::should_expose_each_transient_status_before_commit_on_every_storage_front_door",
+          "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
+          "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door",
+          "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
+          "server::adapter_routing_tests::should_reject_truncated_storage_request_bodies_before_any_mutation",
+          "server::handlers::object::s3_contract_tests::should_reject_mismatched_content_md5_without_object_mutation",
+          "server::handlers::object::s3_contract_tests::should_distinguish_missing_key_and_delete_marker_for_if_match_star_delete",
+          "server::handlers::object::s3_contract_tests::should_not_treat_weak_if_match_as_a_strong_s3_precondition",
+          "server::handlers::object::s3_contract_tests::should_reject_unsupported_copy_range_and_invalid_directives_without_mutation",
+          "server::handlers::object::s3_contract_tests::should_reject_non_wildcard_copy_destination_if_none_match_without_mutation",
+          "server::handlers::object::s3_contract_tests::should_return_precondition_failed_when_copy_source_was_not_modified_since",
+          "server::handlers::object::s3_contract_tests::should_reject_malformed_copy_source_encoding_without_destination_mutation",
+          "server::handlers::object::s3_contract_tests::should_replace_copy_content_type_and_metadata_without_changing_copy_semantics",
+          "server::handlers::object::s3_contract_tests::should_return_empty_not_found_for_missing_current_head",
+          "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
+          "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -32,7 +61,9 @@
       "virtual_hosted_style": {
         "status": "partial",
         "verified_by": [
-          "server::http::tests::should_route_virtual_hosted_style_bucket_requests"
+          "server::http::tests::should_route_virtual_hosted_style_bucket_requests",
+          "server::adapter_routing_tests::should_route_dotted_s3_virtual_host_to_the_complete_bucket_name",
+          "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
@@ -59,14 +90,18 @@
         "status": "partial",
         "verified_by": [
           "services::object::tests::should_roundtrip_object_through_service",
-          "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload"
+          "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
+          "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
+          "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+          "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
+          "server::handlers::object::s3_contract_tests::should_reject_upload_part_copy_without_storing_an_empty_part"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "CompleteMultipartUpload validates the ordered part manifest, ETags, and the 5 MiB minimum for every non-final part when every uploaded part is selected. Selecting only a subset of uploaded parts, conditional completion headers, and Object Lock parameters on multipart initiation are explicitly rejected before mutation as unsupported. UploadPartCopy returns 501 NotImplemented and does not store an empty part."
         ]
       },
       "versioning": {
@@ -74,14 +109,27 @@
         "verified_by": [
           "services::object::tests::should_list_object_versions_through_service",
           "server::handlers::bucket::tests::should_list_version_history_when_versions_query_is_requested",
-          "interop_s3::should_list_multiple_versions_given_versioning_enabled_when_object_is_overwritten"
+          "server::handlers::object::s3_contract_tests::should_return_not_found_with_marker_identity_for_current_delete_marker_get",
+          "server::handlers::object::s3_contract_tests::should_return_empty_not_found_with_marker_identity_for_current_delete_marker_head",
+          "server::handlers::object::s3_contract_tests::should_return_method_not_allowed_for_delete_marker_version_get",
+          "server::handlers::object::s3_contract_tests::should_return_empty_method_not_allowed_for_delete_marker_version_head",
+          "server::handlers::object::s3_contract_tests::should_reject_copying_delete_marker_version_without_destination_mutation",
+          "server::handlers::object::s3_contract_tests::should_return_empty_not_found_for_missing_head_version",
+          "interop_s3::should_list_multiple_versions_given_versioning_enabled_when_object_is_overwritten",
+          "interop_s3::should_use_one_null_version_and_preserve_non_null_history_when_versioning_is_suspended",
+          "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
+          "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
+          "providers::gcs::tests::should_serialize_conflicting_s3_and_gcs_data_protection_activation",
+          "providers::tests::should_serialize_conflicting_azure_and_s3_protection_creation",
+          "storage::filesystem::tests::should_reject_unsafe_version_ids_without_aliasing_current_or_historical_data",
+          "server::handlers::object::s3_contract_tests::should_not_alias_or_delete_version_data_given_unsafe_version_ids"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "S3 versioning and Object Lock are mutually exclusive with GCS and Azure data-protection ownership of the same bucket. S3 enable/suspend and protected mutations return InvalidBucketState 409 without mutation while a foreign mode is active; enabling S3 never converts or unlocks that bucket."
         ]
       },
       "requester_pays": {
@@ -120,12 +168,21 @@
       "object_lock_retention": {
         "status": "partial",
         "verified_by": [
-          "server::handlers::object::s3_contract_tests::should_block_mutation_when_object_lock_headers_are_active"
+          "server::handlers::bucket::tests::should_enable_object_lock_at_bucket_creation_and_prevent_versioning_suspension",
+          "server::handlers::object::s3_contract_tests::should_reject_object_lock_headers_when_bucket_mode_is_not_enabled",
+          "server::handlers::object::s3_contract_tests::should_add_new_version_without_overwriting_locked_current_version",
+          "server::handlers::object::s3_contract_tests::should_add_delete_marker_without_removing_locked_current_version",
+          "server::handlers::object::s3_contract_tests::should_reject_permanent_delete_of_locked_object_version",
+          "server::handlers::object::s3_contract_tests::should_explicitly_reject_unsupported_governance_bypass_without_deleting_version",
+          "server::handlers::object::s3_contract_tests::should_preserve_locked_current_version_tags_when_tag_mutations_fail",
+          "server::handlers::object::s3_contract_tests::should_reject_version_scoped_tagging_without_mutating_the_version",
+          "server::handlers::object::s3_contract_tests::should_reject_orphan_or_nonfuture_object_lock_retention_headers_before_mutation",
+          "lifecycle::tests::should_not_expire_locked_s3_noncurrent_versions"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "Retention headers are enforced for local mutation safety, but governance/compliance legal-hold parity is not claimed."
+          "Retention and legal hold protect the retained version while versioned PUT/COPY and simple DELETE may create a new version or marker. Current-version tag mutations are blocked while retained; version-scoped tagging, IAM-authorized governance bypass, and full bucket Object Lock control-plane parity are explicitly unsupported without mutation."
         ]
       },
       "sse_request_contracts": {
@@ -142,12 +199,16 @@
       "bucket_post_ops": {
         "status": "partial",
         "verified_by": [
-          "server::handlers::bucket::tests::should_accept_browser_post_uploads"
+          "server::handlers::bucket::tests::should_accept_browser_post_uploads",
+          "server::handlers::bucket::tests::should_fully_parse_multi_delete_before_mutating_any_object",
+          "server::handlers::bucket::tests::should_reject_schema_invalid_multi_delete_nesting_without_mutating",
+          "server::handlers::bucket::tests::should_require_valid_content_md5_before_multi_delete_mutation",
+          "server::handlers::bucket::tests::should_report_multi_delete_lock_and_etag_failures_without_deleting"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "Browser-style POST uploads are covered by contract tests, but not part of the SDK certification gate."
+          "Browser-style POST uploads and the accepted DeleteObjects subset are covered by contract tests, but not part of the SDK certification gate. DeleteObjects validates XML schema nesting, the 1000-object limit, and Content-MD5 before mutation and reports per-entry ETag/Object Lock failures."
         ]
       }
     },
@@ -156,34 +217,68 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
-          "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations"
+          "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations",
+          "interop_azure::should_delete_nonempty_container_given_delete_container_request",
+          "providers::azure::tests::should_not_schedule_or_purge_container_with_azure_worm_data",
+          "providers::azure::tests::should_reject_unsupported_azure_subresources_before_mutation",
+          "providers::tests::should_serialize_conflicting_azure_and_s3_protection_creation",
+          "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "Delete Container enters a durable local deleting-name state, hides the container immediately, and rejects same-name recreation until lazy purge. Data-plane deletion rejects active or malformed fail-closed WORM protection across current blobs, snapshots, and versions before scheduling or reclaiming bytes. Unsupported container subresources return FeatureNotSupported before namespace mutation. Production control-plane garbage-collection timing is not claimed."
         ]
       },
       "blob_crud": {
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
-          "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations"
+          "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations",
+          "provider_conformance::should_preserve_azure_empty_mutation_statuses",
+          "provider_conformance::should_require_provider_specific_content_length_for_azure_and_gcs_uploads",
+          "interop_azure::should_require_content_length_for_azure_put_blob_without_mutating",
+          "interop_azure::should_require_content_length_for_azure_block_append_and_page_mutations",
+          "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers",
+          "providers::azure::tests::should_preserve_azure_committed_and_uncommitted_block_selectors",
+          "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
+          "providers::azure::tests::should_preserve_active_lease_across_azure_blob_overwrites",
+          "providers::azure::tests::should_reject_unsupported_azure_copy_variants_without_mutating",
+          "providers::azure::tests::should_render_native_azure_incomplete_body_error",
+          "providers::azure::tests::should_decode_azure_blob_paths_once_and_preserve_empty_segments",
+          "providers::azure::tests::should_return_container_not_found_for_every_missing_container_blob_verb",
+          "providers::azure::tests::should_reject_unsupported_azure_subresources_before_mutation",
+          "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+          "providers::azure::tests::should_reject_unsafe_and_unsupported_azure_version_selectors_without_mutating",
+          "provider_conformance::should_reject_content_length_mismatch_on_every_storage_front_door",
+          "provider_conformance::should_return_provider_specific_missing_object_responses",
+          "provider_conformance::should_keep_redirects_precommit_on_every_storage_front_door",
+          "provider_conformance::should_return_every_redirect_before_mutation_on_every_storage_front_door",
+          "provider_conformance::should_distinguish_timeout_before_and_after_commit_on_every_front_door",
+          "provider_conformance::should_commit_before_response_loss_on_every_storage_front_door",
+          "provider_conformance::should_enforce_azure_if_none_match_etag_on_put",
+          "provider_conformance::should_return_provider_shaped_throttling_without_mutation",
+          "provider_conformance::should_expose_each_transient_status_before_commit_on_every_storage_front_door",
+          "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
+          "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
+          "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
+          "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "Azure local versioning/soft-delete mode is mutually exclusive with S3 and GCS data-protection ownership of the same container. Conflicting activation, protected mutation, or foreign version access returns FeatureVersionMismatch 409 without mutation. Selected previous-version and snapshot mutations are either handled by the supported delete path or rejected before changing the current blob. Put Block List preserves Committed, Uncommitted, and Latest selectors and reports real block sizes. Unimplemented blob subresources return FeatureNotSupported before ordinary blob CRUD can run."
         ]
       },
       "metadata_headers": {
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
+          "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
           "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
         ],
         "support_tier": "partial",
@@ -198,7 +293,8 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
-          "interop_azure::should_return_requested_slice_given_range_header_when_reading_blob_content"
+          "interop_azure::should_return_requested_slice_given_range_header_when_reading_blob_content",
+          "interop_azure::should_read_selected_azure_version_bytes_given_a_range_request"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -212,7 +308,8 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
-          "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists"
+          "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists",
+          "interop_azure::should_return_azure_pagination_and_container_identity_headers"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -226,7 +323,9 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
-          "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists"
+          "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists",
+          "interop_azure::should_page_azure_blob_prefixes_without_exposing_snapshot_storage_keys",
+          "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -267,7 +366,12 @@
           "providers::azure::tests::should_commit_block_blob_from_put_block_list",
           "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
           "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations",
-          "providers::azure::tests::should_commit_and_list_blocks_after_adapter_restart"
+          "providers::azure::tests::should_commit_and_list_blocks_after_adapter_restart",
+          "providers::azure::tests::should_reject_invalid_azure_block_ids_without_staging_them",
+          "providers::azure::tests::should_reject_malformed_azure_block_lists_without_committing",
+          "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
+          "providers::azure::tests::should_preserve_active_lease_across_azure_blob_overwrites",
+          "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -281,7 +385,9 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_support_append_and_page_blob_writes",
-          "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content"
+          "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+          "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content",
+          "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
@@ -293,7 +399,9 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_support_append_and_page_blob_writes",
-          "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content"
+          "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+          "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content",
+          "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
@@ -305,19 +413,26 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
-          "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob"
+          "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+          "providers::azure::tests::should_preserve_active_lease_across_azure_blob_overwrites",
+          "providers::azure::tests::should_preserve_version_identity_for_azure_lease_and_worm_metadata",
+          "storage::filesystem::tests::should_replace_provider_metadata_without_changing_version_identity_or_history",
+          "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
+          "interop_azure::should_not_apply_azure_subresource_mutations_given_stale_or_weak_conditions"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "Lease enforcement is covered for core local flows, but provider timing and break/renew edge cases are simplified."
+          "Lease enforcement is covered for core local flows, including preserving an active lease across successful Put Blob and Put Block List replacements. Provider timing and break/renew edge cases are simplified."
         ]
       },
       "snapshots": {
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
-          "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob"
+          "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+          "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
+          "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
@@ -329,12 +444,18 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
+          "providers::azure::tests::should_fail_closed_for_malformed_azure_worm_metadata",
+          "providers::azure::tests::should_not_schedule_or_purge_container_with_azure_worm_data",
+          "providers::azure::tests::should_preserve_azure_worm_state_on_invalid_mutations",
+          "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
+          "providers::azure::tests::should_preserve_version_identity_for_azure_lease_and_worm_metadata",
+          "storage::filesystem::tests::should_replace_provider_metadata_without_changing_version_identity_or_history",
           "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "Retention enforcement is local and simplified; production governance/compliance parity is not claimed."
+          "Local Locked policies cannot be shortened, unlocked, or deleted; invalid requests and malformed durable WORM state fail without mutation. With Azure versioning enabled, Put Blob and Put Block List create a new current version while retaining the protected predecessor and return the new version identity; without versioning, the same protected overwrites fail closed. Protected current blobs, snapshots, and versions block data-plane container scheduling and purge. Provider authorization and production governance/compliance control-plane parity are not claimed."
         ]
       }
     },
@@ -343,7 +464,10 @@
         "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
-          "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api"
+          "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
+          "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
+          "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
+          "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -357,13 +481,45 @@
         "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
-          "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api"
+          "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
+          "provider_conformance::should_preserve_gcs_json_empty_mutation_statuses",
+          "provider_conformance::should_preserve_gcs_xml_empty_mutation_statuses",
+          "provider_conformance::should_require_provider_specific_content_length_for_azure_and_gcs_uploads",
+          "provider_conformance::should_allow_chunked_gcs_uploads_without_content_length",
+          "provider_conformance::should_reject_content_length_mismatch_on_every_storage_front_door",
+          "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
+          "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing",
+          "provider_conformance::should_render_gcs_json_payload_too_large_as_json_without_mutation",
+          "provider_conformance::should_return_provider_specific_missing_object_responses",
+          "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
+          "provider_conformance::should_keep_redirects_precommit_on_every_storage_front_door",
+          "provider_conformance::should_return_every_redirect_before_mutation_on_every_storage_front_door",
+          "provider_conformance::should_distinguish_timeout_before_and_after_commit_on_every_front_door",
+          "provider_conformance::should_commit_before_response_loss_on_every_storage_front_door",
+          "provider_conformance::should_enforce_gcs_xml_generation_preconditions_on_create_and_update",
+          "provider_conformance::should_enforce_gcs_xml_generation_precondition_on_delete",
+          "provider_conformance::should_reject_gcs_json_upload_metageneration_precondition_without_mutation",
+          "provider_conformance::should_reject_gcs_json_etag_mutation_headers_without_applying_delete",
+          "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
+          "provider_conformance::should_not_apply_failed_gcs_generation_not_match_upload",
+          "provider_conformance::should_return_provider_shaped_throttling_without_mutation",
+          "provider_conformance::should_expose_each_transient_status_before_commit_on_every_storage_front_door",
+          "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
+          "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
+          "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
+          "providers::gcs::tests::should_validate_matching_gcs_json_multipart_crc32c",
+          "providers::gcs::tests::should_reject_mismatched_gcs_json_multipart_crc32c_without_mutation",
+          "providers::gcs::tests::should_reject_mismatched_resumable_metadata_crc32c_without_mutation",
+          "providers::gcs::tests::should_validate_matching_gcs_json_media_x_goog_hash_crc32c",
+          "providers::gcs::tests::should_reject_invalid_gcs_json_media_x_goog_hash_without_mutation",
+          "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
+          "The accepted JSON upload checksum subset validates base64 big-endian CRC32C supplied in multipart object metadata and in X-Goog-Hash on media or final resumable requests. Malformed, conflicting, mismatched, and unsupported checksum algorithms fail before mutation; a failed final resumable checksum leaves the session retriable. A separate third multipart checksum part and MD5 validation remain explicitly rejected rather than approximated. Current-generation JSON metadata, media, and delete selectors are accepted only when they equal the stored generation; historical generation access remains unsupported.",
           "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
@@ -371,7 +527,9 @@
         "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
-          "interop_gcs::should_return_custom_metadata_given_gcs_metadata_headers_when_requesting_object_head"
+          "interop_gcs::should_return_custom_metadata_given_gcs_metadata_headers_when_requesting_object_head",
+          "provider_conformance::should_report_gcs_json_metadata_document_length_separately_from_object_size",
+          "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -399,7 +557,8 @@
         "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
-          "interop_gcs::should_list_matching_objects_given_existing_keys_when_querying_gcs_bucket_contents"
+          "interop_gcs::should_list_matching_objects_given_existing_keys_when_querying_gcs_bucket_contents",
+          "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -425,14 +584,18 @@
         "verified_by": [
           "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access",
           "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
-          "providers::gcs::tests::should_complete_resumable_upload_after_adapter_restart"
+          "providers::gcs::tests::should_complete_resumable_upload_after_adapter_restart",
+          "providers::gcs::tests::should_apply_resumable_json_metadata_and_body_name_without_silent_fields",
+          "providers::tests::should_route_local_gcs_resumable_session_uris_back_to_gcs",
+          "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
+          "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "Resumable sessions persist across restart and accept a single final upload. Initiation supports object name, contentType, and string metadata, while completion accepts x-goog-meta-* metadata; unsupported writable metadata fields such as cacheControl return 501 instead of being silently ignored. Multi-chunk transfers and upload-status probes are explicitly rejected and are not claimed as GCS-compatible."
         ]
       },
       "json_api_breadth": {
@@ -441,6 +604,17 @@
           "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
           "providers::gcs::tests::should_increment_generation_on_overwrite_and_patch_metageneration",
           "providers::gcs::tests::should_enforce_gcs_generation_and_metageneration_preconditions",
+          "providers::gcs::tests::should_reject_retained_overwrite_and_invalid_generation_preconditions",
+          "providers::gcs::tests::should_reject_unsupported_or_invalid_bucket_retention_configuration_without_mutation",
+          "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
+          "providers::gcs::tests::should_apply_resumable_json_metadata_and_body_name_without_silent_fields",
+          "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version",
+          "providers::gcs::tests::should_serialize_conflicting_s3_and_gcs_data_protection_activation",
+          "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation",
+          "lifecycle::tests::should_not_eagerly_expire_objects_from_gcs_retained_buckets",
+          "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
+          "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
+          "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
           "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
         ],
         "support_tier": "partial",
@@ -448,7 +622,7 @@
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "Unlocked bucket-retention and 7-to-less-than-90-day soft-delete configuration are locally covered and are mutually exclusive with S3 or Azure data-protection ownership of the bucket; conflicting activation returns FAILED_PRECONDITION 409 without mutation. Retention-policy locking, per-object retention, writable server-owned policy fields, and disabling an enabled soft-delete policy are explicitly rejected and are not claimed as compatible."
         ]
       }
     },
@@ -471,7 +645,10 @@
         "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_support_oci_namespace_bucket_and_object_flows",
-          "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows"
+          "providers::oci::tests::should_reject_invented_oci_bucket_put_alias_without_creating_bucket",
+          "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows",
+          "interop_oci::should_inherit_and_validate_oci_storage_tiers",
+          "interop_oci::should_reject_oci_mutations_on_gcs_retained_bucket_without_committing"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -485,21 +662,41 @@
         "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_support_oci_namespace_bucket_and_object_flows",
-          "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows"
+          "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows",
+          "interop_oci::should_enforce_oci_object_conditions_without_mutating_on_failure",
+          "interop_oci::should_reject_oci_mutations_on_gcs_retained_bucket_without_committing",
+          "interop_oci::should_validate_oci_md5_and_round_trip_object_response_metadata",
+          "interop_oci::should_return_oci_resource_specific_missing_errors",
+          "provider_conformance::should_preserve_oci_empty_mutation_statuses",
+          "providers::oci::tests::should_reject_invalid_oci_object_encoding_without_mutating",
+          "providers::oci::tests::should_decode_oci_object_paths_once_without_collapsing_key_components",
+          "providers::oci::tests::should_reject_oci_version_scoped_operations_without_touching_current_object",
+          "providers::oci::tests::should_render_native_oci_incomplete_body_error",
+          "provider_conformance::should_reject_content_length_mismatch_on_every_storage_front_door",
+          "provider_conformance::should_return_provider_specific_missing_object_responses",
+          "provider_conformance::should_keep_redirects_precommit_on_every_storage_front_door",
+          "provider_conformance::should_return_every_redirect_before_mutation_on_every_storage_front_door",
+          "provider_conformance::should_distinguish_timeout_before_and_after_commit_on_every_front_door",
+          "provider_conformance::should_commit_before_response_loss_on_every_storage_front_door",
+          "provider_conformance::should_return_provider_shaped_throttling_without_mutation",
+          "provider_conformance::should_expose_each_transient_status_before_commit_on_every_storage_front_door",
+          "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
+          "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "Current-object CRUD decodes object paths exactly once and preserves empty path components. OCI version-scoped object operations are explicitly rejected as unsupported without reading or deleting the current object. Certification remains suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
       "metadata_headers": {
         "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_round_trip_oci_metadata_and_prefix_listing",
-          "interop_oci::should_return_custom_metadata_given_oci_metadata_headers_when_requesting_object_head"
+          "interop_oci::should_return_custom_metadata_given_oci_metadata_headers_when_requesting_object_head",
+          "interop_oci::should_echo_oci_client_request_id_and_use_http_dates"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -513,7 +710,10 @@
         "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_round_trip_oci_metadata_and_prefix_listing",
-          "interop_oci::should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket_contents"
+          "interop_oci::should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket_contents",
+          "interop_oci::should_paginate_oci_objects_with_next_start_with_body_token",
+          "interop_oci::should_count_oci_prefixes_toward_limit_and_keep_start_inclusive",
+          "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -524,31 +724,35 @@
         ]
       },
       "request_signing": {
-        "status": "partial",
+        "status": "missing",
         "verified_by": [
-          "providers::oci::tests::should_validate_oci_signature_authorization",
-          "interop_oci::should_round_trip_namespace_bucket_and_object_operations_given_basic_oci_requests_when_using_core_flows"
+          "providers::oci::tests::should_reject_malformed_or_wrong_algorithm_signature_authorization",
+          "providers::oci::tests::should_report_valid_oci_signature_shape_as_explicitly_unsupported",
+          "interop_auth::should_reject_unsigned_oci_request_given_auth_enforced_when_request_is_missing_signature"
         ],
-        "support_tier": "partial",
-        "sdk_verified_by": [
-          "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-        ],
+        "support_tier": "unsupported",
+        "sdk_verified_by": [],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "OCI RSA-SHA256 request-signature verification is not implemented. When authentication enforcement is enabled, OCI Signature requests are rejected explicitly instead of being accepted through a non-provider HMAC approximation."
         ]
       },
       "multipart": {
         "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_support_oci_multipart_upload_lifecycle",
-          "interop_oci::should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci_upload"
+          "interop_oci::should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci_upload",
+          "interop_oci::should_reject_oci_mutations_on_gcs_retained_bucket_without_committing",
+          "providers::oci::tests::should_return_native_oci_errors_for_invalid_multipart_requests",
+          "providers::oci::tests::should_never_commit_unlisted_or_excluded_oci_multipart_parts",
+          "providers::oci::tests::should_preserve_oci_multipart_object_path_components",
+          "providers::oci::tests::should_reject_unsupported_oci_multipart_conditions_without_consuming_session"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
+          "Only complete, explicitly listed part manifests are committed. Unlisted parts require explicit exclusion, selective commits and conditional completion are rejected as 501 NotImplemented without consuming the upload, and malformed part/session/manifest inputs use OCI-native 400/404 errors."
         ]
       }
     },
@@ -557,14 +761,16 @@
         "status": "partial",
         "verified_by": [
           "interop_email::should_capture_message_when_sending_over_a_smtp_session",
-          "e2e_email::should_capture_message_when_sending_over_a_real_smtp_socket"
+          "e2e_email::should_capture_message_when_sending_over_a_real_smtp_socket",
+          "mail::smtp::tests::should_accept_the_rfc_5321_null_reverse_path",
+          "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
         ],
         "limitations": [
-          "SMTP capture currently supports EHLO/HELO, MAIL FROM, RCPT TO, DATA, RSET, NOOP, QUIT and stores per-recipient copies for local inspection only."
+          "The accepted SMTP subset is plaintext EHLO/HELO, strict angle-bracket MAIL FROM and RCPT TO paths (including the RFC 5321 null reverse path), DATA, RSET, NOOP, and QUIT. SMTP AUTH, STARTTLS, relay/delivery, DSN semantics, and other extensions are unsupported; capture is atomic across recipient mailboxes."
         ]
       }
     },
@@ -572,14 +778,17 @@
       "email_send": {
         "status": "partial",
         "verified_by": [
-          "interop_email::should_capture_sendgrid_send_and_fan_out_recipients"
+          "interop_email::should_capture_sendgrid_send_and_fan_out_recipients",
+          "interop_email::should_reject_unsupported_mail_shapes_before_capture",
+          "mail::tests::should_roll_back_every_personalization_when_a_batch_store_fails_after_writing",
+          "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send"
         ],
         "limitations": [
-          "SendGrid emulation is currently limited to Send API v3 JSON shape and local-only capture semantics."
+          "The accepted SendGrid v3 Mail Send subset covers personalizations with to/cc/bcc, message or personalization sender/subject/headers, plain/HTML content, reply_to/reply_to_list, and base64 attachments. Recipient and personalization limits, global recipient uniqueness, reserved headers, content ordering, and the less-than-30-MB limit are enforced before atomic fan-out. Templates, substitutions, custom arguments, scheduling, tracking/settings, categories, ASM, batch IDs, IP pools, and sandbox delivery are explicitly rejected rather than ignored."
         ]
       }
     },
@@ -588,6 +797,9 @@
         "status": "partial",
         "verified_by": [
           "sms::providers::tests::should_capture_twilio_repeated_media_and_return_sdk_resource",
+          "sms::providers::tests::should_return_twilio_accepted_only_while_messaging_service_selects_sender",
+          "sms::providers::tests::should_reject_invalid_twilio_sids_media_and_unsupported_fields_without_capture",
+          "sms::providers::tests::should_render_provider_shaped_incomplete_body_responses",
           "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
           "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
         ],
@@ -596,7 +808,7 @@
           "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
         ],
         "limitations": [
-          "Supports outbound SMS/MMS URL capture, inbound SMS/MMS simulation, authenticated local media, explicit delivery callbacks, and signed inbound forms. TwiML execution, remote media fetching, WhatsApp, RCS, voice, automatic delivery timing, and full provider management APIs are unsupported."
+          "Outbound creation accepts only To, From or MessagingServiceSid, optional Body, up to 10 absolute HTTP(S) MediaUrl values, and a safety-allowlisted StatusCallback. Account/Messaging Service SIDs, E.164 values, media, 1600-character body limit, initial accepted/queued status, and Twilio error envelopes are validated before capture. Other create parameters, TwiML execution, remote media fetching, WhatsApp, RCS, voice, scheduling, automatic delivery timing, and provider management APIs are unsupported."
         ]
       }
     },
@@ -604,14 +816,16 @@
       "direct_phone_publish": {
         "status": "partial",
         "verified_by": [
-          "sms::providers::tests::should_distinguish_sns_publish_and_sms_voice_from_ordinary_root_requests"
+          "sms::providers::tests::should_distinguish_sns_publish_and_sms_voice_from_ordinary_root_requests",
+          "sms::providers::tests::should_apply_sns_json_protocol_selection_and_reject_malformed_structures",
+          "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish"
         ],
         "limitations": [
-          "Only direct PhoneNumber Publish is supported. Topic fan-out, subscriptions, production certificate signing, remote media fetching, and full SNS management APIs are unsupported."
+          "Only Query API Publish to a direct E.164 PhoneNumber is accepted, with raw messages or MessageStructure=json SMS/default selection and up to 10 documented MessageAttributes (including SMS SenderID and SMSType). Unknown/non-string structured protocol entries are ignored and duplicate JSON keys are rejected as SNS specifies. Topic/target publishing, FIFO parameters, fan-out, subscriptions, production certificate signing, and management APIs are unsupported."
         ]
       }
     },
@@ -620,6 +834,8 @@
         "status": "partial",
         "verified_by": [
           "sms::providers::tests::should_distinguish_sns_publish_and_sms_voice_from_ordinary_root_requests",
+          "sms::providers::tests::should_validate_every_aws_sms_voice_field_before_capture",
+          "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing",
           "sms::simulator::tests::should_render_aws_sns_and_acs_event_batches"
         ],
         "support_tier": "partial",
@@ -627,7 +843,7 @@
           "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2"
         ],
         "limitations": [
-          "Supports SendTextMessage, SendMediaMessage S3 URI capture, inbound SMS simulation, and SNS-shaped event envelopes. Inbound MMS, automatic delivery timing, remote media fetching, voice, and full provider management APIs are unsupported."
+          "Supports the documented JSON fields for SendTextMessage and SendMediaMessage, including DryRun without mutation and exactly one optional S3 media URI for MMS; provider patterns, ranges, maps, operation targets, 200 success, and AWS 400 error classes are enforced. Inbound MMS, automatic delivery timing, remote media fetching, voice operations, RCS, and provider management APIs are unsupported."
         ]
       }
     },
@@ -635,14 +851,16 @@
       "email_send": {
         "status": "partial",
         "verified_by": [
-          "interop_email::should_capture_ses_send_with_signature_authorization"
+          "interop_email::should_capture_ses_send_with_signature_authorization",
+          "interop_email::should_reject_unsupported_mail_shapes_before_capture",
+          "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_email_sdk.py::test_ses_sdk_send"
         ],
         "limitations": [
-          "SES emulation validates SigV4 but does not yet parity all edge-case request signing failure modes."
+          "The accepted SES v2 SendEmail subset is Content.Simple with Destination, FromEmailAddress, ReplyToAddresses, subject/body charset metadata, and up to 15 non-reserved custom headers. Content.Raw, Content.Template, Simple attachments, tags, configuration sets, feedback forwarding, tenant fields, and other top-level options are explicitly rejected. SigV4 is validated for the local endpoint, but IAM, identities, quotas, and every signing edge case are not certified."
         ]
       }
     },
@@ -650,20 +868,25 @@
       "email_send": {
         "status": "partial",
         "verified_by": [
-          "interop_email::should_capture_acs_send_with_recipients_and_attachments"
+          "interop_email::should_capture_acs_send_with_recipients_and_attachments",
+          "interop_email::should_apply_acs_email_repeatability_without_overwriting_or_duplicate_capture",
+          "interop_email::should_reject_unsupported_mail_shapes_before_capture",
+          "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send"
         ],
         "limitations": [
-          "Azure Communication Services emulation supports POST /emails:send JSON with HMAC-SHA256 auth, but does not yet cover all ACS feature channels."
+          "ACS Email versions 2023-03-01, 2023-03-31, and 2025-09-01 accept official to/cc/bcc recipients (50 total), plain/HTML content, headers, replyTo, tracking control, and base64 regular/inline attachments within 10 MB. Operation-Id and five-minute repeatability semantics prevent overwrites or duplicate capture. Delivery, domain policy, events, suppression, quotas, and other ACS channels are outside scope."
         ]
       },
       "sms_send_and_events": {
         "status": "partial",
         "verified_by": [
           "sms::providers::tests::should_store_each_acs_recipient_with_one_shared_batch_id",
+          "sms::providers::tests::should_support_sns_get_and_acs_per_recipient_results",
+          "sms::providers::tests::should_validate_acs_sms_options_and_repeatability_without_duplicate_capture",
           "sms::simulator::tests::should_render_aws_sns_and_acs_event_batches"
         ],
         "support_tier": "partial",
@@ -671,7 +894,7 @@
           "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk"
         ],
         "limitations": [
-          "Supports one-to-many outbound SMS, inbound SMS simulation, delivery reports, and Event Grid batches. MMS, automatic delivery timing, and full provider management APIs are unsupported."
+          "ACS SMS versions 2021-03-07 and 2026-01-23 support 1-100 E.164 recipients, per-recipient repeatability results, and smsSendOptions for delivery-report enablement, tag, and 60-43200 second timeout. Mixed recipient results do not capture rejected recipients; unexpected persistence failures roll back the batch. messagingConnect, MMS, automatic delivery timing, and provider management APIs are unsupported."
         ]
       }
     },

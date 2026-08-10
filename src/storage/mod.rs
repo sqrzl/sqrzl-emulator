@@ -13,9 +13,14 @@ pub use lockfree_index::{DirectoryEntry, DirectoryEntryKind, LockFreeIndex};
 /// A predicate evaluated while holding the per-object mutation lock.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectCondition {
+    All(Vec<ObjectCondition>),
     Missing,
     Etag(String),
+    EtagIn(Vec<String>),
+    EtagNotIn(Vec<String>),
+    MissingOrEtagNotIn(Vec<String>),
     Metadata { key: String, value: String },
+    MetadataNot { key: String, value: String },
 }
 
 /// Bucket metadata and lifecycle-independent bucket operations.
@@ -74,6 +79,23 @@ pub trait ObjectStore: Send + Sync {
         key: String,
         object: Object,
         condition: &ObjectCondition,
+    ) -> Result<bool>;
+    /// Atomically replaces content type, user metadata, and provider metadata
+    /// when the currently stored object still has the observed identity and
+    /// metadata.
+    ///
+    /// This preserves object bytes, `ETag`, last-modified time, version ID, and
+    /// version history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current metadata cannot be read or persisted.
+    fn replace_object_metadata_if_unchanged(
+        &self,
+        bucket: &str,
+        key: &str,
+        observed: &Object,
+        updated: &Object,
     ) -> Result<bool>;
     ///
     /// # Errors
@@ -411,6 +433,19 @@ pub trait Storage: Send + Sync {
         object: Object,
         condition: &ObjectCondition,
     ) -> Result<bool>;
+    /// Atomically replaces content type, user metadata, and provider metadata
+    /// without creating an object version or changing object identity fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current metadata cannot be read or persisted.
+    fn replace_object_metadata_if_unchanged(
+        &self,
+        bucket: &str,
+        key: &str,
+        observed: &Object,
+        updated: &Object,
+    ) -> Result<bool>;
     ///
     /// # Errors
     ///
@@ -718,6 +753,16 @@ where
         ObjectStore::put_object_if(self, bucket, key, object, condition)
     }
 
+    fn replace_object_metadata_if_unchanged(
+        &self,
+        bucket: &str,
+        key: &str,
+        observed: &Object,
+        updated: &Object,
+    ) -> Result<bool> {
+        ObjectStore::replace_object_metadata_if_unchanged(self, bucket, key, observed, updated)
+    }
+
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
         ObjectStore::get_object(self, bucket, key)
     }
@@ -977,6 +1022,16 @@ impl ObjectStore for dyn Storage + '_ {
         condition: &ObjectCondition,
     ) -> Result<bool> {
         Storage::put_object_if(self, bucket, key, object, condition)
+    }
+
+    fn replace_object_metadata_if_unchanged(
+        &self,
+        bucket: &str,
+        key: &str,
+        observed: &Object,
+        updated: &Object,
+    ) -> Result<bool> {
+        Storage::replace_object_metadata_if_unchanged(self, bucket, key, observed, updated)
     }
 
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {

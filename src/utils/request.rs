@@ -1,6 +1,37 @@
 use crate::auth::HttpRequestLike;
 use std::str::FromStr;
 
+/// Decodes an HTTP URI path value exactly once and rejects malformed escapes.
+///
+/// The `urlencoding` crate deliberately leaves incomplete percent escapes
+/// unchanged. Provider object APIs reject those paths, so validate every `%`
+/// triplet before decoding.
+///
+/// # Errors
+///
+/// Returns an error when a percent escape is malformed or the decoded bytes are
+/// not valid UTF-8.
+pub fn decode_uri_path(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return Err("URI path contains an invalid percent escape".to_string());
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    urlencoding::decode(value)
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|err| format!("URI path is not valid UTF-8: {err}"))
+}
+
 pub fn request_origin(req: &impl HttpRequestLike) -> String {
     if let Some(origin) = req.header("origin").and_then(normalize_origin) {
         return origin;
