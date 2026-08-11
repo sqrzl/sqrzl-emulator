@@ -572,12 +572,26 @@
       "signed_url_v2": {
         "status": "partial",
         "verified_by": [
+          "providers::gcs::tests::should_sort_merge_and_filter_gcs_v2_extension_headers_in_string_to_sign",
           "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "Signed URL V2 validation is covered by adapter tests, but official SDK signed URL generation is not in the certification gate."
+          "Signed URL V2 validation and canonicalized x-goog-* extension headers are covered by adapter tests, but official SDK signed URL generation is not in the certification gate."
+        ]
+      },
+      "hmac_auth_v2": {
+        "status": "partial",
+        "verified_by": [
+          "interop_auth::should_authorize_gcs_v2_hmac_extension_headers_through_provider_registry",
+          "providers::gcs::tests::should_sort_merge_and_filter_gcs_v2_extension_headers_in_string_to_sign",
+          "providers::gcs::tests::should_authorize_gcs_v2_hmac_request_with_canonicalized_extension_headers"
+        ],
+        "support_tier": "partial",
+        "sdk_verified_by": [],
+        "limitations": [
+          "GOOG1 V2 HMAC authorization canonicalizes x-goog-* extension headers by lowercasing and sorting names, merging duplicate values in request order, excluding customer-supplied encryption key headers, and appending the required newline. Official SDK positive qualification is not yet in the certification gate."
         ]
       },
       "resumable_upload": {

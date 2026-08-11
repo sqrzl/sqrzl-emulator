@@ -220,8 +220,11 @@ the operation as `certified`.
   components. Version-scoped object requests, conditional multipart completion,
   and selective commits are unsupported and fail explicitly without changing
   current bytes or consuming the multipart session.
-- GCS signed URL V2 validation is contract-tested, but official SDK signed URL
-  generation is not in the certification gate.
+- GCS signed URL V2 and GOOG1 HMAC validation are contract-tested, including
+  canonicalized `x-goog-*` extension headers: lowercased and sorted names,
+  request-order duplicate merging, required trailing newlines, and exclusion of
+  customer-supplied encryption key headers. Official SDK positive signed-auth
+  qualification is not in the certification gate.
 - GCS historical-generation retrieval is not emulated. GCS soft-deleted bytes and
   Azure local versions are retained through the shared version store, but this
   is not full provider recovery/control-plane parity.

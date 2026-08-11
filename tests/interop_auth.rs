@@ -1,7 +1,64 @@
 mod common;
 
-use common::interop::{auth_enabled, call, request, temp_storage, AZURE_VERSION};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use common::interop::{auth_enabled, body_bytes, call, request, temp_storage, AZURE_VERSION};
+use hmac::{Hmac, KeyInit, Mac};
 use hyper::StatusCode;
+use sha1::Sha1;
+use sqrzl_emulator::models::Object;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_authorize_gcs_v2_hmac_extension_headers_through_provider_registry() {
+    // Arrange
+    type HmacSha1 = Hmac<Sha1>;
+    let storage = temp_storage();
+    storage.create_bucket("private".to_string()).unwrap();
+    storage
+        .put_object(
+            "private",
+            "item.txt".to_string(),
+            Object::new(
+                "item.txt".to_string(),
+                b"authenticated".to_vec(),
+                "text/plain".to_string(),
+            ),
+        )
+        .unwrap();
+    let date = "Tue, 11 Aug 2026 12:00:00 GMT";
+    let canonical = format!(
+        "GET\n\n\n{date}\nx-goog-acl:public-read\nx-goog-meta-reviewer:jane,john\n/private/item.txt"
+    );
+    let mut mac = HmacSha1::new_from_slice(b"gcs-secret").expect("HMAC key should be valid");
+    mac.update(canonical.as_bytes());
+    let signature = BASE64.encode(mac.finalize().into_bytes());
+    let authorization = format!("GOOG1 test-access:{signature}");
+
+    // Act
+    let response = call(
+        storage,
+        auth_enabled("test-access", "Z2NzLXNlY3JldA=="),
+        request(
+            "GET",
+            "http://localhost/private/item.txt",
+            &[
+                ("date", date),
+                ("authorization", &authorization),
+                ("content-length", "0"),
+                ("x-goog-meta-reviewer", "jane"),
+                ("x-goog-acl", "public-read"),
+                ("x-goog-meta-reviewer", "john"),
+                ("x-goog-encryption-key", "sensitive-key"),
+                ("x-goog-encryption-key-sha256", "sensitive-key-hash"),
+            ],
+            b"",
+        ),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_bytes(response).await, b"authenticated");
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn should_reject_unsigned_s3_request_given_auth_enforced_when_request_is_missing_signature() {

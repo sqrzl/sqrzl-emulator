@@ -17,7 +17,7 @@ use hyper::Response;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
@@ -1037,21 +1037,59 @@ impl GcsAdapter {
         Ok(BASE64.encode(mac.finalize().into_bytes()))
     }
 
-    fn string_to_sign(req: &Request, bucket: &str, object: Option<&str>, expires: &str) -> String {
+    fn canonicalized_extension_headers(req: &Request) -> Result<String, String> {
+        let mut headers = BTreeMap::<String, Vec<String>>::new();
+        for (name, value) in &req.headers {
+            let name = name.as_str().to_ascii_lowercase();
+            if !name.starts_with("x-goog-")
+                || matches!(
+                    name.as_str(),
+                    "x-goog-encryption-key" | "x-goog-encryption-key-sha256"
+                )
+            {
+                continue;
+            }
+            let value = value
+                .to_str()
+                .map_err(|_| format!("Invalid non-text GCS extension header {name}"))?;
+            headers
+                .entry(name)
+                .or_default()
+                .push(value.trim().to_string());
+        }
+
+        let mut canonical = String::new();
+        for (name, values) in headers {
+            canonical.push_str(&name);
+            canonical.push(':');
+            canonical.push_str(&values.join(","));
+            canonical.push('\n');
+        }
+        Ok(canonical)
+    }
+
+    fn string_to_sign(
+        req: &Request,
+        bucket: &str,
+        object: Option<&str>,
+        expires: &str,
+    ) -> Result<String, String> {
         let resource = if let Some(object) = object {
             format!("/{bucket}/{object}")
         } else {
             format!("/{bucket}")
         };
+        let canonicalized_extension_headers = Self::canonicalized_extension_headers(req)?;
 
-        format!(
-            "{}\n{}\n{}\n{}\n{}",
+        Ok(format!(
+            "{}\n{}\n{}\n{}\n{}{}",
             req.method(),
             req.header("content-md5").unwrap_or(""),
             req.header("content-type").unwrap_or(""),
             expires,
+            canonicalized_extension_headers,
             resource
-        )
+        ))
     }
 
     fn encode_page_token(kind: &str, marker: &str) -> String {
@@ -1125,8 +1163,8 @@ impl GcsAdapter {
                     "Invalid access id",
                 ));
             }
-            let expected = Self::sign(config, &Self::string_to_sign(req, bucket, object, expires))
-                .map_err(|msg| {
+            let string_to_sign =
+                Self::string_to_sign(req, bucket, object, expires).map_err(|msg| {
                     Self::authorization_error(
                         req,
                         StatusCode::FORBIDDEN,
@@ -1135,6 +1173,15 @@ impl GcsAdapter {
                         &msg,
                     )
                 })?;
+            let expected = Self::sign(config, &string_to_sign).map_err(|msg| {
+                Self::authorization_error(
+                    req,
+                    StatusCode::FORBIDDEN,
+                    "SignatureDoesNotMatch",
+                    "forbidden",
+                    &msg,
+                )
+            })?;
             if expected == signature {
                 return Ok(());
             }
@@ -1189,16 +1236,24 @@ impl GcsAdapter {
             ));
         };
         let date = req.header("date").unwrap_or("");
-        let expected = Self::sign(config, &Self::string_to_sign(req, bucket, object, date))
-            .map_err(|msg| {
-                Self::authorization_error(
-                    req,
-                    StatusCode::FORBIDDEN,
-                    "SignatureDoesNotMatch",
-                    "forbidden",
-                    &msg,
-                )
-            })?;
+        let string_to_sign = Self::string_to_sign(req, bucket, object, date).map_err(|msg| {
+            Self::authorization_error(
+                req,
+                StatusCode::FORBIDDEN,
+                "SignatureDoesNotMatch",
+                "forbidden",
+                &msg,
+            )
+        })?;
+        let expected = Self::sign(config, &string_to_sign).map_err(|msg| {
+            Self::authorization_error(
+                req,
+                StatusCode::FORBIDDEN,
+                "SignatureDoesNotMatch",
+                "forbidden",
+                &msg,
+            )
+        })?;
         if expected == signature {
             Ok(())
         } else {
@@ -1329,6 +1384,89 @@ mod tests {
         )
         .await
         .expect("request should parse")
+    }
+
+    #[tokio::test]
+    async fn should_sort_merge_and_filter_gcs_v2_extension_headers_in_string_to_sign() {
+        // Arrange
+        let request = parsed_request(
+            "GET",
+            "http://localhost/private/item.txt",
+            &[
+                ("x-goog-meta-reviewer", "jane"),
+                ("X-Goog-Acl", "public-read"),
+                ("x-goog-meta-reviewer", "john"),
+                ("x-goog-encryption-key", "sensitive-key"),
+                ("x-goog-encryption-key-sha256", "sensitive-key-hash"),
+                ("x-unrelated", "ignored"),
+            ],
+            b"",
+        )
+        .await;
+
+        // Act
+        let actual = GcsAdapter::string_to_sign(
+            &request,
+            "private",
+            Some("item.txt"),
+            "Tue, 11 Aug 2026 12:00:00 GMT",
+        )
+        .expect("string to sign should build");
+
+        // Assert
+        assert_eq!(
+            actual,
+            "GET\n\n\nTue, 11 Aug 2026 12:00:00 GMT\nx-goog-acl:public-read\nx-goog-meta-reviewer:jane,john\n/private/item.txt"
+        );
+    }
+
+    #[tokio::test]
+    async fn should_authorize_gcs_v2_hmac_request_with_canonicalized_extension_headers() {
+        // Arrange
+        let adapter = GcsAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("private".to_string()).unwrap();
+        storage
+            .put_object(
+                "private",
+                "item.txt".to_string(),
+                crate::models::Object::new(
+                    "item.txt".to_string(),
+                    b"authenticated".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let date = "Tue, 11 Aug 2026 12:00:00 GMT";
+        let canonical = format!(
+            "GET\n\n\n{date}\nx-goog-acl:public-read\nx-goog-meta-reviewer:jane,john\n/private/item.txt"
+        );
+        let signature = GcsAdapter::sign(&gcs_auth(), &canonical).expect("signature should build");
+        let authorization = format!("GOOG1 test-access:{signature}");
+        let request = parsed_request(
+            "GET",
+            "http://localhost/private/item.txt",
+            &[
+                ("date", date),
+                ("authorization", &authorization),
+                ("x-goog-meta-reviewer", "jane"),
+                ("x-goog-acl", "public-read"),
+                ("x-goog-meta-reviewer", "john"),
+                ("x-goog-encryption-key", "sensitive-key"),
+                ("x-goog-encryption-key-sha256", "sensitive-key-hash"),
+            ],
+            b"",
+        )
+        .await;
+
+        // Act
+        let response = adapter
+            .handle_request(&storage, &gcs_auth(), &request)
+            .expect("signed request should respond");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(read_test_body(response).await, b"authenticated");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2569,7 +2707,8 @@ mod tests {
         .await;
         let signature = GcsAdapter::sign(
             &gcs_auth(),
-            &GcsAdapter::string_to_sign(&request, "videos", Some("movie.txt"), expires),
+            &GcsAdapter::string_to_sign(&request, "videos", Some("movie.txt"), expires)
+                .expect("string to sign should build"),
         )
         .expect("signature should build");
         let signed_request = parsed_request(
@@ -4489,7 +4628,8 @@ mod tests {
         .await;
         let signature = GcsAdapter::sign(
             &gcs_auth(),
-            &GcsAdapter::string_to_sign(&unsigned, "signed", Some("item.txt"), "1"),
+            &GcsAdapter::string_to_sign(&unsigned, "signed", Some("item.txt"), "1")
+                .expect("string to sign should build"),
         )
         .expect("signature should build");
         let request = parsed_request(
