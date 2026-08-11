@@ -70,6 +70,7 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+      - "2525:2525"
     environment:
       SQRZL_BLOBS_PATH: /app/blobs
       SQRZL_LOG_FORMAT: text
@@ -140,7 +141,7 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | Signing secret and admin password. Azure Shared Key treats valid Base64 as decoded key bytes; otherwise the literal bytes are used. |
 | `SQRZL_ADMIN_AUTH_DISABLED` | `1`, `true`, `yes`, or `on` (case-insensitive) enable it; every other value is false | `false` | Keeps the UI and `/admin/v1` in open mode while provider API authentication remains enabled. |
 | `SQRZL_BLOBS_PATH` | Writable container path | `/app/blobs` in Docker; `./blobs` natively | Storage format v2 root. Mount a volume here for persistence. |
-| `SQRZL_LIFECYCLE_HOURS` | Unsigned integer hours | `1` | Interval between lifecycle-rule passes. Invalid values use the default. Avoid `0`, which requests a continuous interval. |
+| `SQRZL_LIFECYCLE_HOURS` | Positive integer hours | `1` | Interval between lifecycle-rule passes. Invalid or zero values use the default. |
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
 | `SQRZL_UI_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9001` | Admin UI listener inside the container. Normally keep this at `9001`. |
 | `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum buffered HTTP request body or SMTP `DATA` payload. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
@@ -194,7 +195,7 @@ All provider APIs use the storage listener, normally
 | Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. For the simplest smoke setup, use no credential and leave Sqrzl auth disabled. |
 | GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. When enabled, bearer tokens equal to either configured Sqrzl credential are accepted for local qualification. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
-| OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/<namespace>/b/<bucket>/...`; the default namespace response is `sqrzl-emulator`. Use auth-disabled mode: OCI RSA-SHA256 verification is explicitly unsupported and non-provider signature approximations are rejected. |
+| OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/sqrzl-emulator/b/<bucket>/...`; namespace discovery returns `sqrzl-emulator`, and other namespaces return OCI `NotAuthorizedOrNotFound`. Use auth-disabled mode: OCI RSA-SHA256 verification is explicitly unsupported and non-provider signature approximations are rejected. |
 | SMTP | SMTP server `localhost:2525` | Plaintext local capture with strict envelope paths and null reverse-path support; SMTP AUTH and STARTTLS are intentionally unsupported. |
 | SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
 | Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4; Raw, Template, and attachments are rejected. |

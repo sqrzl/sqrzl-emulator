@@ -12,7 +12,7 @@ mod support;
 
 use support::live_server::{auth_disabled, LiveServer};
 
-const TENANT: &str = "tenant";
+const TENANT: &str = "sqrzl-emulator";
 const PART_COUNT: usize = 8;
 const PART_SIZE: usize = 4096;
 

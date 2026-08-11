@@ -22,7 +22,7 @@ async fn should_round_trip_namespace_bucket_and_object_given_live_server_when_us
 
     let create_bucket = Request::builder()
         .method("POST")
-        .uri(format!("{}/n/tenant/b", server.base_url))
+        .uri(format!("{}/n/sqrzl-emulator/b", server.base_url))
         .header("content-type", "application/json")
         .body(Body::from(
             r#"{"name":"e2e-oci","compartmentId":"ignored"}"#,
@@ -34,7 +34,7 @@ async fn should_round_trip_namespace_bucket_and_object_given_live_server_when_us
     let put_object = Request::builder()
         .method("PUT")
         .uri(format!(
-            "{}/n/tenant/b/e2e-oci/o/hello.txt",
+            "{}/n/sqrzl-emulator/b/e2e-oci/o/hello.txt",
             server.base_url
         ))
         .header("content-type", "text/plain")
@@ -46,7 +46,7 @@ async fn should_round_trip_namespace_bucket_and_object_given_live_server_when_us
     let get_object = Request::builder()
         .method("GET")
         .uri(format!(
-            "{}/n/tenant/b/e2e-oci/o/hello.txt",
+            "{}/n/sqrzl-emulator/b/e2e-oci/o/hello.txt",
             server.base_url
         ))
         .body(Body::default())
@@ -62,7 +62,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
 
     let create_bucket = Request::builder()
         .method("POST")
-        .uri(format!("{}/n/tenant/b", server.base_url))
+        .uri(format!("{}/n/sqrzl-emulator/b", server.base_url))
         .header("content-type", "application/json")
         .body(Body::from(
             r#"{"name":"multipart-bucket","compartmentId":"ignored"}"#,
@@ -73,7 +73,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
 
     let init_upload = Request::builder()
         .method("POST")
-        .uri(format!("{}/n/tenant/b/multipart-bucket/u", server.base_url))
+        .uri(format!("{}/n/sqrzl-emulator/b/multipart-bucket/u", server.base_url))
         .header("content-type", "application/json")
         .body(Body::from(
             r#"{"object":"multi.txt","contentType":"text/plain","metadata":{"owner":"sdk"},"storageTier":"InfrequentAccess"}"#,
@@ -92,7 +92,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
     let upload_part_one = Request::builder()
         .method("PUT")
         .uri(format!(
-            "{}/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=1",
+            "{}/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=1",
             server.base_url
         ))
         .body(Body::from("multi"))
@@ -109,7 +109,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
     let upload_part_two = Request::builder()
         .method("PUT")
         .uri(format!(
-            "{}/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=2",
+            "{}/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=2",
             server.base_url
         ))
         .body(Body::from("part"))
@@ -126,7 +126,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
     let commit_upload = Request::builder()
         .method("POST")
         .uri(format!(
-            "{}/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}",
+            "{}/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}",
             server.base_url
         ))
         .header("content-type", "application/json")
@@ -140,7 +140,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
     let get_object = Request::builder()
         .method("GET")
         .uri(format!(
-            "{}/n/tenant/b/multipart-bucket/o/multi.txt",
+            "{}/n/sqrzl-emulator/b/multipart-bucket/o/multi.txt",
             server.base_url
         ))
         .body(Body::default())

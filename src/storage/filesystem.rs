@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use uuid::Uuid;
 
 mod io;
@@ -21,7 +21,7 @@ pub struct FilesystemStorage {
     base_path: PathBuf,
     index: Arc<LockFreeIndex>,
     uploads_cache: Mutex<HashMap<String, HashMap<String, MultipartUpload>>>,
-    object_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    object_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
 }
 
 impl BucketStore for FilesystemStorage {

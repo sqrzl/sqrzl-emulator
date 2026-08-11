@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 const AZURE_VERSION: &str = "2023-11-03";
 const AZURE_BLOB_TYPE_KEY: &str = "azure_blob_type";
@@ -48,6 +48,7 @@ const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
 const S3_OBJECT_LOCK_ENABLED_KEY: &str = "s3_object_lock_enabled";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
 const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
+const AZURE_SHARED_KEY_MAX_CLOCK_SKEW_MINUTES: i64 = 15;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct AzureBlockSession {
@@ -110,7 +111,7 @@ struct AzureResource {
 pub struct AzureBlobAdapter {
     block_sessions: Mutex<HashMap<String, AzureBlockSession>>,
     committed_blocks: Mutex<HashMap<String, Vec<AzureCommittedBlock>>>,
-    blob_mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    blob_mutation_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     container_operations: Mutex<()>,
 }
 
@@ -141,10 +142,13 @@ impl AzureBlobAdapter {
             .blob_mutation_locks
             .lock()
             .map_err(|_| "Failed to lock Azure mutation registry".to_string())?;
-        Ok(locks
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone())
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        Ok(lock)
     }
 
     fn parse_range_header(value: &str, size: u64) -> Option<(usize, usize)> {
@@ -1137,23 +1141,54 @@ impl AzureBlobAdapter {
         usize::try_from(size).map_err(|_| "Azure blob is too large for this platform".to_string())
     }
 
+    fn valid_container_name(name: &str) -> bool {
+        if name == "$root" {
+            return true;
+        }
+        if !(3..=63).contains(&name.len()) {
+            return false;
+        }
+        let bytes = name.as_bytes();
+        bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+            && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+            && !name.contains("--")
+    }
+
+    fn rollback_created_container(
+        storage: &Arc<dyn Storage>,
+        container: &str,
+        error: String,
+    ) -> String {
+        match storage.delete_namespace(container) {
+            Ok(()) => error,
+            Err(rollback_error) => {
+                format!("{error}; failed to roll back Azure container creation: {rollback_error}")
+            }
+        }
+    }
+
     fn canonicalized_headers(req: &Request) -> String {
-        let mut headers: Vec<(String, String)> = req
+        let mut headers: HashMap<String, Vec<String>> = HashMap::new();
+        for (name, value) in req
             .headers()
             .into_iter()
             .filter(|(name, _)| name.starts_with("x-ms-"))
-            .map(|(name, value)| {
-                (
-                    name.to_lowercase(),
-                    value.split_whitespace().collect::<Vec<_>>().join(" "),
-                )
-            })
-            .collect();
-        headers.sort_by(|left, right| left.0.cmp(&right.0));
+        {
+            headers
+                .entry(name.to_lowercase())
+                .or_default()
+                .push(value.split_whitespace().collect::<Vec<_>>().join(" "));
+        }
+        let mut names = headers.keys().cloned().collect::<Vec<_>>();
+        names.sort_unstable();
 
         let mut canonical = String::new();
-        for (name, value) in headers {
-            let _ = writeln!(canonical, "{name}:{value}");
+        for name in names {
+            let values = headers.remove(&name).unwrap_or_default();
+            let _ = writeln!(canonical, "{name}:{}", values.join(","));
         }
         canonical
     }
@@ -1161,11 +1196,17 @@ impl AzureBlobAdapter {
     fn canonicalized_resource(req: &Request, account: &str) -> String {
         let mut resource = format!("/{}{}", account, req.path());
         let mut query_map: HashMap<String, Vec<String>> = HashMap::new();
-        for (key, value) in &req.query_params {
-            query_map
-                .entry(key.to_lowercase())
-                .or_default()
-                .push(value.clone());
+        for parameter in req.uri.query().unwrap_or("").split('&') {
+            if parameter.is_empty() {
+                continue;
+            }
+            let (key, value) = parameter.split_once('=').unwrap_or((parameter, ""));
+            let key = urlencoding::decode(key)
+                .map_or_else(|_| key.to_string(), std::borrow::Cow::into_owned)
+                .to_lowercase();
+            let value = urlencoding::decode(value)
+                .map_or_else(|_| value.to_string(), std::borrow::Cow::into_owned);
+            query_map.entry(key).or_default().push(value);
         }
 
         let mut keys: Vec<_> = query_map.keys().cloned().collect();
@@ -1196,24 +1237,51 @@ impl AzureBlobAdapter {
                 .unwrap_or("")
                 .to_string(),
         };
+        let date = if req.header("x-ms-date").is_some() {
+            String::new()
+        } else {
+            req.header("date").unwrap_or("").to_string()
+        };
 
-        [
+        let standard_headers = [
             req.method().as_str().to_string(),
             req.header("content-encoding").unwrap_or("").to_string(),
             req.header("content-language").unwrap_or("").to_string(),
             content_length,
             req.header("content-md5").unwrap_or("").to_string(),
             req.header("content-type").unwrap_or("").to_string(),
-            String::new(),
+            date,
             req.header("if-modified-since").unwrap_or("").to_string(),
             req.header("if-match").unwrap_or("").to_string(),
             req.header("if-none-match").unwrap_or("").to_string(),
             req.header("if-unmodified-since").unwrap_or("").to_string(),
             req.header("range").unwrap_or("").to_string(),
-            Self::canonicalized_headers(req),
-            Self::canonicalized_resource(req, account),
         ]
-        .join("\n")
+        .join("\n");
+
+        // CanonicalizedHeaders already terminates every entry with a newline.
+        // Azure requires direct concatenation with CanonicalizedResource; adding
+        // another separator here changes the signature by inserting a blank line.
+        format!(
+            "{standard_headers}\n{}{}",
+            Self::canonicalized_headers(req),
+            Self::canonicalized_resource(req, account)
+        )
+    }
+
+    fn validate_shared_key_date(req: &Request) -> Result<(), String> {
+        let raw_date = req
+            .header("x-ms-date")
+            .or_else(|| req.header("date"))
+            .ok_or_else(|| "Missing required Azure request date".to_string())?;
+        let request_date = DateTime::parse_from_rfc2822(raw_date)
+            .map_err(|_| "Invalid Azure request date".to_string())?
+            .with_timezone(&Utc);
+        let skew = Utc::now().signed_duration_since(request_date).abs();
+        if skew > chrono::Duration::minutes(AZURE_SHARED_KEY_MAX_CLOCK_SKEW_MINUTES) {
+            return Err("Azure request date is outside the permitted 15 minute window".to_string());
+        }
+        Ok(())
     }
 
     fn validate_shared_key(
@@ -1221,6 +1289,7 @@ impl AzureBlobAdapter {
         config: &AuthConfig,
         account: &str,
     ) -> Result<(), String> {
+        Self::validate_shared_key_date(req)?;
         let authorization = req
             .header("authorization")
             .ok_or_else(|| "Missing Authorization header".to_string())?;
@@ -1750,6 +1819,68 @@ impl AzureBlobAdapter {
         ))
     }
 
+    fn create_container(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        container: &str,
+    ) -> Result<Response<Body>, String> {
+        if !Self::valid_container_name(container) {
+            return Ok(Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidResourceName",
+                "The specified container name is invalid.",
+            ));
+        }
+        let (versioning, soft_delete_days) = match Self::requested_local_retention_modes(req) {
+            Ok(modes) => modes,
+            Err(response) => return Ok(response),
+        };
+        let namespace = match storage.as_ref().create_namespace(container.to_string()) {
+            Ok(namespace) => namespace,
+            Err(crate::error::Error::BucketAlreadyExists) => {
+                return Ok(Self::error_response(
+                    StatusCode::CONFLICT,
+                    "ContainerAlreadyExists",
+                    "The specified container already exists.",
+                ));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if versioning || soft_delete_days.is_some() {
+            if let Err(error) = storage.enable_versioning(container) {
+                return Err(Self::rollback_created_container(
+                    storage,
+                    container,
+                    error.to_string(),
+                ));
+            }
+            let mut metadata = match storage.get_bucket(container) {
+                Ok(bucket) => bucket.metadata,
+                Err(error) => {
+                    return Err(Self::rollback_created_container(
+                        storage,
+                        container,
+                        error.to_string(),
+                    ));
+                }
+            };
+            if versioning {
+                metadata.insert(AZURE_VERSIONING_KEY.to_string(), "true".to_string());
+            }
+            if let Some(days) = soft_delete_days {
+                metadata.insert(AZURE_SOFT_DELETE_DAYS_KEY.to_string(), days.to_string());
+            }
+            if let Err(error) = storage.update_bucket_metadata(container, metadata) {
+                return Err(Self::rollback_created_container(
+                    storage,
+                    container,
+                    error.to_string(),
+                ));
+            }
+        }
+        Ok(Self::namespace_response(StatusCode::CREATED, &namespace).empty())
+    }
+
     fn handle_container_request(
         storage: &Arc<dyn Storage>,
         req: &Request,
@@ -1766,43 +1897,7 @@ impl AzureBlobAdapter {
             ));
         }
         match *req.method() {
-            Method::PUT => {
-                let (versioning, soft_delete_days) =
-                    match Self::requested_local_retention_modes(req) {
-                        Ok(modes) => modes,
-                        Err(response) => return Ok(response),
-                    };
-                let namespace = match storage.as_ref().create_namespace(container.to_string()) {
-                    Ok(namespace) => namespace,
-                    Err(crate::error::Error::BucketAlreadyExists) => {
-                        return Ok(Self::error_response(
-                            StatusCode::CONFLICT,
-                            "ContainerAlreadyExists",
-                            "The specified container already exists.",
-                        ))
-                    }
-                    Err(error) => return Err(error.to_string()),
-                };
-                if versioning || soft_delete_days.is_some() {
-                    storage
-                        .enable_versioning(container)
-                        .map_err(|err| err.to_string())?;
-                    let mut metadata = storage
-                        .get_bucket(container)
-                        .map_err(|err| err.to_string())?
-                        .metadata;
-                    if versioning {
-                        metadata.insert(AZURE_VERSIONING_KEY.to_string(), "true".to_string());
-                    }
-                    if let Some(days) = soft_delete_days {
-                        metadata.insert(AZURE_SOFT_DELETE_DAYS_KEY.to_string(), days.to_string());
-                    }
-                    storage
-                        .update_bucket_metadata(container, metadata)
-                        .map_err(|err| err.to_string())?;
-                }
-                Ok(Self::namespace_response(StatusCode::CREATED, &namespace).empty())
-            }
+            Method::PUT => Self::create_container(storage, req, container),
             Method::DELETE => {
                 let namespace = match storage.as_ref().get_namespace(container) {
                     Ok(namespace) => namespace,
@@ -3695,6 +3790,82 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn should_concatenate_azure_canonical_headers_and_resource_without_blank_line() {
+        let request = parsed_request(
+            "GET",
+            "http://localhost/devstoreaccount1/container/blob?comp=metadata&foo=b&foo=a",
+            &[
+                ("x-ms-date", "Tue, 11 Aug 2026 12:00:00 +0000"),
+                ("x-ms-meta-test", "one"),
+                ("x-ms-meta-test", "two"),
+                ("x-ms-version", AZURE_VERSION),
+            ],
+            b"",
+        )
+        .await;
+
+        let actual = AzureBlobAdapter::shared_key_string_to_sign(&request, "devstoreaccount1");
+        let expected = concat!(
+            "GET\n\n\n\n\n\n\n\n\n\n\n\n",
+            "x-ms-date:Tue, 11 Aug 2026 12:00:00 +0000\n",
+            "x-ms-meta-test:one,two\n",
+            "x-ms-version:2023-11-03\n",
+            "/devstoreaccount1/devstoreaccount1/container/blob\n",
+            "comp:metadata\n",
+            "foo:a,b"
+        );
+
+        assert_eq!(actual, expected);
+        assert!(!actual.contains("2023-11-03\n\n/devstoreaccount1"));
+
+        let date_only_request = parsed_request(
+            "GET",
+            "http://localhost/devstoreaccount1/container/blob",
+            &[("date", "Tue, 11 Aug 2026 12:00:00 +0000")],
+            b"",
+        )
+        .await;
+        let date_only =
+            AzureBlobAdapter::shared_key_string_to_sign(&date_only_request, "devstoreaccount1");
+        assert!(date_only.contains("\nTue, 11 Aug 2026 12:00:00 +0000\n"));
+    }
+
+    #[test]
+    fn should_apply_azure_container_naming_rules() {
+        // Arrange
+        let valid_names = ["abc", "container-01", "$root"];
+        let invalid_names = ["aa", "Upper", "bad--name", "-leading", "trailing-"];
+
+        // Act
+        let valid_results = valid_names.map(AzureBlobAdapter::valid_container_name);
+        let invalid_results = invalid_names.map(AzureBlobAdapter::valid_container_name);
+
+        // Assert
+        assert_eq!(valid_results, [true; 3]);
+        assert_eq!(invalid_results, [false; 5]);
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_azure_container_name_without_mutation() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        let request = parsed_request(
+            "PUT",
+            "http://localhost/devstoreaccount1/AA?restype=container",
+            &[("x-ms-version", AZURE_VERSION)],
+            b"",
+        )
+        .await;
+
+        let response = adapter
+            .handle_request(&storage, &auth_disabled(), &request)
+            .expect("invalid container request should complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(storage.get_namespace("AA").is_err());
+    }
+
     fn sas_signature(
         resource: &str,
         config: &AuthConfig,
@@ -4423,7 +4594,7 @@ mod tests {
             "http://localhost/devstoreaccount1?comp=list",
             &[
                 ("x-ms-version", AZURE_VERSION),
-                ("x-ms-date", "Sat, 01 Jan 2024 00:00:00 +0000"),
+                ("x-ms-date", &Utc::now().to_rfc2822()),
                 ("host", "localhost:9000"),
             ],
             b"",
@@ -4438,6 +4609,27 @@ mod tests {
             .handle_request(&storage.clone(), &azure_auth(), &shared_key_request)
             .expect("shared key request should complete");
         assert_eq!(response.status(), StatusCode::OK);
+
+        let mut stale_request = parsed_request(
+            "GET",
+            "http://localhost/devstoreaccount1?comp=list",
+            &[
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-date", "Sat, 01 Jan 2024 00:00:00 +0000"),
+                ("host", "localhost:9000"),
+            ],
+            b"",
+        )
+        .await;
+        let stale_auth = signed_headers(&stale_request, &azure_auth(), "devstoreaccount1");
+        stale_request.headers.insert(
+            "authorization",
+            stale_auth.parse().expect("header should parse"),
+        );
+        let stale_response = adapter
+            .handle_request(&storage.clone(), &azure_auth(), &stale_request)
+            .expect("stale shared key request should complete");
+        assert_eq!(stale_response.status(), StatusCode::FORBIDDEN);
 
         let expiry = "2035-01-01T00:00:00Z";
         let canonical_resource = "/blob/devstoreaccount1/secure/blob.txt";

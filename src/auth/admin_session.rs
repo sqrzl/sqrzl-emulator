@@ -1,4 +1,3 @@
-use crate::body::RequestBody;
 use crate::error::{Error, Result};
 use chrono::Utc;
 use getrandom::fill;
@@ -69,11 +68,11 @@ impl AdminSessionManager {
         format!("{ADMIN_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
     }
 
-    pub fn has_valid_session(&self, req: &Request<RequestBody>) -> bool {
+    pub fn has_valid_session<B>(&self, req: &Request<B>) -> bool {
         self.subject_from_request(req).is_some()
     }
 
-    pub fn subject_from_request(&self, req: &Request<RequestBody>) -> Option<String> {
+    pub fn subject_from_request<B>(&self, req: &Request<B>) -> Option<String> {
         req.headers()
             .get("cookie")
             .and_then(|header| header.to_str().ok())

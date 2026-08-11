@@ -11,7 +11,7 @@ mod support;
 
 use support::live_server::{auth_disabled, LiveServer};
 
-const TENANT: &str = "tenant";
+const TENANT: &str = "sqrzl-emulator";
 const WRITE_BATCH_OPS: u64 = 8;
 
 fn build_runtime() -> Runtime {

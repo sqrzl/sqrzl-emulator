@@ -109,9 +109,16 @@ To run a subset:
 SQRZL_SDK_PROVIDERS=s3,azure python -m pytest
 ```
 
-The CI gate runs all SDK tests against a live Sqrzl process. The container smoke
-gate builds the Docker image, verifies `/healthz`, and runs the S3 core SDK flow
-against the running container.
+Run the currently supported authenticated SDK subset with:
+
+```bash
+SQRZL_SDK_ENFORCE_AUTH=1 SQRZL_SDK_PROVIDERS=s3,azure python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py
+```
+
+The CI gate runs all SDK tests against a live Sqrzl process, then separately
+runs authenticated S3 and Azure tests. The container smoke gate builds the
+Docker image, verifies `/healthz`, and runs the complete SDK suite—including
+SMTP and messaging—against the running container.
 
 ## Request Size Boundary
 

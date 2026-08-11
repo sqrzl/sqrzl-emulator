@@ -7,7 +7,7 @@ use hyper::Response;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 mod azure;
 mod faults;
@@ -22,7 +22,7 @@ pub use oci::OciAdapter;
 pub(crate) use s3::payload_too_large_response;
 pub use s3::S3Adapter;
 
-static DATA_PROTECTION_ACTIVATION_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+static DATA_PROTECTION_ACTIVATION_LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
     OnceLock::new();
 
 /// Returns the process-wide activation lock for one provider-shared bucket namespace.
@@ -35,10 +35,13 @@ pub(crate) fn data_protection_activation_lock(bucket: &str) -> Result<Arc<Mutex<
     let mut locks = locks
         .lock()
         .map_err(|_| "Failed to lock data-protection activation registry".to_string())?;
-    Ok(locks
-        .entry(bucket.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone())
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(bucket).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(bucket.to_string(), Arc::downgrade(&lock));
+    Ok(lock)
 }
 
 pub trait ProviderAdapter: Send + Sync {

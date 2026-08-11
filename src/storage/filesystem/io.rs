@@ -111,10 +111,13 @@ impl FilesystemStorage {
             .object_locks
             .lock()
             .map_err(|_| Error::InternalError("Failed to lock object lock registry".to_string()))?;
-        Ok(locks
-            .entry(lock_key)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone())
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&lock_key).and_then(std::sync::Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(lock_key, Arc::downgrade(&lock));
+        Ok(lock)
     }
 
     pub(super) fn bucket_dir(&self, bucket: &str) -> PathBuf {

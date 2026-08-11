@@ -24,6 +24,7 @@ const OCI_CONTENT_ENCODING_KEY: &str = "oci-content-encoding";
 const OCI_CACHE_CONTROL_KEY: &str = "oci-cache-control";
 const OCI_CONTENT_DISPOSITION_KEY: &str = "oci-content-disposition";
 const OCI_BUCKET_STORAGE_TIER_KEY: &str = "oci-storage-tier";
+const OCI_NAMESPACE: &str = "sqrzl-emulator";
 const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
 const S3_OBJECT_LOCK_ENABLED_KEY: &str = "s3_object_lock_enabled";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
@@ -170,6 +171,15 @@ impl OciAdapter {
         Self::error_response(StatusCode::BAD_REQUEST, "InvalidParameter", message)
     }
 
+    fn valid_bucket_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 256
+            && name
+                .as_bytes()
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'))
+    }
+
     fn foreign_protection_active(storage: &Arc<dyn Storage>, bucket: &str) -> bool {
         storage.get_bucket(bucket).ok().is_some_and(|bucket| {
             bucket
@@ -265,26 +275,34 @@ impl OciAdapter {
         storage_tier: &str,
     ) -> Result<(), crate::error::Error> {
         storage.create_namespace(bucket.to_string())?;
-        storage.update_bucket_metadata(
+        if let Err(error) = storage.update_bucket_metadata(
             bucket,
             HashMap::from([(
                 OCI_BUCKET_STORAGE_TIER_KEY.to_string(),
                 storage_tier.to_string(),
             )]),
-        )?;
+        ) {
+            let rollback = storage.delete_namespace(bucket);
+            return Err(crate::error::Error::InternalError(match rollback {
+                Ok(()) => error.to_string(),
+                Err(rollback_error) => {
+                    format!("{error}; failed to roll back OCI bucket creation: {rollback_error}")
+                }
+            }));
+        }
         Ok(())
     }
 
     fn parse_path(req: &Request) -> Result<(String, Vec<String>, bool), String> {
         let path = req.path().strip_prefix('/').unwrap_or(req.path());
         if path == "n" || path == "n/" {
-            return Ok(("sqrzl-emulator".to_string(), Vec::new(), false));
+            return Ok((OCI_NAMESPACE.to_string(), Vec::new(), false));
         }
         let Some(path) = path.strip_prefix("n/") else {
             return Err("OCI requests must start with /n".to_string());
         };
         if path.is_empty() {
-            return Ok(("sqrzl-emulator".to_string(), Vec::new(), false));
+            return Ok((OCI_NAMESPACE.to_string(), Vec::new(), false));
         }
         let (namespace, route) = path
             .split_once('/')
@@ -644,6 +662,14 @@ impl OciAdapter {
             return Ok(response);
         }
 
+        if explicit_namespace && namespace != OCI_NAMESPACE {
+            return Ok(Self::error_response(
+                StatusCode::NOT_FOUND,
+                "NotAuthorizedOrNotFound",
+                "The requested namespace does not exist or is not authorized.",
+            ));
+        }
+
         if parts.is_empty() {
             return Ok(Self::handle_namespace_request(
                 req,
@@ -720,6 +746,11 @@ impl OciAdapter {
         let Some(bucket) = payload.get("name").and_then(|value| value.as_str()) else {
             return Ok(Self::invalid_parameter("The bucket name is required."));
         };
+        if !Self::valid_bucket_name(bucket) {
+            return Ok(Self::invalid_parameter(
+                "The bucket name may contain only letters, numbers, dashes, underscores, and periods.",
+            ));
+        }
         let storage_tier = payload
             .get("storageTier")
             .and_then(|value| value.as_str())
@@ -1675,6 +1706,41 @@ mod tests {
     use hyper::Request as HyperRequest;
     use std::fs;
 
+    #[test]
+    fn should_apply_oci_bucket_naming_rules() {
+        // Arrange
+        let valid_names = ["A", "Bucket_name-01", "bucket.example"];
+        let invalid_names = ["", "bad bucket", "bad/bucket", "bucket!"];
+
+        // Act
+        let valid_results = valid_names.map(OciAdapter::valid_bucket_name);
+        let invalid_results = invalid_names.map(OciAdapter::valid_bucket_name);
+
+        // Assert
+        assert_eq!(valid_results, [true; 3]);
+        assert_eq!(invalid_results, [false; 4]);
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_oci_bucket_name_without_mutation() {
+        let adapter = OciAdapter::new();
+        let storage = temp_storage();
+        let request = parsed_request(
+            "POST",
+            "http://localhost/n/sqrzl-emulator/b",
+            &[("content-type", "application/json")],
+            br#"{"name":"bad bucket!","compartmentId":"ignored"}"#,
+        )
+        .await;
+
+        let response = adapter
+            .handle_request(&storage, &auth_disabled(), &request)
+            .expect("invalid bucket request should complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(storage.get_namespace("bad bucket!").is_err());
+    }
+
     fn temp_storage() -> Arc<dyn Storage> {
         let dir = std::env::temp_dir().join(format!("sqrzl-oci-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
@@ -1750,7 +1816,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b",
+                    "http://localhost/n/sqrzl-emulator/b",
                     &[("content-type", "application/json")],
                     br#"{"name":"archive","compartmentId":"ignored"}"#,
                 )
@@ -1764,7 +1830,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "PUT",
-                    "http://localhost/n/tenant/b/archive/o/report.txt",
+                    "http://localhost/n/sqrzl-emulator/b/archive/o/report.txt",
                     &[("content-type", "text/plain")],
                     b"oci data",
                 )
@@ -1776,7 +1842,13 @@ mod tests {
             .handle_request(
                 &storage.clone(),
                 &auth_disabled(),
-                &parsed_request("GET", "http://localhost/n/tenant/b/archive/o", &[], b"").await,
+                &parsed_request(
+                    "GET",
+                    "http://localhost/n/sqrzl-emulator/b/archive/o",
+                    &[],
+                    b"",
+                )
+                .await,
             )
             .expect("object list should succeed");
         let body = response
@@ -1795,7 +1867,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "GET",
-                    "http://localhost/n/tenant/b/archive/o/report.txt",
+                    "http://localhost/n/sqrzl-emulator/b/archive/o/report.txt",
                     &[],
                     b"",
                 )
@@ -1818,7 +1890,7 @@ mod tests {
 
         let mut request = parsed_request(
             "GET",
-            "http://localhost/n/tenant",
+            "http://localhost/n/sqrzl-emulator",
             &[
                 ("date", "Sat, 01 Jan 2024 00:00:00 +0000"),
                 ("host", "objectstorage.localhost"),
@@ -1846,7 +1918,7 @@ mod tests {
 
         let mut request = parsed_request(
             "GET",
-            "http://localhost/n/tenant",
+            "http://localhost/n/sqrzl-emulator",
             &[
                 ("date", "Mon, 01 Jan 2024 00:00:00 GMT"),
                 ("host", "objectstorage.localhost"),
@@ -1878,7 +1950,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b",
+                    "http://localhost/n/sqrzl-emulator/b",
                     &[("content-type", "application/json")],
                     br#"{"name":"archive","compartmentId":"ignored"}"#,
                 )
@@ -1892,7 +1964,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "PUT",
-                    "http://localhost/n/tenant/b/archive/o/folder/report.txt",
+                    "http://localhost/n/sqrzl-emulator/b/archive/o/folder/report.txt",
                     &[("content-type", "text/plain"), ("opc-meta-owner", "casey")],
                     b"oci metadata",
                 )
@@ -1906,7 +1978,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "GET",
-                    "http://localhost/n/tenant/b/archive/o?prefix=folder/&fields=name,timeCreated",
+                    "http://localhost/n/sqrzl-emulator/b/archive/o?prefix=folder/&fields=name,timeCreated",
                     &[],
                     b"",
                 )
@@ -1929,7 +2001,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "HEAD",
-                    "http://localhost/n/tenant/b/archive/o/folder/report.txt",
+                    "http://localhost/n/sqrzl-emulator/b/archive/o/folder/report.txt",
                     &[],
                     b"",
                 )
@@ -1963,7 +2035,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b",
+                    "http://localhost/n/sqrzl-emulator/b",
                     &[("content-type", "application/json")],
                     br#"{"name":"range-bucket","compartmentId":"ignored"}"#,
                 )
@@ -1977,7 +2049,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "PUT",
-                    "http://localhost/n/tenant/b/range-bucket/o/hello.txt",
+                    "http://localhost/n/sqrzl-emulator/b/range-bucket/o/hello.txt",
                     &[("content-type", "text/plain")],
                     b"oci smoke",
                 )
@@ -1991,7 +2063,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "GET",
-                    "http://localhost/n/tenant/b/range-bucket/o/hello.txt",
+                    "http://localhost/n/sqrzl-emulator/b/range-bucket/o/hello.txt",
                     &[("range", "bytes=0-2")],
                     b"",
                 )
@@ -2026,7 +2098,7 @@ mod tests {
 
         let response = adapter.render_incomplete_body(
             &Method::PUT,
-            &Uri::from_static("http://localhost/n/tenant/b/bucket/o/object"),
+            &Uri::from_static("http://localhost/n/sqrzl-emulator/b/bucket/o/object"),
             &headers,
         );
 
@@ -2076,7 +2148,16 @@ mod tests {
             .handle_request(
                 &storage.clone(),
                 &auth_disabled(),
-                &parsed_request("GET", "http://localhost/n/tenant", &[], b"").await,
+                &parsed_request("GET", "http://localhost/n/wrong-namespace/b", &[], b"").await,
+            )
+            .expect("wrong namespace should return an OCI response");
+        assert_oci_error_response(response, StatusCode::NOT_FOUND, "NotAuthorizedOrNotFound").await;
+
+        let response = adapter
+            .handle_request(
+                &storage.clone(),
+                &auth_disabled(),
+                &parsed_request("GET", "http://localhost/n/sqrzl-emulator", &[], b"").await,
             )
             .expect("namespace metadata request should return an OCI response");
         assert_oci_error_response(response, StatusCode::NOT_IMPLEMENTED, "NotImplemented").await;
@@ -2087,7 +2168,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b",
+                    "http://localhost/n/sqrzl-emulator/b",
                     &[("content-type", "application/json")],
                     br#"{"name":"sdk-bucket","compartmentId":"ignored"}"#,
                 )
@@ -2100,7 +2181,13 @@ mod tests {
             .handle_request(
                 &storage,
                 &auth_disabled(),
-                &parsed_request("GET", "http://localhost/n/tenant/b/sdk-bucket", &[], b"").await,
+                &parsed_request(
+                    "GET",
+                    "http://localhost/n/sqrzl-emulator/b/sdk-bucket",
+                    &[],
+                    b"",
+                )
+                .await,
             )
             .expect("bucket get should succeed");
         let body = response
@@ -2125,7 +2212,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "PUT",
-                    "http://localhost/n/tenant/b/put-alias",
+                    "http://localhost/n/sqrzl-emulator/b/put-alias",
                     &[("content-type", "application/json")],
                     br#"{"name":"put-alias","compartmentId":"ignored"}"#,
                 )
@@ -2145,7 +2232,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b",
+                    "http://localhost/n/sqrzl-emulator/b",
                     &[("content-type", "application/json")],
                     br#"{"name":"put-alias","compartmentId":"ignored"}"#,
                 )
@@ -2167,7 +2254,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b/put-alias",
+                    "http://localhost/n/sqrzl-emulator/b/put-alias",
                     &[("content-type", "application/json")],
                     br#"{"storageTier":"Archive"}"#,
                 )
@@ -2193,10 +2280,10 @@ mod tests {
         create_oci_multipart_bucket(&adapter, &storage).await;
 
         for uri in [
-            "http://localhost/n/tenant/b/multipart-bucket/o/%FF",
-            "http://localhost/n/tenant/b/multipart-bucket/o/%ZZ",
-            "http://localhost/n/tenant/b/multipart-bucket/u/%FF?uploadId=missing&uploadPartNum=1",
-            "http://localhost/n/tenant/b/multipart-bucket/u/%ZZ?uploadId=missing&uploadPartNum=1",
+            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/%FF",
+            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/%ZZ",
+            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/%FF?uploadId=missing&uploadPartNum=1",
+            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/%ZZ?uploadId=missing&uploadPartNum=1",
         ] {
             let response = adapter
                 .handle_request(
@@ -2246,7 +2333,9 @@ mod tests {
                     &auth_disabled(),
                     &parsed_request(
                         "PUT",
-                        &format!("http://localhost/n/tenant/b/multipart-bucket/o/{encoded}"),
+                        &format!(
+                            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/{encoded}"
+                        ),
                         &[],
                         b"payload",
                     )
@@ -2268,7 +2357,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "GET",
-                    "http://localhost/n/tenant/b/multipart-bucket/o/a%20b",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/a%20b",
                     &[],
                     b"",
                 )
@@ -2281,7 +2370,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "HEAD",
-                    "http://localhost/n/tenant/b/multipart-bucket/o/a%20b",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/a%20b",
                     &[],
                     b"",
                 )
@@ -2294,7 +2383,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "GET",
-                    "http://localhost/n/tenant/b/multipart-bucket/o",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o",
                     &[],
                     b"",
                 )
@@ -2307,7 +2396,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "DELETE",
-                    "http://localhost/n/tenant/b/multipart-bucket/o/a%20b",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/a%20b",
                     &[],
                     b"",
                 )
@@ -2362,7 +2451,7 @@ mod tests {
                         &auth_disabled(),
                         &parsed_request(
                             method,
-                            "http://localhost/n/tenant/b/multipart-bucket/o/current?versionId=old",
+                            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/current?versionId=old",
                             &[],
                             b"",
                         )
@@ -2398,7 +2487,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b/multipart-bucket/u",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u",
                     &[("content-type", "application/json")],
                     br#"{"object":"a//b"}"#,
                 )
@@ -2417,7 +2506,7 @@ mod tests {
                 &parsed_request(
                     "PUT",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/a//b?uploadId={upload_id}&uploadPartNum=1"
+                        "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/a//b?uploadId={upload_id}&uploadPartNum=1"
                     ),
                     &[],
                     b"payload",
@@ -2437,7 +2526,7 @@ mod tests {
                 &parsed_request(
                     "POST",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/a//b?uploadId={upload_id}"
+                        "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/a//b?uploadId={upload_id}"
                     ),
                     &[("content-type", "application/json")],
                     manifest.as_bytes(),
@@ -2468,7 +2557,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "PUT",
-                    "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadPartNum=1",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadPartNum=1",
                     &[],
                     b"must-not-upload",
                 )
@@ -2480,13 +2569,13 @@ mod tests {
         let upload_id = create_oci_multipart_upload(&adapter, &storage).await;
         for uri in [
             format!(
-                "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
+                "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
             ),
             format!(
-                "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=0"
+                "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=0"
             ),
             format!(
-                "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=not-a-number"
+                "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=not-a-number"
             ),
         ] {
             let response = adapter
@@ -2505,7 +2594,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "PUT",
-                    "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId=missing&uploadPartNum=1",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId=missing&uploadPartNum=1",
                     &[],
                     b"must-not-upload",
                 )
@@ -2522,7 +2611,7 @@ mod tests {
                     &parsed_request(
                         "POST",
                         &format!(
-                            "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
+                            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
                         ),
                         &[("content-type", "application/json")],
                         body,
@@ -2561,7 +2650,7 @@ mod tests {
                 &parsed_request(
                     "POST",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
+                        "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
                     ),
                     &[("content-type", "application/json")],
                     incomplete_manifest.as_bytes(),
@@ -2581,7 +2670,7 @@ mod tests {
                 &parsed_request(
                     "POST",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
+                        "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
                     ),
                     &[("content-type", "application/json")],
                     selective_manifest.as_bytes(),
@@ -2637,7 +2726,7 @@ mod tests {
                     &parsed_request(
                         "POST",
                         &format!(
-                            "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
+                            "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
                         ),
                         &[("content-type", "application/json"), condition],
                         manifest.as_bytes(),
@@ -2705,7 +2794,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b",
+                    "http://localhost/n/sqrzl-emulator/b",
                     &[("content-type", "application/json")],
                     br#"{"name":"multipart-bucket","compartmentId":"ignored"}"#,
                 )
@@ -2724,7 +2813,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "POST",
-                    "http://localhost/n/tenant/b/multipart-bucket/u",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u",
                     &[("content-type", "application/json")],
                     br#"{"object":"multi.txt","contentType":"text/plain","metadata":{"owner":"sdk"},"storageTier":"InfrequentAccess"}"#,
                 )
@@ -2753,7 +2842,7 @@ mod tests {
                 &parsed_request(
                     "PUT",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum={part_number}"
+                        "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum={part_number}"
                     ),
                     &[],
                     body,
@@ -2783,7 +2872,7 @@ mod tests {
                 &parsed_request(
                     "POST",
                     &format!(
-                        "http://localhost/n/tenant/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
+                        "http://localhost/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}"
                     ),
                     &[("content-type", "application/json")],
                     format!(
@@ -2804,7 +2893,7 @@ mod tests {
                 &auth_disabled(),
                 &parsed_request(
                     "HEAD",
-                    "http://localhost/n/tenant/b/multipart-bucket/o/multi.txt",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/o/multi.txt",
                     &[],
                     b"",
                 )

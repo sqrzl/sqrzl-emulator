@@ -76,6 +76,7 @@ impl Config {
 
         let lifecycle_interval_hours = lookup(ENV_SQRZL_LIFECYCLE_HOURS)
             .and_then(|s| s.parse::<u64>().ok())
+            .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SQRZL_LIFECYCLE_HOURS);
         let api_port = lookup(ENV_SQRZL_API_PORT)
             .and_then(|s| s.parse::<u16>().ok())
@@ -318,6 +319,22 @@ mod tests {
         assert_eq!(config.api_port, DEFAULT_SQRZL_API_PORT);
         assert_eq!(config.ui_port, DEFAULT_SQRZL_UI_PORT);
         assert_eq!(config.max_request_bytes, DEFAULT_SQRZL_MAX_REQUEST_BYTES);
+    }
+
+    #[test]
+    fn should_fall_back_to_default_lifecycle_hours_when_env_value_is_zero() {
+        // Arrange
+        // Act
+        let config = Config::from_env_with(|name| match name {
+            ENV_SQRZL_LIFECYCLE_HOURS => Some("0".to_string()),
+            _ => None,
+        });
+
+        // Assert
+        assert_eq!(
+            config.lifecycle_interval,
+            Duration::from_secs(DEFAULT_SQRZL_LIFECYCLE_HOURS * 3600)
+        );
     }
 
     #[test]

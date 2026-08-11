@@ -12,7 +12,7 @@ mod support;
 
 use support::live_server::{auth_disabled, LiveServer};
 
-const TENANT: &str = "tenant";
+const TENANT: &str = "sqrzl-emulator";
 const PART_UPLOAD_BATCH_OPS: u64 = 4;
 const COMMIT_BATCH_OPS: u64 = 8;
 

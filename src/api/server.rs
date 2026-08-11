@@ -102,6 +102,16 @@ async fn handle_ui_request(
         return Ok(admin_payload_too_large_response(config.max_request_bytes));
     }
 
+    let req = match buffer_request(req, config.max_request_bytes).await {
+        Ok(req) => req,
+        Err(BufferRequestError::TooLarge) => {
+            return Ok(admin_payload_too_large_response(config.max_request_bytes));
+        }
+        Err(BufferRequestError::Invalid(message)) => {
+            return Ok(json_error_response(&Error::InvalidRequest(message)));
+        }
+    };
+
     if path == crate::auth::admin_session::ADMIN_LOGIN_PATH {
         let resp = handle_admin_login(config, admin_session, req).await;
         return Ok(resp);
@@ -181,12 +191,43 @@ async fn handle_ui_request(
         .build())
 }
 
-fn request_content_length_exceeds(req: &Request<RequestBody>, max_request_bytes: usize) -> bool {
+fn request_content_length_exceeds<B>(req: &Request<B>, max_request_bytes: usize) -> bool {
     req.headers()
         .get("content-length")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<usize>().ok())
         .is_some_and(|content_length| content_length > max_request_bytes)
+}
+
+enum BufferRequestError {
+    TooLarge,
+    Invalid(String),
+}
+
+async fn buffer_request<B>(
+    req: Request<B>,
+    max_request_bytes: usize,
+) -> std::result::Result<Request<Body>, BufferRequestError>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Unpin,
+    B::Error: std::fmt::Display,
+{
+    let (parts, mut incoming) = req.into_parts();
+    let mut body = bytes::BytesMut::new();
+    while let Some(frame) = incoming.frame().await {
+        let frame = frame.map_err(|error| BufferRequestError::Invalid(error.to_string()))?;
+        if let Ok(data) = frame.into_data() {
+            let next_len = body
+                .len()
+                .checked_add(data.len())
+                .ok_or(BufferRequestError::TooLarge)?;
+            if next_len > max_request_bytes {
+                return Err(BufferRequestError::TooLarge);
+            }
+            body.extend_from_slice(&data);
+        }
+    }
+    Ok(Request::from_parts(parts, Body::from(body.freeze())))
 }
 
 fn admin_payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
@@ -248,11 +289,15 @@ async fn serve_static_content(static_dir: &Path, request_path: &str) -> Response
         .build()
 }
 
-async fn handle_admin_login(
+async fn handle_admin_login<B>(
     config: Arc<crate::Config>,
     admin_session: Arc<AdminSessionManager>,
-    req: Request<RequestBody>,
-) -> Response<Body> {
+    req: Request<B>,
+) -> Response<Body>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     if req.method() != Method::POST {
         return json_error_response(&Error::MethodNotAllowed(format!(
             "{} {}",
@@ -295,7 +340,7 @@ async fn handle_admin_login(
     }
 }
 
-fn handle_admin_logout(req: &Request<RequestBody>) -> Response<Body> {
+fn handle_admin_logout<B>(req: &Request<B>) -> Response<Body> {
     if req.method() != Method::POST {
         return json_error_response(&Error::MethodNotAllowed(format!(
             "{} {}",
@@ -321,10 +366,10 @@ fn handle_admin_logout(req: &Request<RequestBody>) -> Response<Body> {
     response
 }
 
-fn handle_admin_session(
+fn handle_admin_session<B>(
     config: &crate::Config,
     admin_session: &AdminSessionManager,
-    req: &Request<RequestBody>,
+    req: &Request<B>,
 ) -> Response<Body> {
     if req.method() != Method::GET {
         return json_error_response(&Error::MethodNotAllowed(format!(
@@ -351,8 +396,8 @@ fn handle_admin_session(
     )
 }
 
-fn admin_request_is_authorized(
-    req: &Request<RequestBody>,
+fn admin_request_is_authorized<B>(
+    req: &Request<B>,
     config: &crate::Config,
     admin_session: &AdminSessionManager,
 ) -> bool {
@@ -382,7 +427,12 @@ fn admin_login_unauthorized_response() -> Response<Body> {
     json_response(StatusCode::UNAUTHORIZED, &body)
 }
 
-async fn read_json<T: DeserializeOwned>(req: Request<RequestBody>) -> Result<T> {
+async fn read_json<T, B>(req: Request<B>) -> Result<T>
+where
+    T: DeserializeOwned,
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let bytes = req
         .into_body()
         .collect()
@@ -394,15 +444,29 @@ async fn read_json<T: DeserializeOwned>(req: Request<RequestBody>) -> Result<T> 
 
 #[cfg(test)]
 mod tests {
-    use super::serve_static_content;
+    use super::{buffer_request, serve_static_content, BufferRequestError};
+    use bytes::Bytes;
     use http_body_util::BodyExt;
-    use hyper::StatusCode;
+    use http_body_util::Full;
+    use hyper::{Request, StatusCode};
     use std::fs;
 
     fn temp_static_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("sqrzl-ui-static-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("temp static dir should be created");
         dir
+    }
+
+    #[tokio::test]
+    async fn should_bound_ui_request_bodies_without_relying_on_content_length() {
+        let request = Request::builder()
+            .uri("/admin/v1/buckets")
+            .body(Full::new(Bytes::from_static(b"12345")))
+            .expect("request should build");
+
+        let result = buffer_request(request, 4).await;
+
+        assert!(matches!(result, Err(BufferRequestError::TooLarge)));
     }
 
     #[tokio::test]

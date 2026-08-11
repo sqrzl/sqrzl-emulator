@@ -11,7 +11,9 @@ azure_blob = pytest.importorskip("azure.storage.blob")
 def _service(sqrzl_server):
     return azure_blob.BlobServiceClient(
         account_url=f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}",
-        credential=None,
+        credential=(
+            sqrzl_server.secret_access_key if sqrzl_server.enforce_auth else None
+        ),
     )
 
 

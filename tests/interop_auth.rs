@@ -79,7 +79,7 @@ async fn should_reject_unsigned_oci_request_given_auth_enforced_when_request_is_
     let response = call(
         storage,
         auth_enabled("oci-key", "oci-secret"),
-        request("GET", "http://localhost/n/tenant", &[], b""),
+        request("GET", "http://localhost/n/sqrzl-emulator", &[], b""),
     )
     .await;
     assert!(matches!(

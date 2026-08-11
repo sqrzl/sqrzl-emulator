@@ -1,14 +1,59 @@
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fs;
+    use std::path::Path;
+
+    fn collect_source(root: &Path, extensions: &[&str], output: &mut String) {
+        for entry in fs::read_dir(root).expect("source directory should be readable") {
+            let path = entry.expect("source entry should be readable").path();
+            if path.is_dir() {
+                collect_source(&path, extensions, output);
+            } else if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extensions.contains(&extension))
+            {
+                output.push_str(&fs::read_to_string(path).expect("source file should be readable"));
+                output.push('\n');
+            }
+        }
+    }
+
+    fn declared_verifiers(field: &str) -> Vec<String> {
+        let matrix: serde_json::Value =
+            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+                .expect("compatibility matrix should parse");
+        matrix["providers"]
+            .as_object()
+            .expect("providers should be an object")
+            .values()
+            .flat_map(|operations| {
+                operations
+                    .as_object()
+                    .expect("operations should be an object")
+                    .values()
+            })
+            .flat_map(|operation| {
+                operation[field]
+                    .as_array()
+                    .expect("verifier field should be an array")
+                    .iter()
+            })
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("verifier should be a string")
+                    .to_string()
+            })
+            .collect()
+    }
 
     // Keep the complete evidence registry in one auditable literal so a matrix
     // reference cannot be hidden behind provider-specific helper composition.
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
-            "api::server::tests::bucket_crud_json",
-            "api::server::tests::object_upload_download",
             "interop_email::should_capture_message_when_sending_over_a_smtp_session",
             "interop_email::should_capture_sendgrid_send_and_fan_out_recipients",
             "interop_email::should_capture_ses_send_with_signature_authorization",
@@ -32,7 +77,7 @@ mod tests {
             "sms::providers::tests::should_support_sns_get_and_acs_per_recipient_results",
             "sms::providers::tests::should_validate_acs_sms_options_and_repeatability_without_duplicate_capture",
             "sms::providers::tests::should_validate_every_aws_sms_voice_field_before_capture",
-            "sms::simulator::tests::should_render_aws_sns_and_acs_event_batches",
+            "sms::simulator::tests::should_render_provider_specific_event_batches",
             "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
             "auth::sigv4::tests::should_verify_valid_sigv4_signature",
             "interop_auth::should_reject_invalid_signed_gcs_request_given_auth_enforced_when_signature_is_bad",
@@ -121,6 +166,7 @@ mod tests {
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "providers::azure::tests::should_commit_and_list_blocks_after_adapter_restart",
             "providers::azure::tests::should_commit_block_blob_from_put_block_list",
+            "providers::azure::tests::should_concatenate_azure_canonical_headers_and_resource_without_blank_line",
             "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
             "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create",
@@ -132,6 +178,7 @@ mod tests {
             "providers::azure::tests::should_preserve_version_identity_for_azure_lease_and_worm_metadata",
             "providers::azure::tests::should_decode_azure_blob_paths_once_and_preserve_empty_segments",
             "providers::azure::tests::should_reject_invalid_azure_block_ids_without_staging_them",
+            "providers::azure::tests::should_reject_invalid_azure_container_name_without_mutation",
             "providers::azure::tests::should_reject_malformed_azure_block_lists_without_committing",
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
             "providers::azure::tests::should_reject_unsafe_and_unsupported_azure_version_selectors_without_mutating",
@@ -153,6 +200,7 @@ mod tests {
             "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
             "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
             "providers::gcs::tests::should_reject_invalid_gcs_json_media_x_goog_hash_without_mutation",
+            "providers::gcs::tests::should_reject_invalid_gcs_bucket_name_without_mutation",
             "providers::gcs::tests::should_reject_mismatched_gcs_json_multipart_crc32c_without_mutation",
             "providers::gcs::tests::should_reject_mismatched_resumable_metadata_crc32c_without_mutation",
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch",
@@ -166,6 +214,7 @@ mod tests {
             "providers::oci::tests::should_never_commit_unlisted_or_excluded_oci_multipart_parts",
             "providers::oci::tests::should_preserve_oci_multipart_object_path_components",
             "providers::oci::tests::should_reject_invalid_oci_object_encoding_without_mutating",
+            "providers::oci::tests::should_reject_invalid_oci_bucket_name_without_mutation",
             "providers::oci::tests::should_reject_invented_oci_bucket_put_alias_without_creating_bucket",
             "providers::oci::tests::should_reject_oci_version_scoped_operations_without_touching_current_object",
             "providers::oci::tests::should_reject_unsupported_oci_multipart_conditions_without_consuming_session",
@@ -507,5 +556,42 @@ mod tests {
         }
 
         // Assert
+    }
+
+    #[test]
+    fn should_reference_test_functions_that_exist_in_the_source_tree() {
+        // Arrange
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut rust_source = String::new();
+        collect_source(&manifest.join("src"), &["rs"], &mut rust_source);
+        collect_source(&manifest.join("tests"), &["rs"], &mut rust_source);
+        let mut python_source = String::new();
+        collect_source(&manifest.join("sdk-tests"), &["py"], &mut python_source);
+
+        // Act
+        let rust_verifiers = declared_verifiers("verified_by");
+        let sdk_verifiers = declared_verifiers("sdk_verified_by");
+
+        // Assert
+        for verifier in rust_verifiers {
+            let function = verifier
+                .rsplit("::")
+                .next()
+                .expect("Rust verifier should include a function name");
+            assert!(
+                rust_source.contains(&format!("fn {function}(")),
+                "Rust verifier '{verifier}' does not name an existing test function"
+            );
+        }
+        for verifier in sdk_verifiers {
+            let function = verifier
+                .rsplit("::")
+                .next()
+                .expect("SDK verifier should include a function name");
+            assert!(
+                python_source.contains(&format!("def {function}(")),
+                "SDK verifier '{verifier}' does not name an existing test function"
+            );
+        }
     }
 }

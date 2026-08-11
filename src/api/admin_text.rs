@@ -1,7 +1,7 @@
 use crate::api::admin::pagination::{
     contains_search, encode_next, paginate, parse_page_params, PageTokenKind,
 };
-use crate::body::{Body, RequestBody};
+use crate::body::Body;
 use crate::error::{Error, Result};
 use crate::server::ResponseBuilder;
 use crate::services::json_response;
@@ -42,10 +42,14 @@ pub fn matches_path(path: &str) -> bool {
 /// # Errors
 ///
 /// Returns an error for invalid routes, payloads, identifiers, or persistence failures.
-pub async fn handle_request(
+pub async fn handle_request<B>(
     store: &Arc<dyn SmsStore>,
-    request: Request<RequestBody>,
-) -> Result<Response<Body>> {
+    request: Request<B>,
+) -> Result<Response<Body>>
+where
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let method = request.method().clone();
     let path = request.uri().path().to_string();
     let query = request.uri().query().unwrap_or("").to_string();
@@ -78,7 +82,7 @@ pub async fn handle_request(
     }
 
     if path == format!("{SIMULATIONS}/inbound") && method == Method::POST {
-        let payload = read_json::<InboundSimulationRequest>(request).await?;
+        let payload = read_json::<InboundSimulationRequest, _>(request).await?;
         return simulate_inbound(store, payload).await;
     }
 
@@ -86,7 +90,7 @@ pub async fn handle_request(
         let segments = decode_segments(rest)?;
         if let [message_id, resource] = segments.as_slice() {
             if resource == "delivery" && method == Method::POST {
-                let payload = read_json::<DeliveryRequest>(request).await?;
+                let payload = read_json::<DeliveryRequest, _>(request).await?;
                 return transition_delivery(store, message_id, payload).await;
             }
         }
@@ -102,7 +106,7 @@ pub async fn handle_request(
                     &store.get_destination(provider, local_number)?,
                 )),
                 Method::PUT => {
-                    let payload = read_json::<DestinationRequest>(request).await?;
+                    let payload = read_json::<DestinationRequest, _>(request).await?;
                     validate_callback_url(&payload.callback_url)?;
                     Ok(json_response(
                         StatusCode::OK,
@@ -319,7 +323,12 @@ fn decode_segments(rest: &str) -> Result<Vec<String>> {
         .collect()
 }
 
-async fn read_json<T: for<'de> Deserialize<'de>>(request: Request<RequestBody>) -> Result<T> {
+async fn read_json<T, B>(request: Request<B>) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+    B: hyper::body::Body<Data = bytes::Bytes> + Send + 'static,
+    B::Error: std::fmt::Display,
+{
     let bytes = request
         .into_body()
         .collect()

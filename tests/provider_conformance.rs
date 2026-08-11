@@ -182,7 +182,7 @@ fn mutation_surfaces() -> [MutationSurface; 5] {
             bucket: "fault-oci-all",
             key: "object",
             method: "PUT",
-            uri: "http://localhost/n/sqrzl/b/fault-oci-all/o/object",
+            uri: "http://localhost/n/sqrzl-emulator/b/fault-oci-all/o/object",
             headers: &[],
             success: StatusCode::OK,
         },
@@ -218,7 +218,7 @@ fn read_surfaces() -> [ReadSurface; 5] {
         ReadSurface {
             front_door: StorageFrontDoor::Oci,
             bucket: "truncate-oci",
-            uri: "http://localhost/n/sqrzl/b/truncate-oci/o/object",
+            uri: "http://localhost/n/sqrzl-emulator/b/truncate-oci/o/object",
             headers: &[],
         },
     ]
@@ -264,7 +264,7 @@ fn pagination_surfaces() -> [PaginationSurface; 5] {
         PaginationSurface {
             front_door: StorageFrontDoor::Oci,
             bucket: "paging-oci",
-            first_uri: "http://localhost/n/sqrzl/b/paging-oci/o?limit=1",
+            first_uri: "http://localhost/n/sqrzl-emulator/b/paging-oci/o?limit=1",
             token_parameter: "start",
             headers: &[],
             body: PaginationBody::Json("nextStartWith"),
@@ -429,7 +429,7 @@ async fn lifecycle_put(
             format!("http://localhost/upload/storage/v1/b/{bucket}/o?uploadType=media&name={key}")
         }
         StorageFrontDoor::Oci => {
-            format!("http://localhost/n/sqrzl/b/{bucket}/o/{key}")
+            format!("http://localhost/n/sqrzl-emulator/b/{bucket}/o/{key}")
         }
     };
     let content_length = payload.len().to_string();
@@ -481,7 +481,7 @@ async fn lifecycle_get(
             format!("http://localhost/storage/v1/b/{bucket}/o/{key}?alt=media")
         }
         StorageFrontDoor::Oci => {
-            format!("http://localhost/n/sqrzl/b/{bucket}/o/{key}")
+            format!("http://localhost/n/sqrzl-emulator/b/{bucket}/o/{key}")
         }
     };
     let headers = match front_door {
@@ -516,7 +516,7 @@ async fn lifecycle_delete(
             format!("http://localhost/storage/v1/b/{bucket}/o/{key}")
         }
         StorageFrontDoor::Oci => {
-            format!("http://localhost/n/sqrzl/b/{bucket}/o/{key}")
+            format!("http://localhost/n/sqrzl-emulator/b/{bucket}/o/{key}")
         }
     };
     let headers = match front_door {
@@ -1722,7 +1722,7 @@ async fn should_preserve_oci_empty_mutation_statuses() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/sqrzl/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"empty-oci","compartmentId":"ocid1.compartment.local"}"#,
         ),
@@ -1736,7 +1736,7 @@ async fn should_preserve_oci_empty_mutation_statuses() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/sqrzl/b/empty-oci/o/object",
+            "http://localhost/n/sqrzl-emulator/b/empty-oci/o/object",
             &[("content-length", "0")],
             b"",
         ),
@@ -1747,7 +1747,7 @@ async fn should_preserve_oci_empty_mutation_statuses() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/sqrzl/b/empty-oci/o/object",
+            "http://localhost/n/sqrzl-emulator/b/empty-oci/o/object",
             &[],
             b"",
         ),
@@ -1758,7 +1758,7 @@ async fn should_preserve_oci_empty_mutation_statuses() {
         auth_disabled(),
         request(
             "HEAD",
-            "http://localhost/n/sqrzl/b/empty-oci/o/object",
+            "http://localhost/n/sqrzl-emulator/b/empty-oci/o/object",
             &[],
             b"",
         ),
@@ -1769,7 +1769,7 @@ async fn should_preserve_oci_empty_mutation_statuses() {
         auth_disabled(),
         request(
             "DELETE",
-            "http://localhost/n/sqrzl/b/empty-oci/o/object",
+            "http://localhost/n/sqrzl-emulator/b/empty-oci/o/object",
             &[],
             b"",
         ),
@@ -1780,7 +1780,7 @@ async fn should_preserve_oci_empty_mutation_statuses() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/sqrzl/b/empty-oci/o/object",
+            "http://localhost/n/sqrzl-emulator/b/empty-oci/o/object",
             &[],
             b"",
         ),
@@ -3292,7 +3292,7 @@ async fn should_return_provider_specific_missing_object_responses() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/sqrzl/b/missing-oci/o/object",
+            "http://localhost/n/sqrzl-emulator/b/missing-oci/o/object",
             &[],
             b"",
         ),

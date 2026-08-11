@@ -53,8 +53,14 @@ jobs:
       - name: Install SDK test dependencies
         run: python -m pip install -e ".[sdk-tests]"
 
-      - name: SDK certification tests
+      - name: SDK functional tests
         run: python -m pytest
+
+      - name: Authenticated S3 and Azure SDK tests
+        env:
+          SQRZL_SDK_ENFORCE_AUTH: "1"
+          SQRZL_SDK_PROVIDERS: s3,azure
+        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -104,6 +110,11 @@ jobs:
             --name sqrzl-emulator-smoke \
             -p 9000:9000 \
             -p 9001:9001 \
+            -p 2525:2525 \
+            -e SQRZL_ADMIN_AUTH_DISABLED=true \
+            -e SQRZL_TWILIO_ACCOUNT_SID=AC00000000000000000000000000000001 \
+            -e SQRZL_TWILIO_AUTH_TOKEN=sqrzl-twilio-token \
+            -e 'SQRZL_ACS_CONNECTION_STRING=endpoint=http://127.0.0.1:9000;accesskey=c2hhcmVkLXNlY3JldA==' \
             sqrzl-emulator:smoke
 
       - name: Wait for health
@@ -127,29 +138,12 @@ jobs:
       - name: Install SDK test dependencies
         run: python -m pip install -e ".[sdk-tests]"
 
-      - name: Run S3 SDK container smoke
+      - name: Run complete SDK container smoke
         env:
           SQRZL_API_URL: http://127.0.0.1:9000
-          SQRZL_SDK_PROVIDERS: s3
-        run: python -m pytest sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows
-
-      - name: Run GCS SDK container smoke
-        env:
-          SQRZL_API_URL: http://127.0.0.1:9000
-          SQRZL_SDK_PROVIDERS: gcs
-        run: python -m pytest sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows
-
-      - name: Run Azure SDK container smoke
-        env:
-          SQRZL_API_URL: http://127.0.0.1:9000
-          SQRZL_SDK_PROVIDERS: azure
-        run: python -m pytest sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows
-
-      - name: Run OCI SDK container smoke
-        env:
-          SQRZL_API_URL: http://127.0.0.1:9000
-          SQRZL_SDK_PROVIDERS: oci
-        run: python -m pytest sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows
+          SQRZL_UI_URL: http://127.0.0.1:9001
+          SQRZL_SMTP_PORT: "2525"
+        run: python -m pytest
 
       - name: Stop container
         if: always()

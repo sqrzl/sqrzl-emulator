@@ -627,7 +627,7 @@ mod adapter_routing_tests {
                 "truncated-oci",
                 "object",
                 "PUT",
-                "http://localhost/n/sqrzl/b/truncated-oci/o/object",
+                "http://localhost/n/sqrzl-emulator/b/truncated-oci/o/object",
                 None,
                 "application/json",
                 "InvalidParameter",

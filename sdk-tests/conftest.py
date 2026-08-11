@@ -18,7 +18,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ACCESS_KEY = "sqrzl-access"
-DEFAULT_SECRET_KEY = "sqrzl-secret"
+DEFAULT_SECRET_KEY = base64.b64encode(b"sqrzl-secret").decode("ascii")
 AZURE_ACCOUNT = "devstoreaccount1"
 ACS_ACCESS_KEY = base64.b64encode(b"shared-secret").decode("ascii")
 TWILIO_ACCOUNT_SID = "AC00000000000000000000000000000001"
@@ -35,6 +35,7 @@ class SqrzlSettings:
     smtp_port: int
     storage_dir: Path | None
     enabled_providers: frozenset[str]
+    enforce_auth: bool
 
     def require_provider(self, provider: str) -> None:
         if provider not in self.enabled_providers:
@@ -114,6 +115,7 @@ def _ensure_binary() -> Path:
 def sqrzl_server() -> SqrzlSettings:
     api_url = os.getenv("SQRZL_API_URL")
     enabled_providers = _providers_from_env()
+    enforce_auth = os.getenv("SQRZL_SDK_ENFORCE_AUTH") == "1"
     if api_url:
         smtp_port = int(os.getenv("SQRZL_SMTP_PORT", "2525"))
         yield SqrzlSettings(
@@ -125,6 +127,7 @@ def sqrzl_server() -> SqrzlSettings:
             smtp_port=smtp_port,
             storage_dir=None,
             enabled_providers=enabled_providers,
+            enforce_auth=enforce_auth,
         )
         return
 
@@ -151,7 +154,7 @@ def sqrzl_server() -> SqrzlSettings:
     if "twilio" in enabled_providers:
         env["SQRZL_TWILIO_ACCOUNT_SID"] = TWILIO_ACCOUNT_SID
         env["SQRZL_TWILIO_AUTH_TOKEN"] = TWILIO_AUTH_TOKEN
-    if os.getenv("SQRZL_SDK_ENFORCE_AUTH") == "1":
+    if enforce_auth:
         env["SQRZL_ACCESS_KEY_ID"] = DEFAULT_ACCESS_KEY
         env["SQRZL_SECRET_ACCESS_KEY"] = DEFAULT_SECRET_KEY
     else:
@@ -175,6 +178,7 @@ def sqrzl_server() -> SqrzlSettings:
         smtp_port=smtp_port,
         storage_dir=storage_dir,
         enabled_providers=enabled_providers,
+        enforce_auth=enforce_auth,
     )
 
     try:

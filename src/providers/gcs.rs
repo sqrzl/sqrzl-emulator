@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
 const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
@@ -64,7 +64,7 @@ impl Default for GcsAdapter {
 }
 
 type MultipartUploadParts = (ParsedUploadMetadata, String, Vec<u8>);
-type ObjectMutationLocks = HashMap<(String, String), Arc<Mutex<()>>>;
+type ObjectMutationLocks = HashMap<(String, String), Weak<Mutex<()>>>;
 
 #[derive(Default)]
 struct ParsedUploadMetadata {
@@ -113,10 +113,14 @@ impl GcsAdapter {
             .object_mutation_locks
             .lock()
             .map_err(|_| "Failed to lock GCS object-mutation lock registry".to_string())?;
-        Ok(locks
-            .entry((bucket.to_string(), key.to_string()))
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone())
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let lock_key = (bucket.to_string(), key.to_string());
+        if let Some(lock) = locks.get(&lock_key).and_then(Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(lock_key, Arc::downgrade(&lock));
+        Ok(lock)
     }
 
     fn response(status: StatusCode) -> ResponseBuilder {
@@ -1219,6 +1223,48 @@ mod tests {
     use http_body_util::BodyExt;
     use hyper::Request as HyperRequest;
     use std::fs;
+
+    #[test]
+    fn should_apply_gcs_bucket_naming_rules() {
+        // Arrange
+        let valid_names = ["abc", "bucket_name-01", "test.example.com"];
+        let invalid_names = [
+            "ab",
+            "Upper",
+            "192.168.5.4",
+            "goog-data",
+            "my-google-bucket",
+            "bad..name",
+        ];
+
+        // Act
+        let valid_results = valid_names.map(GcsAdapter::valid_bucket_name);
+        let invalid_results = invalid_names.map(GcsAdapter::valid_bucket_name);
+
+        // Assert
+        assert_eq!(valid_results, [true; 3]);
+        assert_eq!(invalid_results, [false; 6]);
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_gcs_bucket_name_without_mutation() {
+        let adapter = GcsAdapter::new();
+        let storage = temp_storage();
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("content-type", "application/json")],
+            br#"{"name":"A"}"#,
+        )
+        .await;
+
+        let response = adapter
+            .handle_request(&storage, &auth_disabled(), &request)
+            .expect("invalid bucket request should complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(storage.get_namespace("A").is_err());
+    }
 
     fn temp_storage() -> Arc<dyn Storage> {
         let dir = std::env::temp_dir().join(format!("sqrzl-gcs-test-{}", uuid::Uuid::new_v4()));
@@ -4705,6 +4751,13 @@ impl GcsAdapter {
 
         match *req.method() {
             Method::PUT => {
+                if !Self::valid_bucket_name(bucket) {
+                    return Self::error_response(
+                        StatusCode::BAD_REQUEST,
+                        "InvalidBucketName",
+                        "The specified bucket name is not valid.",
+                    );
+                }
                 if let Err(error) = storage.as_ref().create_namespace(bucket.to_string()) {
                     if matches!(error, crate::error::Error::BucketAlreadyExists) {
                         return Self::error_response(
@@ -5881,6 +5934,28 @@ impl GcsAdapter {
         )
     }
 
+    fn valid_bucket_name(name: &str) -> bool {
+        let max_len = if name.contains('.') { 222 } else { 63 };
+        if name.len() < 3 || name.len() > max_len {
+            return false;
+        }
+        let bytes = name.as_bytes();
+        bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+            && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+            && bytes.iter().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(*byte, b'-' | b'_' | b'.')
+            })
+            && name
+                .split('.')
+                .all(|component| !component.is_empty() && component.len() <= 63)
+            && name.parse::<std::net::Ipv4Addr>().is_err()
+            && !name.starts_with("goog")
+            && !name.contains("google")
+            && !name.contains("g00gle")
+    }
+
     fn create_json_bucket(
         storage: &Arc<dyn Storage>,
         req: &Request,
@@ -5905,6 +5980,13 @@ impl GcsAdapter {
                 "Required parameter: name",
             ));
         };
+        if !Self::valid_bucket_name(bucket) {
+            return Ok(Self::json_error(
+                StatusCode::BAD_REQUEST,
+                "invalidParameter",
+                "Invalid bucket name",
+            ));
+        }
         let activation_lock = data_protection_activation_lock(bucket)?;
         let _activation_guard = activation_lock
             .lock()
@@ -5924,19 +6006,33 @@ impl GcsAdapter {
             ));
         }
         if let Err(error) = Self::apply_bucket_data_protection(storage, bucket, &payload) {
+            let rollback = storage.delete_namespace(bucket);
+            let message = match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => {
+                    format!("{error}; failed to roll back GCS bucket creation: {rollback_error}")
+                }
+            };
             return Ok(Self::json_upload_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "INTERNAL",
-                &error,
+                &message,
             ));
         }
         let namespace = match storage.as_ref().get_namespace(bucket) {
             Ok(namespace) => namespace,
             Err(error) => {
+                let rollback = storage.delete_namespace(bucket);
+                let message = match rollback {
+                    Ok(()) => error.to_string(),
+                    Err(rollback_error) => format!(
+                        "{error}; failed to roll back GCS bucket creation: {rollback_error}"
+                    ),
+                };
                 return Ok(Self::json_upload_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL",
-                    &error.to_string(),
+                    &message,
                 ));
             }
         };

@@ -22,7 +22,7 @@ async fn should_round_trip_namespace_bucket_and_object_operations_given_basic_oc
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
         ),
@@ -33,7 +33,7 @@ async fn should_round_trip_namespace_bucket_and_object_operations_given_basic_oc
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
+            "http://localhost/n/sqrzl-emulator/b/interop-oci/o/hello.txt",
             &[("content-type", "text/plain")],
             b"oci smoke",
         ),
@@ -45,7 +45,7 @@ async fn should_round_trip_namespace_bucket_and_object_operations_given_basic_oc
             auth_disabled(),
             request(
                 "GET",
-                "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
+                "http://localhost/n/sqrzl-emulator/b/interop-oci/o/hello.txt",
                 &[],
                 b"",
             ),
@@ -64,7 +64,7 @@ async fn should_return_custom_metadata_given_oci_metadata_headers_when_requestin
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
         ),
@@ -75,7 +75,7 @@ async fn should_return_custom_metadata_given_oci_metadata_headers_when_requestin
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
+            "http://localhost/n/sqrzl-emulator/b/interop-oci/o/hello.txt",
             &[("content-type", "text/plain"), ("opc-meta-owner", "sdk")],
             b"oci smoke",
         ),
@@ -86,7 +86,7 @@ async fn should_return_custom_metadata_given_oci_metadata_headers_when_requestin
         auth_disabled(),
         request(
             "HEAD",
-            "http://localhost/n/tenant/b/interop-oci/o/hello.txt",
+            "http://localhost/n/sqrzl-emulator/b/interop-oci/o/hello.txt",
             &[],
             b"",
         ),
@@ -109,7 +109,7 @@ async fn should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
         ),
@@ -120,7 +120,7 @@ async fn should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/interop-oci/o/folder/hello.txt",
+            "http://localhost/n/sqrzl-emulator/b/interop-oci/o/folder/hello.txt",
             &[("content-type", "text/plain")],
             b"oci smoke",
         ),
@@ -132,7 +132,7 @@ async fn should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket
             auth_disabled(),
             request(
                 "GET",
-                "http://localhost/n/tenant/b/interop-oci/o?prefix=folder/",
+                "http://localhost/n/sqrzl-emulator/b/interop-oci/o?prefix=folder/",
                 &[],
                 b"",
             ),
@@ -151,7 +151,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"interop-oci","compartmentId":"ignored"}"#,
         ),
@@ -163,7 +163,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
             auth_disabled(),
             request(
                 "POST",
-                "http://localhost/n/tenant/b/interop-oci/u",
+                "http://localhost/n/sqrzl-emulator/b/interop-oci/u",
                 &[("content-type", "application/json")],
                 br#"{"object":"multi.txt","contentType":"text/plain","metadata":{"owner":"sdk"},"storageTier":"InfrequentAccess"}"#,
             ),
@@ -183,7 +183,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
         request(
             "PUT",
             &format!(
-                "http://localhost/n/tenant/b/interop-oci/u/multi.txt?uploadId={upload_id}&uploadPartNum=1"
+                "http://localhost/n/sqrzl-emulator/b/interop-oci/u/multi.txt?uploadId={upload_id}&uploadPartNum=1"
             ),
             &[],
             b"multi",
@@ -203,7 +203,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
         request(
             "PUT",
             &format!(
-                "http://localhost/n/tenant/b/interop-oci/u/multi.txt?uploadId={upload_id}&uploadPartNum=2"
+                "http://localhost/n/sqrzl-emulator/b/interop-oci/u/multi.txt?uploadId={upload_id}&uploadPartNum=2"
             ),
             &[],
             b"part",
@@ -225,7 +225,9 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
         auth_disabled(),
         request(
             "POST",
-            &format!("http://localhost/n/tenant/b/interop-oci/u/multi.txt?uploadId={upload_id}"),
+            &format!(
+                "http://localhost/n/sqrzl-emulator/b/interop-oci/u/multi.txt?uploadId={upload_id}"
+            ),
             &[("content-type", "application/json")],
             commit.as_bytes(),
         ),
@@ -237,7 +239,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
             auth_disabled(),
             request(
                 "GET",
-                "http://localhost/n/tenant/b/interop-oci/o/multi.txt",
+                "http://localhost/n/sqrzl-emulator/b/interop-oci/o/multi.txt",
                 &[],
                 b"",
             ),
@@ -256,7 +258,7 @@ async fn should_paginate_oci_objects_with_next_start_with_body_token() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"page-oci","compartmentId":"ocid1.compartment.test"}"#,
         ),
@@ -268,7 +270,7 @@ async fn should_paginate_oci_objects_with_next_start_with_body_token() {
             auth_disabled(),
             request(
                 "PUT",
-                &format!("http://localhost/n/tenant/b/page-oci/o/{key}"),
+                &format!("http://localhost/n/sqrzl-emulator/b/page-oci/o/{key}"),
                 &[],
                 key.as_bytes(),
             ),
@@ -281,7 +283,7 @@ async fn should_paginate_oci_objects_with_next_start_with_body_token() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/tenant/b/page-oci/o?limit=2",
+            "http://localhost/n/sqrzl-emulator/b/page-oci/o?limit=2",
             &[],
             b"",
         ),
@@ -299,7 +301,7 @@ async fn should_paginate_oci_objects_with_next_start_with_body_token() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/tenant/b/page-oci/o?limit=2&start=c",
+            "http://localhost/n/sqrzl-emulator/b/page-oci/o?limit=2&start=c",
             &[],
             b"",
         ),
@@ -321,7 +323,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"cas-oci","compartmentId":"ocid1.compartment.test"}"#,
         ),
@@ -332,7 +334,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/cas-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/cas-oci/o/value",
             &[],
             b"first",
         ),
@@ -350,7 +352,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/cas-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/cas-oci/o/value",
             &[("if-none-match", "*")],
             b"second",
         ),
@@ -362,7 +364,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/cas-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/cas-oci/o/value",
             &[("if-match", &format!("W/\"{etag}\""))],
             b"weak",
         ),
@@ -376,7 +378,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
                 auth_disabled(),
                 request(
                     "GET",
-                    "http://localhost/n/tenant/b/cas-oci/o/value",
+                    "http://localhost/n/sqrzl-emulator/b/cas-oci/o/value",
                     &[],
                     b""
                 ),
@@ -392,7 +394,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
         auth_disabled(),
         request(
             "DELETE",
-            "http://localhost/n/tenant/b/cas-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/cas-oci/o/value",
             &[("if-match", "stale")],
             b"",
         ),
@@ -404,7 +406,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
         auth_disabled(),
         request(
             "DELETE",
-            "http://localhost/n/tenant/b/cas-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/cas-oci/o/value",
             &[("if-match", &format!("W/\"{etag}\""))],
             b"",
         ),
@@ -417,7 +419,7 @@ async fn should_enforce_oci_object_conditions_without_mutating_on_failure() {
         auth_disabled(),
         request(
             "DELETE",
-            "http://localhost/n/tenant/b/cas-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/cas-oci/o/value",
             &[("if-match", &etag)],
             b"",
         ),
@@ -435,7 +437,7 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"protected-oci","compartmentId":"ignored"}"#,
         ),
@@ -446,7 +448,7 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/protected-oci/o/current",
+            "http://localhost/n/sqrzl-emulator/b/protected-oci/o/current",
             &[],
             b"original",
         ),
@@ -459,7 +461,7 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
                 auth_disabled(),
                 request(
                     "POST",
-                    "http://localhost/n/tenant/b/protected-oci/u",
+                    "http://localhost/n/sqrzl-emulator/b/protected-oci/u",
                     &[("content-type", "application/json")],
                     br#"{"object":"pending"}"#,
                 ),
@@ -476,7 +478,7 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
         request(
             "PUT",
             &format!(
-                "http://localhost/n/tenant/b/protected-oci/u/pending?uploadId={upload_id}&uploadPartNum=1"
+                "http://localhost/n/sqrzl-emulator/b/protected-oci/u/pending?uploadId={upload_id}&uploadPartNum=1"
             ),
             &[],
             b"pending bytes",
@@ -500,7 +502,7 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/protected-oci/o/current",
+            "http://localhost/n/sqrzl-emulator/b/protected-oci/o/current",
             &[],
             b"replacement",
         ),
@@ -511,7 +513,7 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
         auth_disabled(),
         request(
             "DELETE",
-            "http://localhost/n/tenant/b/protected-oci/o/current",
+            "http://localhost/n/sqrzl-emulator/b/protected-oci/o/current",
             &[],
             b"",
         ),
@@ -523,7 +525,9 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
         auth_disabled(),
         request(
             "POST",
-            &format!("http://localhost/n/tenant/b/protected-oci/u/pending?uploadId={upload_id}"),
+            &format!(
+                "http://localhost/n/sqrzl-emulator/b/protected-oci/u/pending?uploadId={upload_id}"
+            ),
             &[("content-type", "application/json")],
             commit_body.as_bytes(),
         ),
@@ -534,7 +538,7 @@ async fn should_reject_oci_mutations_on_gcs_retained_bucket_without_committing()
         auth_disabled(),
         request(
             "DELETE",
-            "http://localhost/n/tenant/b/protected-oci",
+            "http://localhost/n/sqrzl-emulator/b/protected-oci",
             &[],
             b"",
         ),
@@ -565,7 +569,7 @@ async fn should_validate_oci_md5_and_round_trip_object_response_metadata() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"metadata-oci","compartmentId":"ocid1.compartment.test"}"#,
         ),
@@ -577,7 +581,7 @@ async fn should_validate_oci_md5_and_round_trip_object_response_metadata() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/metadata-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/metadata-oci/o/value",
             &[("content-md5", "AAAAAAAAAAAAAAAAAAAAAA==")],
             b"payload",
         ),
@@ -598,7 +602,7 @@ async fn should_validate_oci_md5_and_round_trip_object_response_metadata() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/metadata-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/metadata-oci/o/value",
             &[
                 ("content-type", "text/plain"),
                 ("content-language", "en-US"),
@@ -624,7 +628,7 @@ async fn should_validate_oci_md5_and_round_trip_object_response_metadata() {
         auth_disabled(),
         request(
             "HEAD",
-            "http://localhost/n/tenant/b/metadata-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/metadata-oci/o/value",
             &[],
             b"",
         ),
@@ -653,7 +657,7 @@ async fn should_count_oci_prefixes_toward_limit_and_keep_start_inclusive() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"delimiter-oci","compartmentId":"ignored"}"#,
         ),
@@ -665,7 +669,7 @@ async fn should_count_oci_prefixes_toward_limit_and_keep_start_inclusive() {
             auth_disabled(),
             request(
                 "PUT",
-                &format!("http://localhost/n/tenant/b/delimiter-oci/o/{key}"),
+                &format!("http://localhost/n/sqrzl-emulator/b/delimiter-oci/o/{key}"),
                 &[],
                 b"data",
             ),
@@ -681,7 +685,7 @@ async fn should_count_oci_prefixes_toward_limit_and_keep_start_inclusive() {
                 auth_disabled(),
                 request(
                     "GET",
-                    "http://localhost/n/tenant/b/delimiter-oci/o?delimiter=/&limit=1",
+                    "http://localhost/n/sqrzl-emulator/b/delimiter-oci/o?delimiter=/&limit=1",
                     &[],
                     b"",
                 ),
@@ -698,7 +702,7 @@ async fn should_count_oci_prefixes_toward_limit_and_keep_start_inclusive() {
                 auth_disabled(),
                 request(
                     "GET",
-                    "http://localhost/n/tenant/b/delimiter-oci/o?delimiter=/&limit=1&start=b/",
+                    "http://localhost/n/sqrzl-emulator/b/delimiter-oci/o?delimiter=/&limit=1&start=b/",
                     &[],
                     b"",
                 ),
@@ -725,7 +729,7 @@ async fn should_inherit_and_validate_oci_storage_tiers() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"archive-oci","compartmentId":"ignored","storageTier":"Archive"}"#,
         ),
@@ -737,7 +741,7 @@ async fn should_inherit_and_validate_oci_storage_tiers() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"invalid-tier-oci","compartmentId":"ignored","storageTier":"InfrequentAccess"}"#,
         ),
@@ -750,7 +754,7 @@ async fn should_inherit_and_validate_oci_storage_tiers() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/archive-oci/o/value",
+            "http://localhost/n/sqrzl-emulator/b/archive-oci/o/value",
             &[],
             b"payload",
         ),
@@ -761,7 +765,7 @@ async fn should_inherit_and_validate_oci_storage_tiers() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/archive-oci/o/invalid",
+            "http://localhost/n/sqrzl-emulator/b/archive-oci/o/invalid",
             &[("storage-tier", "Glacier")],
             b"payload",
         ),
@@ -772,7 +776,7 @@ async fn should_inherit_and_validate_oci_storage_tiers() {
         auth_disabled(),
         request(
             "PUT",
-            "http://localhost/n/tenant/b/archive-oci/o/invalid-standard",
+            "http://localhost/n/sqrzl-emulator/b/archive-oci/o/invalid-standard",
             &[("storage-tier", "Standard")],
             b"payload",
         ),
@@ -785,7 +789,7 @@ async fn should_inherit_and_validate_oci_storage_tiers() {
                 auth_disabled(),
                 request(
                     "GET",
-                    "http://localhost/n/tenant/b/archive-oci/o?fields=name,storageTier,archivalState",
+                    "http://localhost/n/sqrzl-emulator/b/archive-oci/o?fields=name,storageTier,archivalState",
                     &[],
                     b"",
                 ),
@@ -821,7 +825,7 @@ async fn should_echo_oci_client_request_id_and_use_http_dates() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/tenant",
+            "http://localhost/n/sqrzl-emulator",
             &[("opc-client-request-id", "client-correlation")],
             b"",
         ),
@@ -854,7 +858,7 @@ async fn should_return_oci_resource_specific_missing_errors() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/tenant/b/missing/o",
+            "http://localhost/n/sqrzl-emulator/b/missing/o",
             &[("opc-client-request-id", "missing-correlation")],
             b"",
         ),
@@ -874,7 +878,7 @@ async fn should_return_oci_resource_specific_missing_errors() {
         auth_disabled(),
         request(
             "POST",
-            "http://localhost/n/tenant/b",
+            "http://localhost/n/sqrzl-emulator/b",
             &[("content-type", "application/json")],
             br#"{"name":"present","compartmentId":"ignored"}"#,
         ),
@@ -885,7 +889,7 @@ async fn should_return_oci_resource_specific_missing_errors() {
         auth_disabled(),
         request(
             "GET",
-            "http://localhost/n/tenant/b/present/o/missing",
+            "http://localhost/n/sqrzl-emulator/b/present/o/missing",
             &[],
             b"",
         ),
