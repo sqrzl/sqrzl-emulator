@@ -1,8 +1,8 @@
 import { navigate } from '@askrjs/askr/router';
 import { ArrowLeftIcon } from '@askrjs/lucide';
 import { Block, Button, Page, PageHeader } from '@askrjs/themes/components';
-import MessageTable from '../../../components/mail/message-table';
-import { adminMailboxesPath } from '../../../shared/routes';
+import { MessageTable } from '@/features/messages';
+import { adminMailboxesPath } from '@/shared/routes';
 
 export default function Mailbox({ mailboxName }: { mailboxName: string }) {
   return (

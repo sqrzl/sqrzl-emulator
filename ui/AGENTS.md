@@ -38,12 +38,24 @@ npm run gen        # Regenerate src/adapters/api.g.ts from public/openapi.yml
 - **Routing:** `src/main.tsx` imports `src/pages/_routes.tsx`, then boots
   `createSPA()` with the route manifest. Route branches live under
   `src/pages/auth` and `src/pages/app`.
-- **Layouts:** `_layout.tsx` files own shells. The root layout owns
-  `ThemeProvider`; branch layouts own auth chrome or authenticated sidebar
-  chrome.
-- **UI:** Prefer `@askrjs/themes/layouts`, `surfaces`, `controls`, `shells`,
-  `navs`, and `feedback` before writing local components. Use app-local
-  components only for product concepts such as `MetricCard` and `StatusBadge`.
+- **Layouts:** `_layout.tsx` files own shared chrome. Each application route
+  owns its semantic `Page` and `PageHeader`.
+- **Pages:** `src/pages` owns route parameters and page composition. Pages
+  compose feature entry points and must not reach directly into
+  `src/components`.
+- **Features:** `src/features` owns domain workflows, queries, state, and
+  domain-aware UI. Features may compose reusable application components.
+- **Components:** `src/components` owns reusable, domain-neutral compositions
+  of Askr primitives. Components must not depend on pages, features, adapters,
+  or shared domain modules.
+- **Shared:** `src/shared` owns domain-neutral utilities and controllers with no
+  UI of their own. Any feature may depend on shared code; shared code must not
+  depend on another layer under `src`.
+- **UI:** Import styled primitives from `@askrjs/themes/components`. Prefer
+  current semantic primitives such as `Page`, `PageHeader`, and `Block`;
+  do not adopt deprecated or legacy layout aliases.
+- **Imports:** Use the `@/` alias for cross-layer imports rooted at `src`.
+  Keep relative imports for files within the same local module.
 - **State:** `const [value, setValue] = state(initial)`. Read with `value()`,
   update with `setValue(...)`. Use `derive()` for computed values and
   `resource()` for async data.
@@ -64,6 +76,10 @@ npm run gen        # Regenerate src/adapters/api.g.ts from public/openapi.yml
 ## API Contract Boundary
 
 - `../public/openapi.yml` is the source of truth for the admin API surface.
+- **Storage vocabulary:** The generated S3-compatible API contract names stored
+  resources `Object`; the Sqrzl product and UI deliberately call them `Blob`.
+  Keep that translation inside the objects feature rather than leaking API DTO
+  vocabulary into UI copy or UI vocabulary into the generated client.
 - `src/adapters/api.g.ts` is generated output. Never manually patch generated
   endpoint signatures, paths, request construction, or response schemas.
 - When generated API methods are missing path parameters, query parameters,

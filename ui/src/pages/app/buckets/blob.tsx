@@ -8,14 +8,14 @@ import {
   Spinner,
   Block,
 } from '@askrjs/themes/components';
-import BlobBreadcrumbs from '../../../components/storage/blob-breadcrumbs';
-import BlobDetails from '../../../components/storage/blob-details';
 import {
+  BlobBreadcrumbs,
+  BlobDetails,
   findObjectByBlobId,
   loadObjectMetadata,
-} from '../../../features/objects/objects.query';
-import { blobFileName } from '../../../features/storage/path';
-import { bucketPath } from '../../../shared/routes';
+} from '@/features/objects';
+import { blobFileName } from '@/features/storage';
+import { bucketPath } from '@/shared/routes';
 
 export default function Blob({
   bucketName,

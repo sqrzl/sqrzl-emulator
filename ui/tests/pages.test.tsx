@@ -1,13 +1,13 @@
 import { cleanupApp, createSPA } from '@askrjs/askr/boot';
 import { describe, expect, it } from 'vite-plus/test';
 import { createRouteRegistry, route } from '@askrjs/askr/router';
-import AppLayout from '../src/pages/app/_layout';
-import LoginPage from '../src/pages/auth/login';
-import Home from '../src/pages/app/buckets';
-import BucketPage from '../src/pages/app/buckets/bucket';
-import BlobPage from '../src/pages/app/buckets/blob';
-import MailboxPage from '../src/pages/app/mailboxes/mailbox';
-import { blobIdFromBlobKey } from '../src/shared/routes';
+import AppLayout from '@/pages/app/_layout';
+import LoginPage from '@/pages/auth/login';
+import Home from '@/pages/app/buckets';
+import BucketPage from '@/pages/app/buckets/bucket';
+import BlobPage from '@/pages/app/buckets/blob';
+import MailboxPage from '@/pages/app/mailboxes/mailbox';
+import { blobIdFromBlobKey } from '@/shared/routes';
 
 const originalFetch = globalThis.fetch;
 

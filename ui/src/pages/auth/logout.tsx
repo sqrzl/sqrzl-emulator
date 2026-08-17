@@ -14,12 +14,9 @@ import {
   Spinner,
   Text,
 } from '@askrjs/themes/components';
-import {
-  isDevAuthBypassed,
-  logoutAdminSession,
-} from '../../features/auth/admin-session';
-import { adminBucketsPath } from '../../shared/routes';
-import { isUnauthorized } from '../../adapters/response';
+import { isDevAuthBypassed, logoutAdminSession } from '@/features/auth';
+import { adminBucketsPath } from '@/shared/routes';
+import { isUnauthorized } from '@/adapters/response';
 
 export default function LogoutPage() {
   if (isDevAuthBypassed()) {

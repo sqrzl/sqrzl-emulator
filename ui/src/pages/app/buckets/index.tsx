@@ -1,6 +1,5 @@
 import { Page, PageHeader } from '@askrjs/themes/components';
-import BucketModal from '../../../components/storage/bucket-modal';
-import BucketTable from '../../../components/storage/bucket-table';
+import { BucketModal, BucketTable } from '@/features/buckets';
 
 export default function Buckets() {
   return (

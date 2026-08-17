@@ -1,4 +1,4 @@
-import { adminApi } from '../../adapters';
+import { adminApi } from '@/adapters';
 import type {
   Acl,
   ListVersionsResponse,
@@ -6,9 +6,9 @@ import type {
   ObjectInfo,
   ObjectMetadata,
   TagsResponse,
-} from '../../adapters/api.g';
-import { blobIdFromBlobKey } from '../../shared/routes';
-import { unwrapProtectedResponse } from '../auth/admin-session';
+} from '@/adapters/api.g';
+import { blobIdFromBlobKey } from '@/shared/routes';
+import { unwrapProtectedResponse } from '@/features/auth';
 
 export type ObjectPage = {
   folders: ObjectFolderInfo[];

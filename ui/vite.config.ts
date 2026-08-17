@@ -1,8 +1,14 @@
+import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite-plus';
 import { askr } from '@askrjs/vite';
 import { sqrzlMockApi } from './dev/mock-api/plugin';
 
 export default defineConfig(({ mode }) => ({
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   plugins:
     mode === 'mock'
       ? [sqrzlMockApi() as unknown as ReturnType<typeof askr>, askr()]

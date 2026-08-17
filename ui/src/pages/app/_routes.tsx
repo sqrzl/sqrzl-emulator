@@ -12,8 +12,8 @@ import {
   adminBucketsPath,
   adminMailboxesPath,
   adminTextsPath,
-} from '../../shared/routes';
-import { normalizeStoragePathPrefix } from '../../features/storage/path';
+} from '@/shared/routes';
+import { normalizeStoragePathPrefix } from '@/features/storage';
 
 export function registerAppRoutes(): void {
   route(adminBucketsPath(), Buckets);

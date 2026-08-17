@@ -4,7 +4,7 @@ import type {
   InboundTextSimulationRequest,
   LifecycleConfiguration,
   TextDeliveryRequest,
-} from '../../src/adapters/api.g';
+} from '@/adapters/api.g';
 import { fixtureTime } from './fixtures';
 import type {
   MockBucket,

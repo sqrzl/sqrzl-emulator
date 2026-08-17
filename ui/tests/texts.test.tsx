@@ -1,9 +1,9 @@
 import { cleanupApp, createSPA } from '@askrjs/askr/boot';
 import { createRouteRegistry, route } from '@askrjs/askr/router';
 import { describe, expect, it } from 'vite-plus/test';
-import TextMessagePage from '../src/pages/app/texts/message';
-import TextConversationPage from '../src/pages/app/texts/conversation';
-import TextsPage from '../src/pages/app/texts';
+import TextMessagePage from '@/pages/app/texts/message';
+import TextConversationPage from '@/pages/app/texts/conversation';
+import TextsPage from '@/pages/app/texts';
 
 const originalFetch = globalThis.fetch;
 

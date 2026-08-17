@@ -1,8 +1,8 @@
 import { Link } from '@askrjs/askr/router';
 import { ArrowLeftIcon } from '@askrjs/lucide';
 import { Block, Button, Page, PageHeader } from '@askrjs/themes/components';
-import MailMessageDetails from '../../../components/mail/mail-message-details';
-import { mailboxPath } from '../../../shared/routes';
+import { MessageDetails } from '@/features/messages';
+import { mailboxPath } from '@/shared/routes';
 
 export default function MailMessagePage({
   mailboxName,
@@ -28,7 +28,7 @@ export default function MailMessagePage({
         }
       />
 
-      <MailMessageDetails mailboxName={mailboxName} messageId={messageId} />
+      <MessageDetails mailboxName={mailboxName} messageId={messageId} />
     </Page>
   );
 }

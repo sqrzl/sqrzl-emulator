@@ -1,7 +1,7 @@
 import { Link } from '@askrjs/askr/router';
 import { Button, Page, PageHeader } from '@askrjs/themes/components';
-import { adminBucketsPath } from '../../../shared/routes';
-import MailboxTable from '../../../components/mail/mailbox-table';
+import { adminBucketsPath } from '@/shared/routes';
+import { MailboxTable } from '@/features/mailboxes';
 
 export default function Mailboxes() {
   return (

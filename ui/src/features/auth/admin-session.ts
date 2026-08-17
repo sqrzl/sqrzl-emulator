@@ -1,12 +1,9 @@
 import type { FetchResponse } from '@fgrzl/fetch';
 import { navigate } from '@askrjs/askr/router';
 import type { AuthSession } from '@askrjs/auth';
-import { adminApi } from '../../adapters';
-import type {
-  AdminLoginRequest,
-  AdminSessionResponse,
-} from '../../adapters/api.g';
-import { isUnauthorized, unwrapResponse } from '../../adapters/response';
+import { adminApi } from '@/adapters';
+import type { AdminLoginRequest, AdminSessionResponse } from '@/adapters/api.g';
+import { isUnauthorized, unwrapResponse } from '@/adapters/response';
 
 export type AdminSession = AdminSessionResponse;
 

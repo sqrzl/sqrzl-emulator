@@ -1,17 +1,17 @@
-import { adminApi } from '../../adapters';
+import { adminApi } from '@/adapters';
 import type {
   Acl,
   BucketPolicyDocument,
   LifecycleConfiguration,
   ListMultipartUploadsResponse,
   MultipartUpload,
-} from '../../adapters/api.g';
-import { unwrapProtectedResponse } from '../auth/admin-session';
+} from '@/adapters/api.g';
+import { unwrapProtectedResponse } from '@/features/auth';
 import {
   countBucketObjects,
   deleteAllBucketObjects,
   loadObjectPage,
-} from '../objects/objects.query';
+} from '@/features/objects';
 
 export type BucketOverviewItem = {
   name: string;

@@ -14,11 +14,8 @@ import {
   Page,
   Text,
 } from '@askrjs/themes/components';
-import {
-  isDevAuthBypassed,
-  loginAdminSession,
-} from '../../features/auth/admin-session';
-import { adminBucketsPath } from '../../shared/routes';
+import { isDevAuthBypassed, loginAdminSession } from '@/features/auth';
+import { adminBucketsPath } from '@/shared/routes';
 
 function resolveNextTarget() {
   const next = currentRoute().query.get('next');

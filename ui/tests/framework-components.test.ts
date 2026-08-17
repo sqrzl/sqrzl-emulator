@@ -37,4 +37,40 @@ describe('Askr component boundaries', () => {
       }
     }
   });
+
+  it('keeps pages, features, and components flowing in one direction', () => {
+    for (const file of sourceFiles(sourceRoot)) {
+      const source = readFileSync(file, 'utf8');
+      const normalizedFile = file.replace(/\\/g, '/');
+
+      expect(
+        source,
+        `${file} uses a deep parent-relative cross-layer import`
+      ).not.toMatch(/from ['"](?:\.\.\/){2,}/);
+
+      if (normalizedFile.includes('/src/components/')) {
+        expect(source, `${file} reaches above the component layer`).not.toMatch(
+          /from ['"]@\/(?:adapters|features|pages|shared)(?:\/|['"])/
+        );
+      }
+
+      if (normalizedFile.includes('/src/pages/')) {
+        expect(source, `${file} bypasses the feature layer`).not.toMatch(
+          /from ['"]@\/components(?:\/|['"])/
+        );
+      }
+
+      if (normalizedFile.includes('/src/features/')) {
+        expect(source, `${file} depends on a page`).not.toMatch(
+          /from ['"]@\/pages(?:\/|['"])/
+        );
+      }
+
+      if (normalizedFile.includes('/src/shared/')) {
+        expect(source, `${file} depends on another source layer`).not.toMatch(
+          /from ['"](?:@\/|\.\.\/)/
+        );
+      }
+    }
+  });
 });

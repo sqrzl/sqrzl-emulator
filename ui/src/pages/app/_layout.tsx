@@ -12,13 +12,13 @@ import {
   Navbar,
 } from '@askrjs/themes/components';
 import { ThemeToggle } from '@askrjs/themes/theme';
-import { isDevAuthBypassed } from '../../features/auth/admin-session';
+import { isDevAuthBypassed } from '@/features/auth';
 import {
   adminBucketsPath,
   adminMailboxesPath,
   adminTextsPath,
   logoutPath,
-} from '../../shared/routes';
+} from '@/shared/routes';
 
 export default function AppLayout({ children }: { children?: unknown }) {
   const showLogout = !isDevAuthBypassed();

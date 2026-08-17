@@ -1,8 +1,8 @@
 import { Link } from '@askrjs/askr/router';
 import { ArrowLeftIcon } from '@askrjs/lucide';
 import { Button, Page, PageHeader } from '@askrjs/themes/components';
-import TextMessageDetails from '../../../components/text/text-message-details';
-import { textConversationPath } from '../../../shared/routes';
+import { MessageDetails } from '@/features/text-messages';
+import { textConversationPath } from '@/shared/routes';
 
 export default function TextMessagePage({
   peer,
@@ -25,7 +25,7 @@ export default function TextMessagePage({
           </Button>
         }
       />
-      <TextMessageDetails peer={peer} messageId={messageId} />
+      <MessageDetails peer={peer} messageId={messageId} />
     </Page>
   );
 }

@@ -9,7 +9,7 @@ import type {
   ObjectVersionInfo,
   TextDestination,
   TextMessageDetail,
-} from '../../src/adapters/api.g';
+} from '@/adapters/api.g';
 
 export type MockRequest = {
   method: string;

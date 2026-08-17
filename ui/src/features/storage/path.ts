@@ -1,4 +1,4 @@
-import { bucketFolderPath, bucketPath } from '../../shared/routes';
+import { bucketFolderPath, bucketPath } from '@/shared/routes';
 
 export type FolderCrumb = {
   label: string;

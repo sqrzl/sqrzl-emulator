@@ -2,7 +2,7 @@ import type {
   MailAddress,
   MessageDetail,
   TextProvider,
-} from '../../src/adapters/api.g';
+} from '@/adapters/api.g';
 import type {
   MockBucket,
   MockMailMessage,

@@ -7,8 +7,8 @@ import {
   type RouteComponent,
 } from '@askrjs/askr/router';
 import type { AuthContext } from '@askrjs/auth';
-import { routeRegistry } from '../src/pages/_routes';
-import BucketPage from '../src/pages/app/buckets/bucket';
+import { routeRegistry } from '@/pages/_routes';
+import BucketPage from '@/pages/app/buckets/bucket';
 import {
   adminBucketsPath,
   blobIdFromBlobKey,
@@ -23,7 +23,7 @@ import {
   textMessagePath,
   loginPath,
   logoutPath,
-} from '../src/shared/routes';
+} from '@/shared/routes';
 
 const originalFetch = globalThis.fetch;
 

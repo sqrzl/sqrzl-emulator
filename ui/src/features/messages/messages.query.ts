@@ -1,6 +1,6 @@
-import { adminApi } from '../../adapters';
-import type { MessageDetail, MessageSummary } from '../../adapters/api.g';
-import { unwrapProtectedResponse } from '../auth/admin-session';
+import { adminApi } from '@/adapters';
+import type { MessageDetail, MessageSummary } from '@/adapters/api.g';
+import { unwrapProtectedResponse } from '@/features/auth';
 
 export type MessagePage = {
   items: MessageSummary[];

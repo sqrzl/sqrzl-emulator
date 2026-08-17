@@ -3,9 +3,9 @@ import {
   loginAdminSession,
   logoutAdminSession,
   resolveAdminSession,
-} from '../src/features/auth/admin-session';
+} from '@/features/auth';
 import '../src/pages/_routes';
-import { routeRegistry } from '../src/pages/_routes';
+import { routeRegistry } from '@/pages/_routes';
 
 const originalFetch = globalThis.fetch;
 

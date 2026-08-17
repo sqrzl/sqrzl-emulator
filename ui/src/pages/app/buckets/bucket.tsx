@@ -1,15 +1,14 @@
 import { navigate } from '@askrjs/askr/router';
 import { ArrowLeftIcon, ArrowUpIcon } from '@askrjs/lucide';
 import { Button, Page, PageHeader } from '@askrjs/themes/components';
-import BucketBreadcrumbs from '../../../components/storage/bucket-breadcrumbs';
-import BlobModal from '../../../components/storage/blob-modal';
-import BlobTable from '../../../components/storage/blob-table';
+import { BucketBreadcrumbs } from '@/features/buckets';
+import { BlobModal, BlobTable } from '@/features/objects';
 import {
   normalizeStoragePathPrefix,
   parentStoragePathPrefix,
   storagePathLabel,
-} from '../../../features/storage/path';
-import { adminBucketsPath, bucketFolderPath } from '../../../shared/routes';
+} from '@/features/storage';
+import { adminBucketsPath, bucketFolderPath } from '@/shared/routes';
 
 export default function Bucket({
   bucketName,

@@ -6,7 +6,7 @@ import {
   listBucketPage,
   loadBuckets,
   setBucketVersioning,
-} from '../src/features/buckets/buckets.query';
+} from '@/features/buckets/buckets.query';
 import {
   countBucketObjects,
   deleteAllBucketObjects,
@@ -19,8 +19,8 @@ import {
   loadObjectVersions,
   putObjectContent,
   putObjectTags,
-} from '../src/features/objects/objects.query';
-import { blobIdFromBlobKey } from '../src/shared/routes';
+} from '@/features/objects/objects.query';
+import { blobIdFromBlobKey } from '@/shared/routes';
 
 const originalFetch = globalThis.fetch;
 
