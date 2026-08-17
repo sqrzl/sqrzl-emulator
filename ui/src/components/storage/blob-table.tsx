@@ -2,7 +2,7 @@ import { For } from '@askrjs/askr/control';
 import { createMutation } from '@askrjs/askr/data';
 import { Link } from '@askrjs/askr/router';
 import { FileIcon, FolderIcon, TrashIcon } from '@askrjs/lucide';
-import { Badge, Button, Inline } from '@askrjs/themes/components';
+import { Badge, Button, Block } from '@askrjs/themes/components';
 import {
   Table,
   TableBody,
@@ -10,7 +10,7 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import {
   deleteObject as deleteBlob,
   loadObjectPage,
@@ -48,9 +48,10 @@ export default function BlobTable({
 
       return {
         items: [
-          ...page.folders.map(
-            (folder): BlobBrowserRow => ({ type: 'folder', folder })
-          ),
+          ...page.folders.map((folder): BlobBrowserRow => ({
+            type: 'folder',
+            folder,
+          })),
           ...page.items.map((blob): BlobBrowserRow => ({ type: 'blob', blob })),
         ],
         next: page.next,
@@ -118,7 +119,9 @@ export default function BlobTable({
               <TableHeaderCell>Size</TableHeaderCell>
               <TableHeaderCell>Last modified</TableHeaderCell>
               <TableHeaderCell>
-                <Inline justify="end">Actions</Inline>
+                <Block direction="row" justify="end">
+                  Actions
+                </Block>
               </TableHeaderCell>
             </TableRow>
           </TableHead>
@@ -127,12 +130,17 @@ export default function BlobTable({
               {(folder) => (
                 <TableRow key={folder.prefix}>
                   <TableCell>
-                    <Inline gap="2" align="center" wrap>
+                    <Block
+                      direction="row"
+                      gap="xs"
+                      align="center"
+                      style={{ flexWrap: 'wrap' }}
+                    >
                       <FolderIcon aria-hidden="true" />
                       <Link href={bucketFolderPath(bucketName, folder.prefix)}>
                         {folder.name}
                       </Link>
-                    </Inline>
+                    </Block>
                   </TableCell>
                   <TableCell>
                     <Badge variant="secondary">Folder</Badge>
@@ -148,12 +156,17 @@ export default function BlobTable({
               {(blob) => (
                 <TableRow key={blob.key}>
                   <TableCell>
-                    <Inline gap="2" align="center" wrap>
+                    <Block
+                      direction="row"
+                      gap="xs"
+                      align="center"
+                      style={{ flexWrap: 'wrap' }}
+                    >
                       <FileIcon aria-hidden="true" />
                       <Link href={blobPath(bucketName, blob.key, blob.key)}>
                         {blob.key.slice(pathPrefix.length)}
                       </Link>
-                    </Inline>
+                    </Block>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">Blob</Badge>
@@ -166,7 +179,7 @@ export default function BlobTable({
                     {formatRelativeTime(blob.last_modified)}
                   </TableCell>
                   <TableCell>
-                    <Inline justify="end" align="center">
+                    <Block direction="row" justify="end" align="center">
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -175,7 +188,7 @@ export default function BlobTable({
                       >
                         <TrashIcon aria-hidden="true" />
                       </Button>
-                    </Inline>
+                    </Block>
                   </TableCell>
                 </TableRow>
               )}

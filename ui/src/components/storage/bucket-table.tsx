@@ -1,7 +1,7 @@
 import { For } from '@askrjs/askr/control';
 import { Link } from '@askrjs/askr/router';
 import { DatabaseIcon, TrashIcon } from '@askrjs/lucide';
-import { Button, Inline } from '@askrjs/themes/components';
+import { Button, Block } from '@askrjs/themes/components';
 import {
   Table,
   TableBody,
@@ -9,7 +9,7 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import { createMutation } from '@askrjs/askr/data';
 import BucketDeleteDialog from './bucket-delete-dialog';
 import DataTableSection from './data-table-section';
@@ -91,7 +91,9 @@ export default function BucketTable() {
               <TableHeaderCell>Bucket</TableHeaderCell>
               <TableHeaderCell>Created</TableHeaderCell>
               <TableHeaderCell>
-                <Inline justify="end">Actions</Inline>
+                <Block direction="row" justify="end">
+                  Actions
+                </Block>
               </TableHeaderCell>
             </TableRow>
           </TableHead>
@@ -100,14 +102,19 @@ export default function BucketTable() {
               {(bucket) => (
                 <TableRow key={bucket.name}>
                   <TableCell>
-                    <Inline gap="2" align="center" wrap>
+                    <Block
+                      direction="row"
+                      gap="xs"
+                      align="center"
+                      style={{ flexWrap: 'wrap' }}
+                    >
                       <DatabaseIcon aria-hidden="true" />
                       <Link href={bucketPath(bucket.name)}>{bucket.name}</Link>
-                    </Inline>
+                    </Block>
                   </TableCell>
                   <TableCell>{formatRelativeTime(bucket.createdAt)}</TableCell>
                   <TableCell>
-                    <Inline justify="end" align="center">
+                    <Block direction="row" justify="end" align="center">
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -118,7 +125,7 @@ export default function BucketTable() {
                       >
                         <TrashIcon aria-hidden="true" />
                       </Button>
-                    </Inline>
+                    </Block>
                   </TableCell>
                 </TableRow>
               )}

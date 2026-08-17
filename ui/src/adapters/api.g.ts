@@ -27,758 +27,1601 @@ export function createAdapter(client: FetchClient): {
    * Create admin session
    *
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<SuccessResponse>
    */
-	loginAdminSession: (body: AdminLoginRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<SuccessResponse>>;
+  loginAdminSession: (
+    body: AdminLoginRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<SuccessResponse>>;
   /**
    * Clear admin session
    *
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<SuccessResponse>
    */
-	logoutAdminSession: (options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<SuccessResponse>>;
+  logoutAdminSession: (options?: {
+    signal?: AbortSignal;
+    timeout?: number;
+    operationId?: string;
+  }) => Promise<FetchResponse<SuccessResponse>>;
   /**
    * Get admin session status
    *
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<AdminSessionResponse>
    */
-	getAdminSession: (options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<AdminSessionResponse>>;
+  getAdminSession: (options?: {
+    signal?: AbortSignal;
+    timeout?: number;
+    operationId?: string;
+  }) => Promise<FetchResponse<AdminSessionResponse>>;
   /**
    * Create bucket
    *
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<BucketDetails>
    */
-	createBucket: (body: CreateBucketRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<BucketDetails>>;
+  createBucket: (
+    body: CreateBucketRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<BucketDetails>>;
   /**
    * List buckets
    *
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListBucketsResponse>
    */
-	listBuckets: (query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListBucketsResponse>>;
+  listBuckets: (
+    query?: { next?: string; limit?: number; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListBucketsResponse>>;
   /**
    * Delete bucket
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteBucket: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteBucket: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get bucket
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<BucketDetails>
    */
-	getBucket: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<BucketDetails>>;
+  getBucket: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<BucketDetails>>;
   /**
    * Get bucket ACL
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Acl>
    */
-	getBucketAcl: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Acl>>;
+  getBucketAcl: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Acl>>;
   /**
    * Replace bucket ACL
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Acl>
    */
-	setBucketAcl: (bucketName: string, body: Acl, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Acl>>;
+  setBucketAcl: (
+    bucketName: string,
+    body: Acl,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Acl>>;
   /**
    * Delete bucket lifecycle configuration
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteBucketLifecycle: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteBucketLifecycle: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get bucket lifecycle configuration
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<LifecycleConfiguration>
    */
-	getBucketLifecycle: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<LifecycleConfiguration>>;
+  getBucketLifecycle: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<LifecycleConfiguration>>;
   /**
    * Replace bucket lifecycle configuration
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<LifecycleConfiguration>
    */
-	setBucketLifecycle: (bucketName: string, body: LifecycleConfiguration, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<LifecycleConfiguration>>;
+  setBucketLifecycle: (
+    bucketName: string,
+    body: LifecycleConfiguration,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<LifecycleConfiguration>>;
   /**
    * List multipart uploads
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListMultipartUploadsResponse>
    */
-	listMultipartUploads: (bucketName: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListMultipartUploadsResponse>>;
+  listMultipartUploads: (
+    bucketName: string,
+    query?: { next?: string; limit?: number; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListMultipartUploadsResponse>>;
   /**
    * Abort multipart upload
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param uploadId - Multipart upload ID.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	abortMultipartUpload: (bucketName: string, uploadId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  abortMultipartUpload: (
+    bucketName: string,
+    uploadId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get multipart upload
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param uploadId - Multipart upload ID.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<MultipartUpload>
    */
-	getMultipartUpload: (bucketName: string, uploadId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<MultipartUpload>>;
+  getMultipartUpload: (
+    bucketName: string,
+    uploadId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<MultipartUpload>>;
   /**
    * List blobs in a bucket
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListObjectsResponse>
    */
-	listObjects: (bucketName: string, query?: { next?: string; limit?: number; prefix?: string; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListObjectsResponse>>;
+  listObjects: (
+    bucketName: string,
+    query?: { next?: string; limit?: number; prefix?: string; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListObjectsResponse>>;
   /**
    * Delete blob
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteObject: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteObject: (
+    bucketName: string,
+    objectKey: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get blob metadata
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ObjectMetadata>
    */
-	getObjectMetadata: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ObjectMetadata>>;
+  getObjectMetadata: (
+    bucketName: string,
+    objectKey: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ObjectMetadata>>;
   /**
    * Get blob ACL
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Acl>
    */
-	getObjectAcl: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Acl>>;
+  getObjectAcl: (
+    bucketName: string,
+    objectKey: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Acl>>;
   /**
    * Replace blob ACL
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Acl>
    */
-	setObjectAcl: (bucketName: string, objectKey: string, body: Acl, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Acl>>;
+  setObjectAcl: (
+    bucketName: string,
+    objectKey: string,
+    body: Acl,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Acl>>;
   /**
    * Download blob content
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Blob>
    */
-	downloadObjectContent: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Blob>>;
+  downloadObjectContent: (
+    bucketName: string,
+    objectKey: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Blob>>;
   /**
    * Create or replace blob content
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ObjectMetadata>
    */
-	putObjectContent: (bucketName: string, objectKey: string, body: BodyInit, headers?: HeadersInit, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ObjectMetadata>>;
+  putObjectContent: (
+    bucketName: string,
+    objectKey: string,
+    body: BodyInit,
+    headers?: HeadersInit,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ObjectMetadata>>;
   /**
    * Get blob tags
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TagsResponse>
    */
-	getObjectTags: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TagsResponse>>;
+  getObjectTags: (
+    bucketName: string,
+    objectKey: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TagsResponse>>;
   /**
    * Replace blob tags
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TagsResponse>
    */
-	putObjectTags: (bucketName: string, objectKey: string, body: TagsRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TagsResponse>>;
+  putObjectTags: (
+    bucketName: string,
+    objectKey: string,
+    body: TagsRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TagsResponse>>;
   /**
    * List blob versions
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListVersionsResponse>
    */
-	listObjectVersions: (bucketName: string, objectKey: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListVersionsResponse>>;
+  listObjectVersions: (
+    bucketName: string,
+    objectKey: string,
+    query?: { next?: string; limit?: number; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListVersionsResponse>>;
   /**
    * Delete blob version
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param objectKey - Slash-separated blob key. URL encode the full key when used in the path.
    * @param versionId - Object version identifier.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteObjectVersion: (bucketName: string, objectKey: string, versionId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteObjectVersion: (
+    bucketName: string,
+    objectKey: string,
+    versionId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Delete bucket policy
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteBucketPolicy: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteBucketPolicy: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get bucket policy
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<BucketPolicyDocument>
    */
-	getBucketPolicy: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<BucketPolicyDocument>>;
+  getBucketPolicy: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<BucketPolicyDocument>>;
   /**
    * Replace bucket policy
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<BucketPolicyDocument>
    */
-	setBucketPolicy: (bucketName: string, body: BucketPolicyDocument, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<BucketPolicyDocument>>;
+  setBucketPolicy: (
+    bucketName: string,
+    body: BucketPolicyDocument,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<BucketPolicyDocument>>;
   /**
    * Get bucket versioning status
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<VersioningStatus>
    */
-	getBucketVersioning: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<VersioningStatus>>;
+  getBucketVersioning: (
+    bucketName: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<VersioningStatus>>;
   /**
    * Set bucket versioning status
    *
    * @param bucketName - Bucket name. Use 3-63 lowercase letters, numbers, and hyphens.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<VersioningStatus>
    */
-	setBucketVersioning: (bucketName: string, body: VersioningStatus, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<VersioningStatus>>;
+  setBucketVersioning: (
+    bucketName: string,
+    body: VersioningStatus,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<VersioningStatus>>;
   /**
    * List captured mailboxes
    *
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListMailboxesResponse>
    */
-	listMailboxes: (query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListMailboxesResponse>>;
+  listMailboxes: (
+    query?: { next?: string; limit?: number; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListMailboxesResponse>>;
   /**
    * Delete a mailbox and all captured messages
    *
    * @param mailbox - Mailbox identifier (recipient email, URL encoded when required).
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteMailbox: (mailbox: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteMailbox: (
+    mailbox: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * List messages in a mailbox
    *
    * @param mailbox - Mailbox identifier (recipient email, URL encoded when required).
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListMessagesResponse>
    */
-	listMailboxMessages: (mailbox: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListMessagesResponse>>;
+  listMailboxMessages: (
+    mailbox: string,
+    query?: { next?: string; limit?: number; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListMessagesResponse>>;
   /**
    * Delete a mailbox message
    *
    * @param mailbox - Mailbox identifier (recipient email, URL encoded when required).
    * @param messageId - Internal emulator message identifier.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteMailboxMessage: (mailbox: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteMailboxMessage: (
+    mailbox: string,
+    messageId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get a mailbox message
    *
    * @param mailbox - Mailbox identifier (recipient email, URL encoded when required).
    * @param messageId - Internal emulator message identifier.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<MessageDetail>
    */
-	getMailboxMessage: (mailbox: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<MessageDetail>>;
+  getMailboxMessage: (
+    mailbox: string,
+    messageId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<MessageDetail>>;
   /**
    * Download a message attachment
    *
    * @param mailbox - Mailbox identifier (recipient email, URL encoded when required).
    * @param messageId - Internal emulator message identifier.
    * @param filename - Attachment filename (URL encoded when required).
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Blob>
    */
-	getMailboxMessageAttachment: (mailbox: string, messageId: string, filename: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Blob>>;
+  getMailboxMessageAttachment: (
+    mailbox: string,
+    messageId: string,
+    filename: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Blob>>;
   /**
    * Download raw message content
    *
    * @param mailbox - Mailbox identifier (recipient email, URL encoded when required).
    * @param messageId - Internal emulator message identifier.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Blob>
    */
-	getMailboxMessageContent: (mailbox: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Blob>>;
+  getMailboxMessageContent: (
+    mailbox: string,
+    messageId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Blob>>;
   /**
    * Create a linked retry attempt without overwriting callback history
    *
    * @param attemptId - attemptId parameter
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TextCallbackAttempt>
    */
-	retryTextCallback: (attemptId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TextCallbackAttempt>>;
+  retryTextCallback: (
+    attemptId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TextCallbackAttempt>>;
   /**
    * List text conversations grouped by remote peer
    *
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListTextConversationsResponse>
    */
-	listTextConversations: (query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListTextConversationsResponse>>;
+  listTextConversations: (
+    query?: { next?: string; limit?: number; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListTextConversationsResponse>>;
   /**
    * Delete a text conversation and all canonical messages
    *
    * @param peer - Original remote phone number or peer key, URL encoded as one segment.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteTextConversation: (peer: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteTextConversation: (
+    peer: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * List bidirectional messages for a peer
    *
    * @param peer - Original remote phone number or peer key, URL encoded as one segment.
    * @param query - Query parameters
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<ListTextMessagesResponse>
    */
-	listTextConversationMessages: (peer: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<ListTextMessagesResponse>>;
+  listTextConversationMessages: (
+    peer: string,
+    query?: { next?: string; limit?: number; search?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<ListTextMessagesResponse>>;
   /**
    * Delete one canonical text message
    *
    * @param peer - Original remote phone number or peer key, URL encoded as one segment.
    * @param messageId - messageId parameter
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteTextMessage: (peer: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteTextMessage: (
+    peer: string,
+    messageId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get text message detail and callback history
    *
    * @param peer - Original remote phone number or peer key, URL encoded as one segment.
    * @param messageId - messageId parameter
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TextMessageDetail>
    */
-	getTextMessage: (peer: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TextMessageDetail>>;
+  getTextMessage: (
+    peer: string,
+    messageId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TextMessageDetail>>;
   /**
    * Download locally stored inbound MMS media
    *
    * @param peer - Original remote phone number or peer key, URL encoded as one segment.
    * @param messageId - messageId parameter
    * @param mediaId - mediaId parameter
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<Blob>
    */
-	getTextMessageMedia: (peer: string, messageId: string, mediaId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<Blob>>;
+  getTextMessageMedia: (
+    peer: string,
+    messageId: string,
+    mediaId: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<Blob>>;
   /**
    * Delete a callback destination
    *
    * @param provider - provider parameter
    * @param localNumber - Provider-facing local number or identity, URL encoded as one segment.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<boolean>
    */
-	deleteTextDestination: (provider: TextProvider, localNumber: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<boolean>>;
+  deleteTextDestination: (
+    provider: TextProvider,
+    localNumber: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
   /**
    * Get a provider/local-number callback destination
    *
    * @param provider - provider parameter
    * @param localNumber - Provider-facing local number or identity, URL encoded as one segment.
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TextDestination>
    */
-	getTextDestination: (provider: TextProvider, localNumber: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TextDestination>>;
+  getTextDestination: (
+    provider: TextProvider,
+    localNumber: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TextDestination>>;
   /**
    * Create or replace a callback destination
    *
    * @param provider - provider parameter
    * @param localNumber - Provider-facing local number or identity, URL encoded as one segment.
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TextDestination>
    */
-	putTextDestination: (provider: TextProvider, localNumber: string, body: PutTextDestinationRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TextDestination>>;
+  putTextDestination: (
+    provider: TextProvider,
+    localNumber: string,
+    body: PutTextDestinationRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TextDestination>>;
   /**
    * Explicitly transition an accepted outbound message to delivered or failed
    *
    * @param messageId - messageId parameter
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TextMessageDetail>
    */
-	transitionTextDelivery: (messageId: string, body: TextDeliveryRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TextMessageDetail>>;
+  transitionTextDelivery: (
+    messageId: string,
+    body: TextDeliveryRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TextMessageDetail>>;
   /**
    * Store an inbound SMS or Twilio MMS and attempt its configured callback
    *
    * @param body - Request body
-	 * @param options - Request options (signal, timeout, operationId)
+   * @param options - Request options (signal, timeout, operationId)
    * @returns Promise resolving to FetchResponse<TextMessageDetail>
    */
-	simulateInboundText: (body: InboundTextSimulationRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }) => Promise<FetchResponse<TextMessageDetail>>;
+  simulateInboundText: (
+    body: InboundTextSimulationRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<TextMessageDetail>>;
 } {
   return {
-		loginAdminSession: (body: AdminLoginRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<SuccessResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "loginAdminSession" };
-	return client.post(`/admin/v1/auth/login`, body, undefined, finalOptions);
+    loginAdminSession: (
+      body: AdminLoginRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<SuccessResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'loginAdminSession',
+      };
+      return client.post(`/admin/v1/auth/login`, body, undefined, finalOptions);
     },
-		logoutAdminSession: (options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<SuccessResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "logoutAdminSession" };
-	return client.post(`/admin/v1/auth/logout`, undefined, undefined, finalOptions);
+    logoutAdminSession: (options?: {
+      signal?: AbortSignal;
+      timeout?: number;
+      operationId?: string;
+    }): Promise<FetchResponse<SuccessResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'logoutAdminSession',
+      };
+      return client.post(
+        `/admin/v1/auth/logout`,
+        undefined,
+        undefined,
+        finalOptions
+      );
     },
-		getAdminSession: (options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<AdminSessionResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getAdminSession" };
-	return client.get(`/admin/v1/auth/session`, undefined, finalOptions);
+    getAdminSession: (options?: {
+      signal?: AbortSignal;
+      timeout?: number;
+      operationId?: string;
+    }): Promise<FetchResponse<AdminSessionResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getAdminSession',
+      };
+      return client.get(`/admin/v1/auth/session`, undefined, finalOptions);
     },
-		createBucket: (body: CreateBucketRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<BucketDetails>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "createBucket" };
-	return client.post(`/admin/v1/buckets`, body, undefined, finalOptions);
+    createBucket: (
+      body: CreateBucketRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<BucketDetails>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'createBucket',
+      };
+      return client.post(`/admin/v1/buckets`, body, undefined, finalOptions);
     },
-		listBuckets: (query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListBucketsResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listBuckets" };
+    listBuckets: (
+      query?: { next?: string; limit?: number; search?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListBucketsResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listBuckets',
+      };
       const queryString = query ? buildQueryParams(query) : '';
       const url = `/admin/v1/buckets` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      return client.get(url, undefined, finalOptions);
     },
-		deleteBucket: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteBucket" };
-	return client.del(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}`, undefined, finalOptions);
+    deleteBucket: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteBucket',
+      };
+      return client.del(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getBucket: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<BucketDetails>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getBucket" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}`, undefined, finalOptions);
+    getBucket: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<BucketDetails>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getBucket',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getBucketAcl: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Acl>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getBucketAcl" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/acl`, undefined, finalOptions);
+    getBucketAcl: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Acl>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getBucketAcl',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/acl`,
+        undefined,
+        finalOptions
+      );
     },
-		setBucketAcl: (bucketName: string, body: Acl, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Acl>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "setBucketAcl" };
-	return client.put(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/acl`, body, undefined, finalOptions);
+    setBucketAcl: (
+      bucketName: string,
+      body: Acl,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Acl>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'setBucketAcl',
+      };
+      return client.put(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/acl`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		deleteBucketLifecycle: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteBucketLifecycle" };
-	return client.del(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/lifecycle`, undefined, finalOptions);
+    deleteBucketLifecycle: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteBucketLifecycle',
+      };
+      return client.del(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/lifecycle`,
+        undefined,
+        finalOptions
+      );
     },
-		getBucketLifecycle: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<LifecycleConfiguration>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getBucketLifecycle" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/lifecycle`, undefined, finalOptions);
+    getBucketLifecycle: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<LifecycleConfiguration>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getBucketLifecycle',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/lifecycle`,
+        undefined,
+        finalOptions
+      );
     },
-		setBucketLifecycle: (bucketName: string, body: LifecycleConfiguration, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<LifecycleConfiguration>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "setBucketLifecycle" };
-	return client.put(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/lifecycle`, body, undefined, finalOptions);
+    setBucketLifecycle: (
+      bucketName: string,
+      body: LifecycleConfiguration,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<LifecycleConfiguration>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'setBucketLifecycle',
+      };
+      return client.put(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/lifecycle`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		listMultipartUploads: (bucketName: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListMultipartUploadsResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listMultipartUploads" };
+    listMultipartUploads: (
+      bucketName: string,
+      query?: { next?: string; limit?: number; search?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListMultipartUploadsResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listMultipartUploads',
+      };
       const queryString = query ? buildQueryParams(query) : '';
-      const url = `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/multipart-uploads` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      const url =
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/multipart-uploads` +
+        (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
     },
-		abortMultipartUpload: (bucketName: string, uploadId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "abortMultipartUpload" };
-	return client.del(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/multipart-uploads/${encodeURIComponent(String(uploadId))}`, undefined, finalOptions);
+    abortMultipartUpload: (
+      bucketName: string,
+      uploadId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'abortMultipartUpload',
+      };
+      return client.del(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/multipart-uploads/${encodeURIComponent(String(uploadId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getMultipartUpload: (bucketName: string, uploadId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<MultipartUpload>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getMultipartUpload" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/multipart-uploads/${encodeURIComponent(String(uploadId))}`, undefined, finalOptions);
+    getMultipartUpload: (
+      bucketName: string,
+      uploadId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<MultipartUpload>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getMultipartUpload',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/multipart-uploads/${encodeURIComponent(String(uploadId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		listObjects: (bucketName: string, query?: { next?: string; limit?: number; prefix?: string; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListObjectsResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listObjects" };
+    listObjects: (
+      bucketName: string,
+      query?: {
+        next?: string;
+        limit?: number;
+        prefix?: string;
+        search?: string;
+      },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListObjectsResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listObjects',
+      };
       const queryString = query ? buildQueryParams(query) : '';
-      const url = `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      const url =
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects` +
+        (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
     },
-		deleteObject: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteObject" };
-	return client.del(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}`, undefined, finalOptions);
+    deleteObject: (
+      bucketName: string,
+      objectKey: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteObject',
+      };
+      return client.del(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getObjectMetadata: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ObjectMetadata>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getObjectMetadata" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}`, undefined, finalOptions);
+    getObjectMetadata: (
+      bucketName: string,
+      objectKey: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ObjectMetadata>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getObjectMetadata',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getObjectAcl: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Acl>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getObjectAcl" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/acl`, undefined, finalOptions);
+    getObjectAcl: (
+      bucketName: string,
+      objectKey: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Acl>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getObjectAcl',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/acl`,
+        undefined,
+        finalOptions
+      );
     },
-		setObjectAcl: (bucketName: string, objectKey: string, body: Acl, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Acl>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "setObjectAcl" };
-	return client.put(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/acl`, body, undefined, finalOptions);
+    setObjectAcl: (
+      bucketName: string,
+      objectKey: string,
+      body: Acl,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Acl>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'setObjectAcl',
+      };
+      return client.put(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/acl`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		downloadObjectContent: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Blob>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "downloadObjectContent" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/content`, undefined, finalOptions);
+    downloadObjectContent: (
+      bucketName: string,
+      objectKey: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Blob>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'downloadObjectContent',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/content`,
+        undefined,
+        finalOptions
+      );
     },
-		putObjectContent: (bucketName: string, objectKey: string, body: BodyInit, headers?: HeadersInit, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ObjectMetadata>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "putObjectContent" };
-	return client.request<ObjectMetadata>(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/content`, { method: "PUT", headers, body }, finalOptions);
+    putObjectContent: (
+      bucketName: string,
+      objectKey: string,
+      body: BodyInit,
+      headers?: HeadersInit,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ObjectMetadata>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'putObjectContent',
+      };
+      return client.request<ObjectMetadata>(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/content`,
+        { method: 'PUT', headers, body },
+        finalOptions
+      );
     },
-		getObjectTags: (bucketName: string, objectKey: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TagsResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getObjectTags" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/tags`, undefined, finalOptions);
+    getObjectTags: (
+      bucketName: string,
+      objectKey: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TagsResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getObjectTags',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/tags`,
+        undefined,
+        finalOptions
+      );
     },
-		putObjectTags: (bucketName: string, objectKey: string, body: TagsRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TagsResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "putObjectTags" };
-	return client.put(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/tags`, body, undefined, finalOptions);
+    putObjectTags: (
+      bucketName: string,
+      objectKey: string,
+      body: TagsRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TagsResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'putObjectTags',
+      };
+      return client.put(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/tags`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		listObjectVersions: (bucketName: string, objectKey: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListVersionsResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listObjectVersions" };
+    listObjectVersions: (
+      bucketName: string,
+      objectKey: string,
+      query?: { next?: string; limit?: number; search?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListVersionsResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listObjectVersions',
+      };
       const queryString = query ? buildQueryParams(query) : '';
-      const url = `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/versions` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      const url =
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/versions` +
+        (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
     },
-		deleteObjectVersion: (bucketName: string, objectKey: string, versionId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteObjectVersion" };
-	return client.del(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/versions/${encodeURIComponent(String(versionId))}`, undefined, finalOptions);
+    deleteObjectVersion: (
+      bucketName: string,
+      objectKey: string,
+      versionId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteObjectVersion',
+      };
+      return client.del(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/objects/${encodeURIComponent(String(objectKey))}/versions/${encodeURIComponent(String(versionId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		deleteBucketPolicy: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteBucketPolicy" };
-	return client.del(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/policy`, undefined, finalOptions);
+    deleteBucketPolicy: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteBucketPolicy',
+      };
+      return client.del(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/policy`,
+        undefined,
+        finalOptions
+      );
     },
-		getBucketPolicy: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<BucketPolicyDocument>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getBucketPolicy" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/policy`, undefined, finalOptions);
+    getBucketPolicy: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<BucketPolicyDocument>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getBucketPolicy',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/policy`,
+        undefined,
+        finalOptions
+      );
     },
-		setBucketPolicy: (bucketName: string, body: BucketPolicyDocument, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<BucketPolicyDocument>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "setBucketPolicy" };
-	return client.put(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/policy`, body, undefined, finalOptions);
+    setBucketPolicy: (
+      bucketName: string,
+      body: BucketPolicyDocument,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<BucketPolicyDocument>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'setBucketPolicy',
+      };
+      return client.put(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/policy`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		getBucketVersioning: (bucketName: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<VersioningStatus>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getBucketVersioning" };
-	return client.get(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/versioning`, undefined, finalOptions);
+    getBucketVersioning: (
+      bucketName: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<VersioningStatus>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getBucketVersioning',
+      };
+      return client.get(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/versioning`,
+        undefined,
+        finalOptions
+      );
     },
-		setBucketVersioning: (bucketName: string, body: VersioningStatus, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<VersioningStatus>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "setBucketVersioning" };
-	return client.put(`/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/versioning`, body, undefined, finalOptions);
+    setBucketVersioning: (
+      bucketName: string,
+      body: VersioningStatus,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<VersioningStatus>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'setBucketVersioning',
+      };
+      return client.put(
+        `/admin/v1/buckets/${encodeURIComponent(String(bucketName))}/versioning`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		listMailboxes: (query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListMailboxesResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listMailboxes" };
+    listMailboxes: (
+      query?: { next?: string; limit?: number; search?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListMailboxesResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listMailboxes',
+      };
       const queryString = query ? buildQueryParams(query) : '';
-      const url = `/admin/v1/mailboxes` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      const url =
+        `/admin/v1/mailboxes` + (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
     },
-		deleteMailbox: (mailbox: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteMailbox" };
-	return client.del(`/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}`, undefined, finalOptions);
+    deleteMailbox: (
+      mailbox: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteMailbox',
+      };
+      return client.del(
+        `/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}`,
+        undefined,
+        finalOptions
+      );
     },
-		listMailboxMessages: (mailbox: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListMessagesResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listMailboxMessages" };
+    listMailboxMessages: (
+      mailbox: string,
+      query?: { next?: string; limit?: number; search?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListMessagesResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listMailboxMessages',
+      };
       const queryString = query ? buildQueryParams(query) : '';
-      const url = `/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      const url =
+        `/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages` +
+        (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
     },
-		deleteMailboxMessage: (mailbox: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteMailboxMessage" };
-	return client.del(`/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}`, undefined, finalOptions);
+    deleteMailboxMessage: (
+      mailbox: string,
+      messageId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteMailboxMessage',
+      };
+      return client.del(
+        `/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getMailboxMessage: (mailbox: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<MessageDetail>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getMailboxMessage" };
-	return client.get(`/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}`, undefined, finalOptions);
+    getMailboxMessage: (
+      mailbox: string,
+      messageId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<MessageDetail>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getMailboxMessage',
+      };
+      return client.get(
+        `/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getMailboxMessageAttachment: (mailbox: string, messageId: string, filename: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Blob>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getMailboxMessageAttachment" };
-	return client.get(`/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}/attachments/${encodeURIComponent(String(filename))}`, undefined, finalOptions);
+    getMailboxMessageAttachment: (
+      mailbox: string,
+      messageId: string,
+      filename: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Blob>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getMailboxMessageAttachment',
+      };
+      return client.get(
+        `/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}/attachments/${encodeURIComponent(String(filename))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getMailboxMessageContent: (mailbox: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Blob>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getMailboxMessageContent" };
-	return client.get(`/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}/content`, undefined, finalOptions);
+    getMailboxMessageContent: (
+      mailbox: string,
+      messageId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Blob>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getMailboxMessageContent',
+      };
+      return client.get(
+        `/admin/v1/mailboxes/${encodeURIComponent(String(mailbox))}/messages/${encodeURIComponent(String(messageId))}/content`,
+        undefined,
+        finalOptions
+      );
     },
-		retryTextCallback: (attemptId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TextCallbackAttempt>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "retryTextCallback" };
-	return client.post(`/admin/v1/text-callback-attempts/${encodeURIComponent(String(attemptId))}/retry`, undefined, undefined, finalOptions);
+    retryTextCallback: (
+      attemptId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TextCallbackAttempt>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'retryTextCallback',
+      };
+      return client.post(
+        `/admin/v1/text-callback-attempts/${encodeURIComponent(String(attemptId))}/retry`,
+        undefined,
+        undefined,
+        finalOptions
+      );
     },
-		listTextConversations: (query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListTextConversationsResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listTextConversations" };
+    listTextConversations: (
+      query?: { next?: string; limit?: number; search?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListTextConversationsResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listTextConversations',
+      };
       const queryString = query ? buildQueryParams(query) : '';
-      const url = `/admin/v1/text-conversations` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      const url =
+        `/admin/v1/text-conversations` + (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
     },
-		deleteTextConversation: (peer: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteTextConversation" };
-	return client.del(`/admin/v1/text-conversations/${encodeURIComponent(String(peer))}`, undefined, finalOptions);
+    deleteTextConversation: (
+      peer: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteTextConversation',
+      };
+      return client.del(
+        `/admin/v1/text-conversations/${encodeURIComponent(String(peer))}`,
+        undefined,
+        finalOptions
+      );
     },
-		listTextConversationMessages: (peer: string, query?: { next?: string; limit?: number; search?: string }, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<ListTextMessagesResponse>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "listTextConversationMessages" };
+    listTextConversationMessages: (
+      peer: string,
+      query?: { next?: string; limit?: number; search?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<ListTextMessagesResponse>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listTextConversationMessages',
+      };
       const queryString = query ? buildQueryParams(query) : '';
-      const url = `/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages` + (queryString ? '?' + queryString : '');
-			return client.get(url, undefined, finalOptions);
+      const url =
+        `/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages` +
+        (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
     },
-		deleteTextMessage: (peer: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteTextMessage" };
-	return client.del(`/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages/${encodeURIComponent(String(messageId))}`, undefined, finalOptions);
+    deleteTextMessage: (
+      peer: string,
+      messageId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteTextMessage',
+      };
+      return client.del(
+        `/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages/${encodeURIComponent(String(messageId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getTextMessage: (peer: string, messageId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TextMessageDetail>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getTextMessage" };
-	return client.get(`/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages/${encodeURIComponent(String(messageId))}`, undefined, finalOptions);
+    getTextMessage: (
+      peer: string,
+      messageId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TextMessageDetail>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getTextMessage',
+      };
+      return client.get(
+        `/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages/${encodeURIComponent(String(messageId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getTextMessageMedia: (peer: string, messageId: string, mediaId: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<Blob>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getTextMessageMedia" };
-	return client.get(`/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages/${encodeURIComponent(String(messageId))}/media/${encodeURIComponent(String(mediaId))}`, undefined, finalOptions);
+    getTextMessageMedia: (
+      peer: string,
+      messageId: string,
+      mediaId: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<Blob>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getTextMessageMedia',
+      };
+      return client.get(
+        `/admin/v1/text-conversations/${encodeURIComponent(String(peer))}/messages/${encodeURIComponent(String(messageId))}/media/${encodeURIComponent(String(mediaId))}`,
+        undefined,
+        finalOptions
+      );
     },
-		deleteTextDestination: (provider: TextProvider, localNumber: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<boolean>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "deleteTextDestination" };
-	return client.del(`/admin/v1/text-destinations/${encodeURIComponent(String(provider))}/${encodeURIComponent(String(localNumber))}`, undefined, finalOptions);
+    deleteTextDestination: (
+      provider: TextProvider,
+      localNumber: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteTextDestination',
+      };
+      return client.del(
+        `/admin/v1/text-destinations/${encodeURIComponent(String(provider))}/${encodeURIComponent(String(localNumber))}`,
+        undefined,
+        finalOptions
+      );
     },
-		getTextDestination: (provider: TextProvider, localNumber: string, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TextDestination>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "getTextDestination" };
-	return client.get(`/admin/v1/text-destinations/${encodeURIComponent(String(provider))}/${encodeURIComponent(String(localNumber))}`, undefined, finalOptions);
+    getTextDestination: (
+      provider: TextProvider,
+      localNumber: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TextDestination>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getTextDestination',
+      };
+      return client.get(
+        `/admin/v1/text-destinations/${encodeURIComponent(String(provider))}/${encodeURIComponent(String(localNumber))}`,
+        undefined,
+        finalOptions
+      );
     },
-		putTextDestination: (provider: TextProvider, localNumber: string, body: PutTextDestinationRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TextDestination>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "putTextDestination" };
-	return client.put(`/admin/v1/text-destinations/${encodeURIComponent(String(provider))}/${encodeURIComponent(String(localNumber))}`, body, undefined, finalOptions);
+    putTextDestination: (
+      provider: TextProvider,
+      localNumber: string,
+      body: PutTextDestinationRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TextDestination>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'putTextDestination',
+      };
+      return client.put(
+        `/admin/v1/text-destinations/${encodeURIComponent(String(provider))}/${encodeURIComponent(String(localNumber))}`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		transitionTextDelivery: (messageId: string, body: TextDeliveryRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TextMessageDetail>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "transitionTextDelivery" };
-	return client.post(`/admin/v1/text-messages/${encodeURIComponent(String(messageId))}/delivery`, body, undefined, finalOptions);
+    transitionTextDelivery: (
+      messageId: string,
+      body: TextDeliveryRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TextMessageDetail>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'transitionTextDelivery',
+      };
+      return client.post(
+        `/admin/v1/text-messages/${encodeURIComponent(String(messageId))}/delivery`,
+        body,
+        undefined,
+        finalOptions
+      );
     },
-		simulateInboundText: (body: InboundTextSimulationRequest, options?: { signal?: AbortSignal; timeout?: number; operationId?: string }): Promise<FetchResponse<TextMessageDetail>> => {
-		const finalOptions = { ...options, operationId: options?.operationId ?? "simulateInboundText" };
-	return client.post(`/admin/v1/text-simulations/inbound`, body, undefined, finalOptions);
-    }
+    simulateInboundText: (
+      body: InboundTextSimulationRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<TextMessageDetail>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'simulateInboundText',
+      };
+      return client.post(
+        `/admin/v1/text-simulations/inbound`,
+        body,
+        undefined,
+        finalOptions
+      );
+    },
   };
 }
 
 /** Acl schema */
-export type Acl = { canned: "private" | "public-read" | "public-read-write" | "authenticated-read" | "bucket-owner-read" | "bucket-owner-full-control"; grants?: Array<Grant> };
+export type Acl = {
+  canned:
+    | 'private'
+    | 'public-read'
+    | 'public-read-write'
+    | 'authenticated-read'
+    | 'bucket-owner-read'
+    | 'bucket-owner-full-control';
+  grants?: Array<Grant>;
+};
 
 /** AdminLoginRequest schema */
 export type AdminLoginRequest = { password: string; username: string };
 
 /** AdminSessionResponse schema */
-export type AdminSessionResponse = { mode: "open" | "session"; username: string | null };
+export type AdminSessionResponse = {
+  mode: 'open' | 'session';
+  username: string | null;
+};
 
 /** BucketDetails schema */
 export type BucketDetails = BucketInfo;
 
 /** BucketInfo schema */
-export type BucketInfo = { created_at: string; name: string; versioning_enabled: boolean };
+export type BucketInfo = {
+  created_at: string;
+  name: string;
+  versioning_enabled: boolean;
+};
 
 /** BucketPolicyDocument schema */
-export type BucketPolicyDocument = { Statement: Array<PolicyStatementDocument>; Version: string };
+export type BucketPolicyDocument = {
+  Statement: Array<PolicyStatementDocument>;
+  Version: string;
+};
 
 /** CanonicalUserGrantee schema */
-export type CanonicalUserGrantee = { DisplayName?: string | null; ID: string; Type: "CanonicalUser" };
+export type CanonicalUserGrantee = {
+  DisplayName?: string | null;
+  ID: string;
+  Type: 'CanonicalUser';
+};
 
 /** CreateBucketRequest schema */
 export type CreateBucketRequest = { name: string };
 
 /** ErrorResponse schema */
-export type ErrorResponse = { code: string; details?: string | null; error: string };
+export type ErrorResponse = {
+  code: string;
+  details?: string | null;
+  error: string;
+};
 
 /** Expiration schema */
-export type Expiration = { date: string | null; days: number | null; expired_object_delete_marker: boolean | null };
+export type Expiration = {
+  date: string | null;
+  days: number | null;
+  expired_object_delete_marker: boolean | null;
+};
 
 /** Grant schema */
-export type Grant = { grantee: CanonicalUserGrantee | GroupGrantee; permission: "READ" | "WRITE" | "READ_ACP" | "WRITE_ACP" | "FULL_CONTROL" };
+export type Grant = {
+  grantee: CanonicalUserGrantee | GroupGrantee;
+  permission: 'READ' | 'WRITE' | 'READ_ACP' | 'WRITE_ACP' | 'FULL_CONTROL';
+};
 
 /** GroupGrantee schema */
-export type GroupGrantee = { Type: "Group"; URI: string };
+export type GroupGrantee = { Type: 'Group'; URI: string };
 
 /** InboundTextMediaRequest schema */
-export type InboundTextMediaRequest = { content_base64: string; content_type: string; filename: string };
+export type InboundTextMediaRequest = {
+  content_base64: string;
+  content_type: string;
+  filename: string;
+};
 
 /** InboundTextSimulationRequest schema */
-export type InboundTextSimulationRequest = { body: string; from: string; media?: Array<InboundTextMediaRequest>; metadata?: Record<string, any>; provider: TextProvider; to: string };
+export type InboundTextSimulationRequest = {
+  body: string;
+  from: string;
+  media?: Array<InboundTextMediaRequest>;
+  metadata?: Record<string, any>;
+  provider: TextProvider;
+  to: string;
+};
 
 /** LifecycleConfiguration schema */
 export type LifecycleConfiguration = { rules: Array<LifecycleRule> };
 
 /** LifecycleFilter schema */
-export type LifecycleFilter = { prefix?: string | null; tags: Array<LifecycleTag> };
+export type LifecycleFilter = {
+  prefix?: string | null;
+  tags: Array<LifecycleTag>;
+};
 
 /** LifecycleRule schema */
-export type LifecycleRule = { expiration?: null | Expiration; filter?: null | LifecycleFilter; id: string; noncurrent_version_expiration?: null | NoncurrentVersionExpiration; status: "Enabled" | "Disabled"; transitions: Array<Transition> };
+export type LifecycleRule = {
+  expiration?: null | Expiration;
+  filter?: null | LifecycleFilter;
+  id: string;
+  noncurrent_version_expiration?: null | NoncurrentVersionExpiration;
+  status: 'Enabled' | 'Disabled';
+  transitions: Array<Transition>;
+};
 
 /** LifecycleTag schema */
 export type LifecycleTag = { key: string; value: string };
 
 /** ListBucketsResponse schema */
-export type ListBucketsResponse = { items: Array<BucketInfo>; next: string | null };
+export type ListBucketsResponse = {
+  items: Array<BucketInfo>;
+  next: string | null;
+};
 
 /** ListMailboxesResponse schema */
-export type ListMailboxesResponse = { items: Array<MailboxInfo>; next: string | null };
+export type ListMailboxesResponse = {
+  items: Array<MailboxInfo>;
+  next: string | null;
+};
 
 /** ListMessagesResponse schema */
-export type ListMessagesResponse = { items: Array<MessageSummary>; next: string | null };
+export type ListMessagesResponse = {
+  items: Array<MessageSummary>;
+  next: string | null;
+};
 
 /** ListMultipartUploadsResponse schema */
-export type ListMultipartUploadsResponse = { items: Array<MultipartUpload>; next: string | null };
+export type ListMultipartUploadsResponse = {
+  items: Array<MultipartUpload>;
+  next: string | null;
+};
 
 /** ListObjectsResponse schema */
-export type ListObjectsResponse = { folders: Array<ObjectFolderInfo>; items: Array<ObjectInfo>; next: string | null };
+export type ListObjectsResponse = {
+  folders: Array<ObjectFolderInfo>;
+  items: Array<ObjectInfo>;
+  next: string | null;
+};
 
 /** ListTextConversationsResponse schema */
-export type ListTextConversationsResponse = { items: Array<TextConversation>; next: string | null };
+export type ListTextConversationsResponse = {
+  items: Array<TextConversation>;
+  next: string | null;
+};
 
 /** ListTextMessagesResponse schema */
-export type ListTextMessagesResponse = { items: Array<TextMessage>; next: string | null };
+export type ListTextMessagesResponse = {
+  items: Array<TextMessage>;
+  next: string | null;
+};
 
 /** ListVersionsResponse schema */
-export type ListVersionsResponse = { items: Array<ObjectVersionInfo>; next: string | null };
+export type ListVersionsResponse = {
+  items: Array<ObjectVersionInfo>;
+  next: string | null;
+};
 
 /** MailAddress schema */
 export type MailAddress = { email: string; name?: string | null };
 
 /** MailboxInfo schema */
-export type MailboxInfo = { address: string; last_received_at: string | null; message_count: number };
+export type MailboxInfo = {
+  address: string;
+  last_received_at: string | null;
+  message_count: number;
+};
 
 /** MessageAttachmentSummary schema */
-export type MessageAttachmentSummary = { content_type: string; filename: string; size: number };
+export type MessageAttachmentSummary = {
+  content_type: string;
+  filename: string;
+  size: number;
+};
 
 /** MessageDetail schema */
-export type MessageDetail = { attachments: Array<MessageAttachmentSummary>; bcc: Array<MailAddress>; body_html?: string | null; body_text?: string | null; cc: Array<MailAddress>; delivery_detail?: string | null; delivery_state: "accepted" | "delivered" | "bounced" | "rejected"; from: MailAddress; headers: Record<string, string>; mailbox: string; message_id: string; received_at: string; source_protocol: "smtp" | "sendgrid" | "ses" | "acs"; subject: string; thread_id?: string | null; to: Array<MailAddress> };
+export type MessageDetail = {
+  attachments: Array<MessageAttachmentSummary>;
+  bcc: Array<MailAddress>;
+  body_html?: string | null;
+  body_text?: string | null;
+  cc: Array<MailAddress>;
+  delivery_detail?: string | null;
+  delivery_state: 'accepted' | 'delivered' | 'bounced' | 'rejected';
+  from: MailAddress;
+  headers: Record<string, string>;
+  mailbox: string;
+  message_id: string;
+  received_at: string;
+  source_protocol: 'smtp' | 'sendgrid' | 'ses' | 'acs';
+  subject: string;
+  thread_id?: string | null;
+  to: Array<MailAddress>;
+};
 
 /** MessageSummary schema */
-export type MessageSummary = { delivery_state: "accepted" | "delivered" | "bounced" | "rejected"; from: MailAddress; message_id: string; received_at: string; subject: string; to: Array<MailAddress> };
+export type MessageSummary = {
+  delivery_state: 'accepted' | 'delivered' | 'bounced' | 'rejected';
+  from: MailAddress;
+  message_id: string;
+  received_at: string;
+  subject: string;
+  to: Array<MailAddress>;
+};
 
 /** MultipartPart schema */
-export type MultipartPart = { etag: string; last_modified: string; part_number: number; size: number };
+export type MultipartPart = {
+  etag: string;
+  last_modified: string;
+  part_number: number;
+  size: number;
+};
 
 /** MultipartUpload schema */
-export type MultipartUpload = { content_type?: string | null; initiated: string; key: string; metadata?: Record<string, string>; parts: Array<MultipartPart>; provider_metadata?: Record<string, string>; upload_id: string };
+export type MultipartUpload = {
+  content_type?: string | null;
+  initiated: string;
+  key: string;
+  metadata?: Record<string, string>;
+  parts: Array<MultipartPart>;
+  provider_metadata?: Record<string, string>;
+  upload_id: string;
+};
 
 /** NoncurrentVersionExpiration schema */
 export type NoncurrentVersionExpiration = { noncurrent_days: number };
@@ -787,19 +1630,49 @@ export type NoncurrentVersionExpiration = { noncurrent_days: number };
 export type ObjectFolderInfo = { name: string; prefix: string };
 
 /** ObjectInfo schema */
-export type ObjectInfo = { content_type: string | null; etag: string; key: string; last_modified: string; size: number; storage_class: string };
+export type ObjectInfo = {
+  content_type: string | null;
+  etag: string;
+  key: string;
+  last_modified: string;
+  size: number;
+  storage_class: string;
+};
 
 /** ObjectMetadata schema */
-export type ObjectMetadata = { content_type: string | null; etag: string; key: string; last_modified: string; metadata: Record<string, string>; size: number; storage_class: string; version_id: string | null };
+export type ObjectMetadata = {
+  content_type: string | null;
+  etag: string;
+  key: string;
+  last_modified: string;
+  metadata: Record<string, string>;
+  size: number;
+  storage_class: string;
+  version_id: string | null;
+};
 
 /** ObjectVersionInfo schema */
-export type ObjectVersionInfo = { etag: string; is_latest: boolean; key: string; last_modified: string; size: number; version_id: string };
+export type ObjectVersionInfo = {
+  etag: string;
+  is_latest: boolean;
+  key: string;
+  last_modified: string;
+  size: number;
+  version_id: string;
+};
 
 /** PolicyPrincipalAws schema */
 export type PolicyPrincipalAws = { AWS: string | Array<string> };
 
 /** PolicyStatementDocument schema */
-export type PolicyStatementDocument = { Action: string | Array<string>; Condition?: Record<string, any> | null; Effect: "Allow" | "Deny"; Principal: string | PolicyPrincipalAws; Resource: string | Array<string>; Sid?: string | null };
+export type PolicyStatementDocument = {
+  Action: string | Array<string>;
+  Condition?: Record<string, any> | null;
+  Effect: 'Allow' | 'Deny';
+  Principal: string | PolicyPrincipalAws;
+  Resource: string | Array<string>;
+  Sid?: string | null;
+};
 
 /** PutTextDestinationRequest schema */
 export type PutTextDestinationRequest = { callback_url: string };
@@ -814,40 +1687,95 @@ export type TagsRequest = { tags: Record<string, string> };
 export type TagsResponse = { tags: Record<string, string> };
 
 /** TextCallbackAttempt schema */
-export type TextCallbackAttempt = { attempt_id: string; attempted_at: string; error?: string | null; kind: "inbound" | "delivery"; message_id: string; provider: TextProvider; request_body: string; request_headers: Record<string, string>; response_body?: string | null; response_status?: number | null; retry_of?: string | null; state: "succeeded" | "failed"; url: string };
+export type TextCallbackAttempt = {
+  attempt_id: string;
+  attempted_at: string;
+  error?: string | null;
+  kind: 'inbound' | 'delivery';
+  message_id: string;
+  provider: TextProvider;
+  request_body: string;
+  request_headers: Record<string, string>;
+  response_body?: string | null;
+  response_status?: number | null;
+  retry_of?: string | null;
+  state: 'succeeded' | 'failed';
+  url: string;
+};
 
 /** TextChannel schema */
-export type TextChannel = "sms" | "mms";
+export type TextChannel = 'sms' | 'mms';
 
 /** TextConversation schema */
-export type TextConversation = { last_direction: TextDirection; last_message_at: string; last_message_body: string; message_count: number; peer: string; provider: TextProvider };
+export type TextConversation = {
+  last_direction: TextDirection;
+  last_message_at: string;
+  last_message_body: string;
+  message_count: number;
+  peer: string;
+  provider: TextProvider;
+};
 
 /** TextDeliveryRequest schema */
-export type TextDeliveryRequest = { state: "delivered" | "failed" };
+export type TextDeliveryRequest = { state: 'delivered' | 'failed' };
 
 /** TextDeliveryState schema */
-export type TextDeliveryState = "accepted" | "delivered" | "failed";
+export type TextDeliveryState = 'accepted' | 'delivered' | 'failed';
 
 /** TextDestination schema */
-export type TextDestination = { callback_url: string; created_at: string; local_number: string; provider: TextProvider; updated_at: string };
+export type TextDestination = {
+  callback_url: string;
+  created_at: string;
+  local_number: string;
+  provider: TextProvider;
+  updated_at: string;
+};
 
 /** TextDirection schema */
-export type TextDirection = "inbound" | "outbound";
+export type TextDirection = 'inbound' | 'outbound';
 
 /** TextMedia schema */
-export type TextMedia = { content_type: string; external_url?: string | null; filename: string; media_id: string; size?: number | null };
+export type TextMedia = {
+  content_type: string;
+  external_url?: string | null;
+  filename: string;
+  media_id: string;
+  size?: number | null;
+};
 
 /** TextMessage schema */
-export type TextMessage = { batch_id?: string | null; body: string; channel: TextChannel; created_at: string; delivery_state: TextDeliveryState; direction: TextDirection; from: string; media: Array<TextMedia>; message_id: string; metadata: Record<string, any>; peer: string; provider: TextProvider; provider_message_id: string; to: string; updated_at: string };
+export type TextMessage = {
+  batch_id?: string | null;
+  body: string;
+  channel: TextChannel;
+  created_at: string;
+  delivery_state: TextDeliveryState;
+  direction: TextDirection;
+  from: string;
+  media: Array<TextMedia>;
+  message_id: string;
+  metadata: Record<string, any>;
+  peer: string;
+  provider: TextProvider;
+  provider_message_id: string;
+  to: string;
+  updated_at: string;
+};
 
 /** TextMessageDetail schema */
-export type TextMessageDetail = TextMessage & { callback_attempts: Array<TextCallbackAttempt> };
+export type TextMessageDetail = TextMessage & {
+  callback_attempts: Array<TextCallbackAttempt>;
+};
 
 /** TextProvider schema */
-export type TextProvider = "twilio" | "sns" | "aws-sms-voice-v2" | "acs";
+export type TextProvider = 'twilio' | 'sns' | 'aws-sms-voice-v2' | 'acs';
 
 /** Transition schema */
-export type Transition = { date: string | null; days: number | null; storage_class: "STANDARD" | "GLACIER" | "DEEP_ARCHIVE" };
+export type Transition = {
+  date: string | null;
+  days: number | null;
+  storage_class: 'STANDARD' | 'GLACIER' | 'DEEP_ARCHIVE';
+};
 
 /** VersioningStatus schema */
 export type VersioningStatus = { enabled: boolean };

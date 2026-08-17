@@ -1,16 +1,15 @@
 import { navigate } from '@askrjs/askr/router';
 import { ArrowLeftIcon, ArrowUpIcon } from '@askrjs/lucide';
-import { Button, Stack } from '@askrjs/themes/components';
-import BucketBreadcrumbs from '../../components/storage/bucket-breadcrumbs';
-import BlobModal from '../../components/storage/blob-modal';
-import BlobTable from '../../components/storage/blob-table';
-import StoragePageHeader from '../../components/storage/storage-page-header';
+import { Button, Page, PageHeader } from '@askrjs/themes/components';
+import BucketBreadcrumbs from '../../../components/storage/bucket-breadcrumbs';
+import BlobModal from '../../../components/storage/blob-modal';
+import BlobTable from '../../../components/storage/blob-table';
 import {
   normalizeStoragePathPrefix,
   parentStoragePathPrefix,
   storagePathLabel,
-} from '../../features/storage/path';
-import { adminBucketsPath, bucketFolderPath } from '../../shared/routes';
+} from '../../../features/storage/path';
+import { adminBucketsPath, bucketFolderPath } from '../../../shared/routes';
 
 export default function Bucket({
   bucketName,
@@ -23,13 +22,14 @@ export default function Bucket({
   const locationLabel = storagePathLabel(bucketName, normalizedPrefix);
 
   return (
-    <Stack gap="4">
+    <Page>
       <BucketBreadcrumbs
         bucketName={bucketName}
         pathPrefix={normalizedPrefix}
       />
 
-      <StoragePageHeader
+      <PageHeader
+        data-sqrzl-slot="storage-page-header"
         title={locationLabel}
         description={
           normalizedPrefix
@@ -67,6 +67,6 @@ export default function Bucket({
       />
 
       <BlobTable bucketName={bucketName} pathPrefix={normalizedPrefix} />
-    </Stack>
+    </Page>
   );
 }

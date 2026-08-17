@@ -3,9 +3,8 @@ import {
   Button,
   DataTable,
   EmptyState,
-  Inline,
   Spinner,
-  Stack,
+  Block,
   Toolbar,
 } from '@askrjs/themes/components';
 import CursorPagination from './cursor-pagination';
@@ -60,8 +59,8 @@ export default function DataTableSection({
       aria-labelledby={titleId}
       aria-label={title ?? searchLabel}
     >
-      <Stack gap="4">
-        <Stack gap="3">
+      <Block direction="column" gap="md">
+        <Block direction="column" gap="sm">
           <Show when={title}>
             <Toolbar title={<span id={titleId}>{title}</span>} />
           </Show>
@@ -71,7 +70,7 @@ export default function DataTableSection({
             defaultValue={searchValue}
             onSearch={onSearch}
           />
-        </Stack>
+        </Block>
 
         <Show when={errored}>
           <EmptyState
@@ -82,9 +81,9 @@ export default function DataTableSection({
         </Show>
 
         <Show when={!errored && loading}>
-          <Inline justify="center" align="center">
+          <Block direction="row" justify="center" align="center">
             <Spinner />
-          </Inline>
+          </Block>
         </Show>
 
         <Show when={!errored && !loading && empty}>
@@ -92,7 +91,7 @@ export default function DataTableSection({
         </Show>
 
         <Show when={!errored && !loading && !empty}>
-          <Stack gap="3">
+          <Block direction="column" gap="sm">
             <DataTable
               data-sqrzl-slot="storage-table-scroll"
               data-sqrzl-table-width={tableWidth}
@@ -105,9 +104,9 @@ export default function DataTableSection({
               onNext={onNext}
               onPrevious={onPrevious}
             />
-          </Stack>
+          </Block>
         </Show>
-      </Stack>
+      </Block>
     </section>
   );
 }

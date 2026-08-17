@@ -1,5 +1,30 @@
 @import '@askrjs/themes/default';
 
+:where([data-sqrzl-slot='navbar-utilities']) {
+  display: flex;
+  margin-inline-start: auto;
+}
+
+@media (min-width: 768px) {
+  :where([data-sqrzl-slot='navbar-utilities']) {
+    position: absolute;
+    inset-inline-end: 0;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  :where([data-slot='navbar']:has([data-sqrzl-slot='navbar-utilities'])) {
+    position: relative;
+  }
+}
+
+:where([data-sqrzl-slot='inline-message-details']) {
+  padding: var(--ak-space-4);
+  border: 1px solid var(--ak-color-border-subtle);
+  border-radius: var(--ak-radius-lg);
+  background: var(--ak-color-surface-muted);
+}
+
 :where([data-sqrzl-slot='storage-page-header'])
   :where(
     [data-slot='page-header-title'],

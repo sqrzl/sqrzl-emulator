@@ -1,4 +1,4 @@
-import { Stack } from '@askrjs/themes/components';
+import { Block } from '@askrjs/themes/components';
 
 export default function StorageDialogForm({
   children,
@@ -8,14 +8,15 @@ export default function StorageDialogForm({
   onSubmit: (event: Event) => void;
 }) {
   return (
-    <Stack
+    <Block
+      direction="column"
       asChild
       data-sqrzl-slot="storage-dialog-form"
       align="stretch"
-      gap="4"
+      gap="md"
       width="full"
     >
       <form onSubmit={onSubmit}>{children}</form>
-    </Stack>
+    </Block>
   );
 }

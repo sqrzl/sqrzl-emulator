@@ -1,7 +1,8 @@
-import { For } from '@askrjs/askr/control';
+import { state } from '@askrjs/askr';
+import { For, Show } from '@askrjs/askr/control';
 import { Link } from '@askrjs/askr/router';
-import { TrashIcon } from '@askrjs/lucide';
-import { Badge, Button, Inline } from '@askrjs/themes/components';
+import { ChevronDownIcon, ChevronRightIcon, TrashIcon } from '@askrjs/lucide';
+import { Badge, Button, Block } from '@askrjs/themes/components';
 import {
   Table,
   TableBody,
@@ -9,17 +10,21 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import { createMutation } from '@askrjs/askr/data';
 import { MessageSummary } from '../../adapters/api.g';
 import { useCursorList } from '../../features/storage/use-cursor-list';
 import { useDeleteTarget } from '../../features/storage/use-delete-target';
 import { mailboxMessagesListKey } from '../../features/mailboxes/keys';
-import { deleteMessage, listMessagePage } from '../../features/messages/messages.query';
+import {
+  deleteMessage,
+  listMessagePage,
+} from '../../features/messages/messages.query';
 import { formatRelativeTime } from '../../shared/format';
 import { mailMessagePath } from '../../shared/routes';
 import DataTableSection from '../storage/data-table-section';
 import MessageDeleteDialog from './message-delete-dialog';
+import MailMessageDetails from './mail-message-details';
 
 type MailAddressList = Array<{ email: string; name?: string | null }>;
 
@@ -34,12 +39,11 @@ function formatAddressList(addresses: MailAddressList): string {
 function deliveryStateTone(
   state: MessageSummary['delivery_state']
 ): 'secondary' | 'outline' {
-  return state === 'rejected' || state === 'bounced'
-    ? 'outline'
-    : 'secondary';
+  return state === 'rejected' || state === 'bounced' ? 'outline' : 'secondary';
 }
 
 export default function MessageTable({ mailboxName }: { mailboxName: string }) {
+  const [expandedMessageId, setExpandedMessageId] = state<string | null>(null);
   const list = useCursorList<MessageSummary>(
     mailboxMessagesListKey(mailboxName),
     'search',
@@ -53,10 +57,7 @@ export default function MessageTable({ mailboxName }: { mailboxName: string }) {
   );
 
   const remove = createMutation({
-    action: (
-      target: { mailbox: string; messageId: string },
-      { signal }
-    ) =>
+    action: (target: { mailbox: string; messageId: string }, { signal }) =>
       deleteMessage({
         mailbox: target.mailbox,
         messageId: target.messageId,
@@ -111,53 +112,97 @@ export default function MessageTable({ mailboxName }: { mailboxName: string }) {
               <TableHeaderCell>Subject</TableHeaderCell>
               <TableHeaderCell>State</TableHeaderCell>
               <TableHeaderCell>
-                <Inline justify="end">Actions</Inline>
+                <Block direction="row" justify="end">
+                  Actions
+                </Block>
               </TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
             <For each={messages} by={(message) => message.message_id}>
               {(message) => (
-                <TableRow key={message.message_id}>
-                  <TableCell>
-                    {formatRelativeTime(message.received_at)}
-                  </TableCell>
-                  <TableCell>
-                    {formatAddressList([message.from])}
-                  </TableCell>
-                  <TableCell>
-                    {formatAddressList(message.to ? message.to : [])}
-                  </TableCell>
-                  <TableCell>
-                    <Link
-                      href={mailMessagePath(mailboxName, message.message_id)}
-                    >
-                      {message.subject}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={deliveryStateTone(message.delivery_state)}>
-                      {message.delivery_state}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Inline justify="end" align="center">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Delete message ${message.message_id}`}
-                        onPress={() =>
-                          remover.open({
-                            mailbox: mailboxName,
-                            messageId: message.message_id,
-                          })
-                        }
+                <>
+                  <TableRow key={message.message_id}>
+                    <TableCell>
+                      <Block direction="row" align="center" gap="xs">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`${expandedMessageId() === message.message_id ? 'Collapse' : 'Expand'} message ${message.message_id}`}
+                          aria-expanded={
+                            expandedMessageId() === message.message_id
+                          }
+                          aria-controls={`mail-message-inline-${message.message_id}`}
+                          onPress={() =>
+                            setExpandedMessageId(
+                              expandedMessageId() === message.message_id
+                                ? null
+                                : message.message_id
+                            )
+                          }
+                        >
+                          {expandedMessageId() === message.message_id ? (
+                            <ChevronDownIcon aria-hidden="true" />
+                          ) : (
+                            <ChevronRightIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                        {formatRelativeTime(message.received_at)}
+                      </Block>
+                    </TableCell>
+                    <TableCell>{formatAddressList([message.from])}</TableCell>
+                    <TableCell>
+                      {formatAddressList(message.to ? message.to : [])}
+                    </TableCell>
+                    <TableCell>
+                      <Link
+                        href={mailMessagePath(mailboxName, message.message_id)}
                       >
-                        <TrashIcon aria-hidden="true" />
-                      </Button>
-                    </Inline>
-                  </TableCell>
-                </TableRow>
+                        {message.subject}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={deliveryStateTone(message.delivery_state)}
+                      >
+                        {message.delivery_state}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Block direction="row" justify="end" align="center">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Delete message ${message.message_id}`}
+                          onPress={() =>
+                            remover.open({
+                              mailbox: mailboxName,
+                              messageId: message.message_id,
+                            })
+                          }
+                        >
+                          <TrashIcon aria-hidden="true" />
+                        </Button>
+                      </Block>
+                    </TableCell>
+                  </TableRow>
+                  <Show when={expandedMessageId() === message.message_id}>
+                    <TableRow key={`${message.message_id}-details`}>
+                      <TableCell colSpan={6}>
+                        <div
+                          id={`mail-message-inline-${message.message_id}`}
+                          data-sqrzl-slot="inline-message-details"
+                        >
+                          <MailMessageDetails
+                            mailboxName={mailboxName}
+                            messageId={message.message_id}
+                            inline
+                          />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  </Show>
+                </>
               )}
             </For>
           </TableBody>

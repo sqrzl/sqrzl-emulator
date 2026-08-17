@@ -1,9 +1,8 @@
 import { Link } from '@askrjs/askr/router';
 import { ArrowLeftIcon } from '@askrjs/lucide';
-import { Button, Inline, Stack } from '@askrjs/themes/components';
-import MailMessageDetails from '../../components/mail/mail-message-details';
-import StoragePageHeader from '../../components/storage/storage-page-header';
-import { mailboxPath } from '../../shared/routes';
+import { Block, Button, Page, PageHeader } from '@askrjs/themes/components';
+import MailMessageDetails from '../../../components/mail/mail-message-details';
+import { mailboxPath } from '../../../shared/routes';
 
 export default function MailMessagePage({
   mailboxName,
@@ -13,22 +12,23 @@ export default function MailMessagePage({
   messageId: string;
 }) {
   return (
-    <Stack gap="4">
-      <StoragePageHeader
+    <Page>
+      <PageHeader
+        data-sqrzl-slot="storage-page-header"
         title={`Message ${messageId}`}
         description="Inspect message headers, body, and attachment contents."
         actions={
-          <Inline gap="2" wrap>
+          <Block direction="row" gap="xs" style={{ flexWrap: 'wrap' }}>
             <Button variant="secondary" asChild>
               <Link href={mailboxPath(mailboxName)}>
                 <ArrowLeftIcon aria-hidden="true" /> Back to mailbox
               </Link>
             </Button>
-          </Inline>
+          </Block>
         }
       />
 
       <MailMessageDetails mailboxName={mailboxName} messageId={messageId} />
-    </Stack>
+    </Page>
   );
 }

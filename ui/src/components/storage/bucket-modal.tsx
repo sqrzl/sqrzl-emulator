@@ -2,7 +2,7 @@ import { state } from '@askrjs/askr';
 import { Show } from '@askrjs/askr/control';
 import { createMutation } from '@askrjs/askr/data';
 import { PlusIcon } from '@askrjs/lucide';
-import { Button, Field, FieldError, Stack } from '@askrjs/themes/components';
+import { Button, Field, FieldError, Block } from '@askrjs/themes/components';
 import {
   Dialog,
   DialogClose,
@@ -11,7 +11,7 @@ import {
   DialogPortal,
   Input,
   Label,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import { createBucket } from '../../features/buckets/buckets.query';
 import { bucketListKey } from '../../features/storage/keys';
 import StorageDialogFooter from './storage-dialog-footer';
@@ -86,7 +86,7 @@ export default function BucketModal() {
         <DialogPortal>
           <DialogOverlay />
           <DialogContent>
-            <Stack gap="4">
+            <Block direction="column" gap="md">
               <StorageDialogHeader title="Add bucket">
                 <p>Create a bucket in the emulator.</p>
               </StorageDialogHeader>
@@ -116,7 +116,7 @@ export default function BucketModal() {
                   </Button>
                 </StorageDialogFooter>
               </StorageDialogForm>
-            </Stack>
+            </Block>
           </DialogContent>
         </DialogPortal>
       </Dialog>

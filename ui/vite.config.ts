@@ -1,8 +1,12 @@
 import { defineConfig } from 'vite-plus';
 import { askr } from '@askrjs/vite';
+import { sqrzlMockApi } from './dev/mock-api/plugin';
 
-export default defineConfig({
-  plugins: [askr()],
+export default defineConfig(({ mode }) => ({
+  plugins:
+    mode === 'mock'
+      ? [sqrzlMockApi() as unknown as ReturnType<typeof askr>, askr()]
+      : [askr()],
   lint: {
     ignorePatterns: ['dist/**', 'node_modules/**', 'coverage/**'],
   },
@@ -31,4 +35,4 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: true,
   },
-});
+}));

@@ -68,7 +68,9 @@ export async function deleteTextConversation({
   peer: string;
   signal?: AbortSignal;
 }): Promise<void> {
-  unwrapProtectedResponse(await adminApi.deleteTextConversation(peer, { signal }));
+  unwrapProtectedResponse(
+    await adminApi.deleteTextConversation(peer, { signal })
+  );
 }
 
 export async function deleteTextMessage({

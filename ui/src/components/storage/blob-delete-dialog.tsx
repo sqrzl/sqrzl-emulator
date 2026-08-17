@@ -1,11 +1,11 @@
 import { Show } from '@askrjs/askr/control';
-import { Button, FieldError, Stack } from '@askrjs/themes/components';
+import { Button, FieldError, Block } from '@askrjs/themes/components';
 import {
   AlertDialog,
   AlertDialogContent,
   AlertDialogOverlay,
   AlertDialogPortal,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import type { DeleteTarget } from '../../features/storage/use-delete-target';
 import StorageDialogFooter from './storage-dialog-footer';
 import StorageDialogHeader from './storage-dialog-header';
@@ -35,7 +35,7 @@ export default function BlobDeleteDialog({
       <AlertDialogPortal>
         <AlertDialogOverlay />
         <AlertDialogContent>
-          <Stack gap="4">
+          <Block direction="column" gap="md">
             <StorageDialogHeader title="Delete blob">
               <p>
                 {target
@@ -64,7 +64,7 @@ export default function BlobDeleteDialog({
                 {target?.deleting ? 'Deleting...' : 'Delete blob'}
               </Button>
             </StorageDialogFooter>
-          </Stack>
+          </Block>
         </AlertDialogContent>
       </AlertDialogPortal>
     </AlertDialog>

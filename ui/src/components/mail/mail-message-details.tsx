@@ -8,9 +8,8 @@ import {
   DataTable,
   EmptyState,
   FieldError,
-  Inline,
   Spinner,
-  Stack,
+  Block,
   Toolbar,
 } from '@askrjs/themes/components';
 import {
@@ -20,7 +19,7 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import {
   MailAddress,
   MessageAttachmentSummary,
@@ -37,9 +36,11 @@ import {
 export default function MailMessageDetails({
   mailboxName,
   messageId,
+  inline = false,
 }: {
   mailboxName: string;
   messageId: string;
+  inline?: boolean;
 }) {
   const detail = resource(
     ({ signal }) =>
@@ -141,18 +142,21 @@ export default function MailMessageDetails({
   }
 
   return (
-    <Stack gap="4">
-      <Inline
+    <Block direction="column" gap="md">
+      <Block
+        direction="row"
         data-sqrzl-slot="mail-message-actions"
         align="center"
-        gap="2"
-        wrap
+        gap="xs"
+        style={{ flexWrap: 'wrap' }}
       >
-        <Button variant="secondary" asChild>
-          <Link href={mailboxPath(mailboxName)}>
-            <ArrowLeftIcon aria-hidden="true" /> Back to mailbox
-          </Link>
-        </Button>
+        {!inline ? (
+          <Button variant="secondary" asChild>
+            <Link href={mailboxPath(mailboxName)}>
+              <ArrowLeftIcon aria-hidden="true" /> Back to mailbox
+            </Link>
+          </Button>
+        ) : null}
         <Button
           onPress={() => void downloadContent()}
           disabled={contentDownloadPending()}
@@ -160,7 +164,7 @@ export default function MailMessageDetails({
           <DownloadIcon aria-hidden="true" />
           {contentDownloadPending() ? 'Downloading...' : 'Download raw content'}
         </Button>
-      </Inline>
+      </Block>
 
       <Show when={downloadError()}>
         <FieldError role="alert">{downloadError()}</FieldError>
@@ -175,16 +179,16 @@ export default function MailMessageDetails({
       </Show>
 
       <Show when={detail.pending && !detail.value}>
-        <Inline justify="center" align="center">
+        <Block direction="row" justify="center" align="center">
           <Spinner />
-        </Inline>
+        </Block>
       </Show>
 
       <Show when={detail.value}>
         {(message: MessageDetail) => (
-          <Stack gap="4">
+          <Block direction="column" gap="md">
             <section aria-labelledby="mail-message-summary-title">
-              <Stack gap="3">
+              <Block direction="column" gap="sm">
                 <Toolbar
                   title={<span id="mail-message-summary-title">Summary</span>}
                 />
@@ -204,7 +208,9 @@ export default function MailMessageDetails({
                       </TableRow>
                       <TableRow>
                         <TableHeaderCell>Received</TableHeaderCell>
-                        <TableCell>{formatRelativeTime(message.received_at)}</TableCell>
+                        <TableCell>
+                          {formatRelativeTime(message.received_at)}
+                        </TableCell>
                       </TableRow>
                       <TableRow>
                         <TableHeaderCell>From</TableHeaderCell>
@@ -247,11 +253,11 @@ export default function MailMessageDetails({
                     </TableBody>
                   </Table>
                 </DataTable>
-              </Stack>
+              </Block>
             </section>
 
             <section aria-labelledby="mail-message-headers-title">
-              <Stack gap="3">
+              <Block direction="column" gap="sm">
                 <Toolbar
                   title={<span id="mail-message-headers-title">Headers</span>}
                 />
@@ -271,7 +277,10 @@ export default function MailMessageDetails({
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        <For each={Object.entries(message.headers)} by={([name]) => name}>
+                        <For
+                          each={Object.entries(message.headers)}
+                          by={([name]) => name}
+                        >
                           {([name, value]) => (
                             <TableRow key={name}>
                               <TableHeaderCell>{name}</TableHeaderCell>
@@ -283,23 +292,25 @@ export default function MailMessageDetails({
                     </Table>
                   </DataTable>
                 </Show>
-              </Stack>
+              </Block>
             </section>
 
             <section aria-labelledby="mail-message-body-title">
-              <Stack gap="3">
-                <Toolbar title={<span id="mail-message-body-title">Body</span>} />
+              <Block direction="column" gap="sm">
+                <Toolbar
+                  title={<span id="mail-message-body-title">Body</span>}
+                />
                 <Show when={Boolean(message.body_text)}>
                   <pre>{message.body_text ?? ''}</pre>
                 </Show>
                 <Show when={Boolean(message.body_html)}>
                   <pre>{message.body_html ?? ''}</pre>
                 </Show>
-              </Stack>
+              </Block>
             </section>
 
             <section aria-labelledby="mail-message-attachments-title">
-              <Stack gap="3">
+              <Block direction="column" gap="sm">
                 <Toolbar
                   title={
                     <span id="mail-message-attachments-title">Attachments</span>
@@ -323,20 +334,31 @@ export default function MailMessageDetails({
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        <For each={message.attachments} by={(attachment) => attachment.filename}>
+                        <For
+                          each={message.attachments}
+                          by={(attachment) => attachment.filename}
+                        >
                           {(attachment) => (
                             <TableRow key={attachment.filename}>
                               <TableCell>{attachment.filename}</TableCell>
                               <TableCell>{attachment.content_type}</TableCell>
-                              <TableCell>{formatByteCount(attachment.size)}</TableCell>
+                              <TableCell>
+                                {formatByteCount(attachment.size)}
+                              </TableCell>
                               <TableCell>
                                 <Button
                                   variant="secondary"
-                                  disabled={attachmentDownloadPendingId() === attachment.filename}
-                                  onPress={() => void downloadAttachment(attachment)}
+                                  disabled={
+                                    attachmentDownloadPendingId() ===
+                                    attachment.filename
+                                  }
+                                  onPress={() =>
+                                    void downloadAttachment(attachment)
+                                  }
                                 >
                                   <DownloadIcon aria-hidden="true" />
-                                  {attachmentDownloadPendingId() === attachment.filename
+                                  {attachmentDownloadPendingId() ===
+                                  attachment.filename
                                     ? 'Downloading...'
                                     : 'Download'}
                                 </Button>
@@ -348,11 +370,11 @@ export default function MailMessageDetails({
                     </Table>
                   </DataTable>
                 </Show>
-              </Stack>
+              </Block>
             </section>
-          </Stack>
+          </Block>
         )}
       </Show>
-    </Stack>
+    </Block>
   );
 }

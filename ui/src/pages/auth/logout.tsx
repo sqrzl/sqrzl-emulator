@@ -9,7 +9,7 @@ import {
   CardHeader,
   CardTitle,
   Container,
-  Stack,
+  Block,
   Section,
   Spinner,
   Text,
@@ -31,14 +31,14 @@ export default function LogoutPage() {
               <CardTitle>Local development mode</CardTitle>
             </CardHeader>
             <CardContent>
-              <Stack gap="4">
+              <Block direction="column" gap="md">
                 <Text>
                   Sign out is disabled while admin auth bypass is active.
                 </Text>
                 <Button asChild>
                   <a href={adminBucketsPath()}>Return to buckets</a>
                 </Button>
-              </Stack>
+              </Block>
             </CardContent>
           </Card>
         </Container>
@@ -88,11 +88,11 @@ export default function LogoutPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Stack gap="4" role="status" aria-atomic="true">
+            <Block direction="column" gap="md" role="status" aria-atomic="true">
               {phase() === 'pending' ? <Spinner label="Signing out" /> : null}
 
               {phase() === 'error' ? (
-                <Stack gap="4">
+                <Block direction="column" gap="md">
                   <Text tone="danger" size="sm">
                     {error() ||
                       'The auth cookie could not be cleared right now.'}
@@ -103,9 +103,9 @@ export default function LogoutPage() {
                   >
                     Retry
                   </Button>
-                </Stack>
+                </Block>
               ) : null}
-            </Stack>
+            </Block>
           </CardContent>
         </Card>
       </Container>

@@ -1,18 +1,18 @@
 import { navigate } from '@askrjs/askr/router';
 import { ArrowLeftIcon } from '@askrjs/lucide';
-import { Button, Inline, Stack } from '@askrjs/themes/components';
-import MessageTable from '../../components/mail/message-table';
-import StoragePageHeader from '../../components/storage/storage-page-header';
-import { adminMailboxesPath } from '../../shared/routes';
+import { Block, Button, Page, PageHeader } from '@askrjs/themes/components';
+import MessageTable from '../../../components/mail/message-table';
+import { adminMailboxesPath } from '../../../shared/routes';
 
 export default function Mailbox({ mailboxName }: { mailboxName: string }) {
   return (
-    <Stack gap="4">
-      <StoragePageHeader
+    <Page>
+      <PageHeader
+        data-sqrzl-slot="storage-page-header"
         title={`Mailbox ${mailboxName}`}
         description="Inspect messages captured for this mailbox."
         actions={
-          <Inline gap="2">
+          <Block direction="row" gap="xs">
             <Button
               variant="secondary"
               onPress={() => navigate(adminMailboxesPath())}
@@ -20,11 +20,11 @@ export default function Mailbox({ mailboxName }: { mailboxName: string }) {
               <ArrowLeftIcon aria-hidden="true" />
               Back to mailboxes
             </Button>
-          </Inline>
+          </Block>
         }
       />
 
       <MessageTable mailboxName={mailboxName} />
-    </Stack>
+    </Page>
   );
 }

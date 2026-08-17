@@ -8,7 +8,7 @@ import {
 } from '@askrjs/askr/router';
 import type { AuthContext } from '@askrjs/auth';
 import { routeRegistry } from '../src/pages/_routes';
-import BucketPage from '../src/pages/app/bucket';
+import BucketPage from '../src/pages/app/buckets/bucket';
 import {
   adminBucketsPath,
   blobIdFromBlobKey,
@@ -126,12 +126,8 @@ describe('shared route helpers', () => {
     expect(mailMessagePath('team@example.com', 'msg-1')).toBe(
       '/admin/mail/team%40example.com/msg-1'
     );
-    expect(textConversationPath('+1555%01')).toBe(
-      '/admin/texts/%2B1555%2501'
-    );
-    expect(textMessagePath('+1555', 'txt-1')).toBe(
-      '/admin/text/%2B1555/txt-1'
-    );
+    expect(textConversationPath('+1555%01')).toBe('/admin/texts/%2B1555%2501');
+    expect(textMessagePath('+1555', 'txt-1')).toBe('/admin/text/%2B1555/txt-1');
     expect(loginPath()).toBe('/login');
     expect(logoutPath()).toBe('/logout');
   });

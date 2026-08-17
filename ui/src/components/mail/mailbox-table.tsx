@@ -1,7 +1,7 @@
 import { For } from '@askrjs/askr/control';
 import { Link } from '@askrjs/askr/router';
 import { TrashIcon } from '@askrjs/lucide';
-import { Button, Inline } from '@askrjs/themes/components';
+import { Button, Block } from '@askrjs/themes/components';
 import {
   Table,
   TableBody,
@@ -9,13 +9,16 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import { createMutation } from '@askrjs/askr/data';
 import { MailboxInfo } from '../../adapters/api.g';
 import { useCursorList } from '../../features/storage/use-cursor-list';
 import { useDeleteTarget } from '../../features/storage/use-delete-target';
 import { mailboxListKey } from '../../features/mailboxes/keys';
-import { deleteMailbox, listMailboxPage } from '../../features/mailboxes/mailboxes.query';
+import {
+  deleteMailbox,
+  listMailboxPage,
+} from '../../features/mailboxes/mailboxes.query';
 import { formatRelativeTime } from '../../shared/format';
 import { mailboxPath } from '../../shared/routes';
 import DataTableSection from '../storage/data-table-section';
@@ -80,7 +83,9 @@ export default function MailboxTable() {
               <TableHeaderCell>Messages</TableHeaderCell>
               <TableHeaderCell>Last received</TableHeaderCell>
               <TableHeaderCell>
-                <Inline justify="end">Actions</Inline>
+                <Block direction="row" justify="end">
+                  Actions
+                </Block>
               </TableHeaderCell>
             </TableRow>
           </TableHead>
@@ -100,16 +105,18 @@ export default function MailboxTable() {
                       : 'Never'}
                   </TableCell>
                   <TableCell>
-                    <Inline justify="end" align="center">
+                    <Block direction="row" justify="end" align="center">
                       <Button
                         variant="ghost"
                         size="icon-sm"
                         aria-label={`Delete mailbox ${mailbox.address}`}
-                        onPress={() => remover.open({ mailbox: mailbox.address })}
+                        onPress={() =>
+                          remover.open({ mailbox: mailbox.address })
+                        }
                       >
                         <TrashIcon aria-hidden="true" />
                       </Button>
-                    </Inline>
+                    </Block>
                   </TableCell>
                 </TableRow>
               )}

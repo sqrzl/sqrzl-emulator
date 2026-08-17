@@ -1,13 +1,13 @@
 import { Link } from '@askrjs/askr/router';
-import { Button, Stack } from '@askrjs/themes/components';
-import { adminBucketsPath } from '../../shared/routes';
-import MailboxTable from '../../components/mail/mailbox-table';
-import StoragePageHeader from '../../components/storage/storage-page-header';
+import { Button, Page, PageHeader } from '@askrjs/themes/components';
+import { adminBucketsPath } from '../../../shared/routes';
+import MailboxTable from '../../../components/mail/mailbox-table';
 
 export default function Mailboxes() {
   return (
-    <Stack gap="4">
-      <StoragePageHeader
+    <Page>
+      <PageHeader
+        data-sqrzl-slot="storage-page-header"
         title="Mailboxes"
         description="Search recipient mailboxes and open one to inspect captured messages."
         actions={
@@ -18,6 +18,6 @@ export default function Mailboxes() {
       />
 
       <MailboxTable />
-    </Stack>
+    </Page>
   );
 }

@@ -1,5 +1,5 @@
 import { ArrowLeftIcon, ArrowRightIcon } from '@askrjs/lucide';
-import { Button, ButtonGroup, Inline } from '@askrjs/themes/components';
+import { Button, ButtonGroup, Block } from '@askrjs/themes/components';
 
 export default function CursorPagination({
   hasNext,
@@ -13,7 +13,13 @@ export default function CursorPagination({
   onPrevious: () => void;
 }) {
   return (
-    <Inline justify="end" align="center" gap="2" wrap>
+    <Block
+      direction="row"
+      justify="end"
+      align="center"
+      gap="xs"
+      style={{ flexWrap: 'wrap' }}
+    >
       <ButtonGroup>
         <Button
           variant="secondary"
@@ -28,6 +34,6 @@ export default function CursorPagination({
           <ArrowRightIcon aria-hidden="true" />
         </Button>
       </ButtonGroup>
-    </Inline>
+    </Block>
   );
 }

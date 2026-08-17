@@ -3,7 +3,7 @@ import { Show } from '@askrjs/askr/control';
 import { createMutation } from '@askrjs/askr/data';
 import { navigate } from '@askrjs/askr/router';
 import { MessageSquarePlusIcon } from '@askrjs/lucide';
-import { Button, Field, FieldError, Stack } from '@askrjs/themes/components';
+import { Button, Field, FieldError, Block } from '@askrjs/themes/components';
 import {
   Dialog,
   DialogClose,
@@ -20,8 +20,11 @@ import {
   SelectTrigger,
   SelectValue,
   Textarea,
-} from '@askrjs/ui';
-import type { InboundTextSimulationRequest, TextProvider } from '../../adapters/api.g';
+} from '@askrjs/themes/components';
+import type {
+  InboundTextSimulationRequest,
+  TextProvider,
+} from '../../adapters/api.g';
 import { simulateInboundText } from '../../features/texts/texts.query';
 import { textConversationListKey } from '../../features/texts/keys';
 import { textMessagePath } from '../../shared/routes';
@@ -92,7 +95,9 @@ export default function TextSimulationDialog() {
       navigate(textMessagePath(message.peer, message.message_id));
     } catch (caught) {
       setError(
-        caught instanceof Error ? caught.message : 'Inbound text could not be simulated.'
+        caught instanceof Error
+          ? caught.message
+          : 'Inbound text could not be simulated.'
       );
     }
   }
@@ -106,14 +111,23 @@ export default function TextSimulationDialog() {
         <DialogPortal>
           <DialogOverlay />
           <DialogContent>
-            <Stack gap="4">
+            <Block direction="column" gap="md">
               <StorageDialogHeader title="Simulate inbound text">
-                <p>Store an inbound provider event and attempt its configured destination.</p>
+                <p>
+                  Store an inbound provider event and attempt its configured
+                  destination.
+                </p>
               </StorageDialogHeader>
               <StorageDialogForm onSubmit={(event) => void submit(event)}>
                 <Field>
                   <Label for="text-provider">Provider</Label>
-                  <Select id="text-provider" value={provider()} onValueChange={(value) => setProvider(value as TextProvider)}>
+                  <Select
+                    id="text-provider"
+                    value={provider()}
+                    onValueChange={(value) =>
+                      setProvider(value as TextProvider)
+                    }
+                  >
                     <SelectTrigger aria-label="Text provider">
                       <SelectValue />
                     </SelectTrigger>
@@ -130,33 +144,64 @@ export default function TextSimulationDialog() {
                 </Field>
                 <Field>
                   <Label for="text-from">From</Label>
-                  <Input id="text-from" type="tel" required placeholder="+15551234567" ref={(node: Element | null) => { fromInput = node as HTMLInputElement | null; }} />
+                  <Input
+                    id="text-from"
+                    type="tel"
+                    required
+                    placeholder="+15551234567"
+                    ref={(node: Element | null) => {
+                      fromInput = node as HTMLInputElement | null;
+                    }}
+                  />
                 </Field>
                 <Field>
                   <Label for="text-to">To (local number)</Label>
-                  <Input id="text-to" type="tel" required placeholder="+15557654321" ref={(node: Element | null) => { toInput = node as HTMLInputElement | null; }} />
+                  <Input
+                    id="text-to"
+                    type="tel"
+                    required
+                    placeholder="+15557654321"
+                    ref={(node: Element | null) => {
+                      toInput = node as HTMLInputElement | null;
+                    }}
+                  />
                 </Field>
                 <Field>
                   <Label for="text-body">Body</Label>
-                  <Textarea id="text-body" placeholder="Message body" ref={(node: Element | null) => { bodyInput = node as HTMLTextAreaElement | null; }} />
+                  <Textarea
+                    id="text-body"
+                    placeholder="Message body"
+                    ref={(node: Element | null) => {
+                      bodyInput = node as HTMLTextAreaElement | null;
+                    }}
+                  />
                 </Field>
                 <Field>
                   <Label for="text-media">Twilio MMS media (optional)</Label>
-                  <Input id="text-media" type="file" disabled={provider() !== 'twilio'} ref={(node: Element | null) => { mediaInput = node as HTMLInputElement | null; }} />
+                  <Input
+                    id="text-media"
+                    type="file"
+                    disabled={provider() !== 'twilio'}
+                    ref={(node: Element | null) => {
+                      mediaInput = node as HTMLInputElement | null;
+                    }}
+                  />
                 </Field>
                 <Show when={error()}>
                   <FieldError role="alert">{error()}</FieldError>
                 </Show>
                 <StorageDialogFooter>
                   <DialogClose asChild>
-                    <Button variant="secondary" disabled={create.pending}>Cancel</Button>
+                    <Button variant="secondary" disabled={create.pending}>
+                      Cancel
+                    </Button>
                   </DialogClose>
                   <Button type="submit" disabled={create.pending}>
                     {create.pending ? 'Simulating...' : 'Simulate inbound'}
                   </Button>
                 </StorageDialogFooter>
               </StorageDialogForm>
-            </Stack>
+            </Block>
           </DialogContent>
         </DialogPortal>
       </Dialog>

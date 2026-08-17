@@ -1,7 +1,8 @@
 import { cleanupApp, createSPA } from '@askrjs/askr/boot';
 import { createRouteRegistry, route } from '@askrjs/askr/router';
 import { describe, expect, it } from 'vite-plus/test';
-import TextMessagePage from '../src/pages/app/text-message';
+import TextMessagePage from '../src/pages/app/texts/message';
+import TextConversationPage from '../src/pages/app/texts/conversation';
 import TextsPage from '../src/pages/app/texts';
 
 const originalFetch = globalThis.fetch;
@@ -28,6 +29,61 @@ async function mount(component: any, path = '/'): Promise<HTMLDivElement> {
 }
 
 describe('texts UI', () => {
+  it('expands text message details beneath the selected row', async () => {
+    const message = {
+      message_id: 'txt-inline',
+      provider_message_id: 'SM-inline',
+      batch_id: null,
+      provider: 'twilio',
+      direction: 'inbound',
+      channel: 'sms',
+      from: '+15550000002',
+      to: '+15550000001',
+      peer: '+15550000002',
+      body: 'Inline text body',
+      media: [],
+      metadata: {},
+      delivery_state: 'delivered',
+      created_at: '2026-08-17T14:00:00Z',
+      updated_at: '2026-08-17T14:00:00Z',
+    };
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request =
+        typeof input === 'string' || input instanceof URL
+          ? new Request(input, init)
+          : input;
+      const path = new URL(request.url, 'http://localhost').pathname;
+      return path.endsWith('/messages')
+        ? jsonResponse({ items: [message], next: null })
+        : jsonResponse({ ...message, callback_attempts: [] });
+    };
+    const root = await mount(() => (
+      <TextConversationPage peer="+15550000002" />
+    ));
+    try {
+      await flush();
+      const expand = root.querySelector(
+        '[aria-label="Expand text message txt-inline"]'
+      ) as HTMLButtonElement;
+      expect(expand).toBeTruthy();
+      expand.click();
+      await flush();
+      expect(
+        root.querySelector('#text-message-inline-txt-inline')
+      ).toBeTruthy();
+      expect(root.textContent).toContain('Provider message ID');
+      expect(
+        root
+          .querySelector('[aria-label="Collapse text message txt-inline"]')
+          ?.getAttribute('aria-expanded')
+      ).toBe('true');
+    } finally {
+      cleanupApp(root);
+      root.remove();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('renders populated conversations and opens simulation and destructive dialogs', async () => {
     globalThis.fetch = async () =>
       jsonResponse({
@@ -54,7 +110,9 @@ describe('texts UI', () => {
       simulateButton.click();
       await flush();
       expect(document.body.textContent).toContain('Simulate inbound text');
-      const cancelButton = Array.from(document.body.querySelectorAll('button')).find(
+      const cancelButton = Array.from(
+        document.body.querySelectorAll('button')
+      ).find(
         (button) => button.textContent?.trim() === 'Cancel'
       ) as HTMLButtonElement;
       cancelButton.click();

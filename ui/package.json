@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
+    "dev:mock": "vp dev --mode mock",
     "build": "vp build",
     "preview": "vp preview",
     "test": "vp test run",
@@ -14,20 +15,19 @@
     "gen": "npx @fgrzl/fetch-gen --input ../public/openapi.yml --output ./src/adapters/api.g.ts"
   },
   "dependencies": {
-    "@askrjs/askr": "^0.0.91",
-    "@askrjs/charts": ">=0.1.6 <0.2.0",
-    "@askrjs/lucide": "^0.0.9",
-    "@askrjs/themes": "^0.0.25",
-    "@askrjs/ui": "^0.0.27",
+    "@askrjs/askr": "^0.2.0",
+    "@askrjs/charts": ">=0.2.0 <0.3.0",
+    "@askrjs/lucide": "^0.2.0",
+    "@askrjs/themes": "^0.2.0",
     "@fgrzl/fetch": "^2.0.0"
   },
   "devDependencies": {
-    "@askrjs/vite": "^0.0.13",
+    "@askrjs/vite": "^0.2.0",
     "@types/node": "^26.2.0",
     "jiti": "^2.7.0",
     "jsdom": "^30.0.1",
     "typescript": "^7.0.2",
-    "vite-plus": "^0.2.8"
+    "vite-plus": "^0.2.9"
   },
   "engines": {
     "node": ">=24"

@@ -15,6 +15,12 @@
     "jsx": "react-jsx",
     "jsxImportSource": "@askrjs/askr"
   },
-  "include": ["src", "tests", "node_modules/@askrjs/askr/dist/jsx/types.d.ts"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": [
+    "src",
+    "tests",
+    "dev",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "node_modules/@askrjs/askr/dist/jsx/types.d.ts"
+  ]
 }

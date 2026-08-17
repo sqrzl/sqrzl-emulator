@@ -2,7 +2,7 @@ import { state } from '@askrjs/askr';
 import { Show } from '@askrjs/askr/control';
 import { createMutation } from '@askrjs/askr/data';
 import { UploadIcon } from '@askrjs/lucide';
-import { Button, Field, FieldError, Stack } from '@askrjs/themes/components';
+import { Button, Field, FieldError, Block } from '@askrjs/themes/components';
 import {
   Dialog,
   DialogClose,
@@ -11,7 +11,7 @@ import {
   DialogPortal,
   Input,
   Label,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import { putObjectContent as putBlobContent } from '../../features/objects/objects.query';
 import { blobListKey } from '../../features/storage/keys';
 import {
@@ -118,7 +118,7 @@ export default function BlobModal({
         <DialogPortal>
           <DialogOverlay />
           <DialogContent>
-            <Stack gap="4">
+            <Block direction="column" gap="md">
               <StorageDialogHeader title="Add blob">
                 <p>{uploadDescription}</p>
               </StorageDialogHeader>
@@ -157,7 +157,7 @@ export default function BlobModal({
                   </Button>
                 </StorageDialogFooter>
               </StorageDialogForm>
-            </Stack>
+            </Block>
           </DialogContent>
         </DialogPortal>
       </Dialog>

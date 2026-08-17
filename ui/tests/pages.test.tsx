@@ -4,9 +4,9 @@ import { createRouteRegistry, route } from '@askrjs/askr/router';
 import AppLayout from '../src/pages/app/_layout';
 import LoginPage from '../src/pages/auth/login';
 import Home from '../src/pages/app/buckets';
-import BucketPage from '../src/pages/app/bucket';
-import BlobPage from '../src/pages/app/blob';
-import MailboxPage from '../src/pages/app/mailbox';
+import BucketPage from '../src/pages/app/buckets/bucket';
+import BlobPage from '../src/pages/app/buckets/blob';
+import MailboxPage from '../src/pages/app/mailboxes/mailbox';
 import { blobIdFromBlobKey } from '../src/shared/routes';
 
 const originalFetch = globalThis.fetch;
@@ -137,9 +137,75 @@ describe('simplified page flows', () => {
       expect(root.querySelector('a[href="/admin/texts"]')).toBeTruthy();
       expect(root.querySelector('[aria-label="Toggle theme"]')).toBeTruthy();
       expect(root.querySelector('a[href="/logout"]')).toBeTruthy();
+      expect(root.textContent).toContain('Sqrzl');
+      expect(root.querySelector('[data-slot="brand-mark"]')).toBeTruthy();
     } finally {
       cleanupApp(root);
       root.remove();
+    }
+  });
+
+  it('expands mailbox message details beneath the selected row', async () => {
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request =
+        typeof input === 'string' || input instanceof URL
+          ? new Request(input, init)
+          : input;
+      const path = new URL(request.url, 'http://localhost').pathname;
+      if (path.endsWith('/messages')) {
+        return jsonResponse({
+          items: [
+            {
+              message_id: 'mail-1',
+              received_at: '2026-08-17T14:00:00Z',
+              delivery_state: 'delivered',
+              subject: 'Inline me',
+              from: { email: 'from@example.test' },
+              to: [{ email: 'demo@example.test' }],
+            },
+          ],
+          next: null,
+        });
+      }
+      return jsonResponse({
+        mailbox: 'demo@example.test',
+        message_id: 'mail-1',
+        received_at: '2026-08-17T14:00:00Z',
+        source_protocol: 'smtp',
+        delivery_state: 'delivered',
+        subject: 'Inline me',
+        from: { email: 'from@example.test' },
+        to: [{ email: 'demo@example.test' }],
+        cc: [],
+        bcc: [],
+        headers: {},
+        body_text: 'Inline body',
+        body_html: null,
+        attachments: [],
+      });
+    };
+    const root = await mount(() => (
+      <MailboxPage mailboxName="demo@example.test" />
+    ));
+    try {
+      await flush();
+      const expand = root.querySelector(
+        '[aria-label="Expand message mail-1"]'
+      ) as HTMLButtonElement;
+      expect(expand).toBeTruthy();
+      click(expand);
+      await flush();
+      expect(root.textContent).toContain('Inline body');
+      expect(root.querySelector('#mail-message-inline-mail-1')).toBeTruthy();
+      expect(
+        root
+          .querySelector('[aria-label="Collapse message mail-1"]')
+          ?.getAttribute('aria-expanded')
+      ).toBe('true');
+    } finally {
+      cleanupApp(root);
+      root.remove();
+      globalThis.fetch = originalFetch;
     }
   });
 
@@ -166,6 +232,9 @@ describe('simplified page flows', () => {
     try {
       await flush();
       expect(root.textContent).toContain('Sign in');
+      expect(
+        root.querySelector('[data-sqrzl-slot="auth-centered"]')
+      ).toBeTruthy();
 
       const username = root.querySelector('#username') as HTMLInputElement;
       const password = root.querySelector('#password') as HTMLInputElement;

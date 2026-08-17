@@ -1,13 +1,7 @@
 import { SearchIcon } from '@askrjs/lucide';
 import { resource } from '@askrjs/askr/resources';
-import {
-  Box,
-  Button,
-  ButtonGroup,
-  Field,
-  Inline,
-} from '@askrjs/themes/components';
-import { Input, Label } from '@askrjs/ui';
+import { Button, ButtonGroup, Field, Block } from '@askrjs/themes/components';
+import { Input, Label } from '@askrjs/themes/components';
 
 export default function StorageSearchForm({
   inputId,
@@ -54,12 +48,12 @@ export default function StorageSearchForm({
 
   return (
     <form data-sqrzl-slot="storage-search-form" onSubmit={searchNow}>
-      <Inline align="end" gap="3" wrap>
-        <Box
+      <Block direction="row" align="end" gap="sm" style={{ flexWrap: 'wrap' }}>
+        <Block
           data-sqrzl-slot="storage-search-field"
           grow
-          minWidth={{ base: '100%', sm: '18rem' }}
-          maxWidth={{ base: '100%', md: '28rem' }}
+          minWidth={{ base: 'full', sm: 'sm' }}
+          maxWidth={{ base: 'full', md: 'md' }}
         >
           <Field>
             <Label for={inputId}>{label}</Label>
@@ -75,7 +69,7 @@ export default function StorageSearchForm({
               onInput={searchFromInput}
             />
           </Field>
-        </Box>
+        </Block>
         <ButtonGroup attached={false}>
           <Button type="submit">
             <SearchIcon aria-hidden="true" /> Search
@@ -84,7 +78,7 @@ export default function StorageSearchForm({
             Clear
           </Button>
         </ButtonGroup>
-      </Inline>
+      </Block>
     </form>
   );
 }

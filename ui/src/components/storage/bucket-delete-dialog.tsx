@@ -1,10 +1,10 @@
-import { Button, FieldError, Stack } from '@askrjs/themes/components';
+import { Button, FieldError, Block } from '@askrjs/themes/components';
 import {
   AlertDialog,
   AlertDialogContent,
   AlertDialogOverlay,
   AlertDialogPortal,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import { Show } from '@askrjs/askr/control';
 import type { DeleteTarget } from '../../features/storage/use-delete-target';
 import StorageDialogFooter from './storage-dialog-footer';
@@ -33,7 +33,7 @@ export default function BucketDeleteDialog({
       <AlertDialogPortal>
         <AlertDialogOverlay />
         <AlertDialogContent>
-          <Stack gap="4">
+          <Block direction="column" gap="md">
             <StorageDialogHeader title="Delete bucket">
               <p>
                 {target?.pendingCount
@@ -69,7 +69,7 @@ export default function BucketDeleteDialog({
                     : 'Delete bucket'}
               </Button>
             </StorageDialogFooter>
-          </Stack>
+          </Block>
         </AlertDialogContent>
       </AlertDialogPortal>
     </AlertDialog>

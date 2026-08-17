@@ -1,13 +1,13 @@
 import { route } from '@askrjs/askr/router';
 import Buckets from './buckets';
-import BucketPage from './bucket';
-import BlobPage from './blob';
-import MailboxPage from './mailbox';
-import MailMessagePage from './mail-message';
+import BucketPage from './buckets/bucket';
+import BlobPage from './buckets/blob';
 import Mailboxes from './mailboxes';
-import TextConversationPage from './text-conversation';
-import TextMessagePage from './text-message';
+import MailboxPage from './mailboxes/mailbox';
+import MailMessagePage from './mailboxes/message';
 import TextsPage from './texts';
+import TextConversationPage from './texts/conversation';
+import TextMessagePage from './texts/message';
 import {
   adminBucketsPath,
   adminMailboxesPath,
@@ -41,7 +41,10 @@ export function registerAppRoutes(): void {
     <TextConversationPage peer={params.peer ?? ''} />
   ));
   route('/admin/text/{peer}/{messageId}', (params) => (
-    <TextMessagePage peer={params.peer ?? ''} messageId={params.messageId ?? ''} />
+    <TextMessagePage
+      peer={params.peer ?? ''}
+      messageId={params.messageId ?? ''}
+    />
   ));
   route(`${adminBucketsPath()}/{bucketName}/*`, (params) => (
     <BucketPage

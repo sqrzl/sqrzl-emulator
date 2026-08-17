@@ -1,4 +1,4 @@
-import { Inline } from '@askrjs/themes/components';
+import { Block } from '@askrjs/themes/components';
 
 export default function StorageDialogFooter({
   children,
@@ -6,15 +6,16 @@ export default function StorageDialogFooter({
   children?: unknown;
 }) {
   return (
-    <Inline
+    <Block
+      direction="row"
       data-sqrzl-slot="storage-dialog-footer"
       justify="end"
       align="center"
-      gap="2"
-      wrap
+      gap="xs"
+      style={{ flexWrap: 'wrap' }}
       width="full"
     >
       {children}
-    </Inline>
+    </Block>
   );
 }

@@ -3,19 +3,19 @@ import { currentRoute, Link } from '@askrjs/askr/router';
 import {
   Button,
   EmptyState,
-  Inline,
+  Page,
+  PageHeader,
   Spinner,
-  Stack,
+  Block,
 } from '@askrjs/themes/components';
-import BlobBreadcrumbs from '../../components/storage/blob-breadcrumbs';
-import BlobDetails from '../../components/storage/blob-details';
-import StoragePageHeader from '../../components/storage/storage-page-header';
+import BlobBreadcrumbs from '../../../components/storage/blob-breadcrumbs';
+import BlobDetails from '../../../components/storage/blob-details';
 import {
   findObjectByBlobId,
   loadObjectMetadata,
-} from '../../features/objects/objects.query';
-import { blobFileName } from '../../features/storage/path';
-import { bucketPath } from '../../shared/routes';
+} from '../../../features/objects/objects.query';
+import { blobFileName } from '../../../features/storage/path';
+import { bucketPath } from '../../../shared/routes';
 
 export default function Blob({
   bucketName,
@@ -60,9 +60,9 @@ export default function Blob({
 
   if (resolvedBlob.pending && !resolvedBlob.value) {
     return (
-      <Inline justify="center" align="center">
+      <Block direction="row" justify="center" align="center">
         <Spinner />
-      </Inline>
+      </Block>
     );
   }
 
@@ -81,15 +81,16 @@ export default function Blob({
   }
 
   return (
-    <Stack gap="4">
+    <Page>
       <BlobBreadcrumbs bucketName={bucketName} blobKey={resolvedBlobKey} />
 
-      <StoragePageHeader
+      <PageHeader
+        data-sqrzl-slot="storage-page-header"
         title={blobFileName(resolvedBlobKey)}
         description={resolvedBlobKey}
       />
 
       <BlobDetails bucketName={bucketName} blobKey={resolvedBlobKey} />
-    </Stack>
+    </Page>
   );
 }

@@ -6,10 +6,9 @@ import { ArrowLeftIcon, DownloadIcon } from '@askrjs/lucide';
 import {
   Button,
   DataTable,
-  Inline,
   EmptyState,
   FieldError,
-  Stack,
+  Block,
   Toolbar,
 } from '@askrjs/themes/components';
 import {
@@ -19,7 +18,7 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-} from '@askrjs/ui';
+} from '@askrjs/themes/components';
 import {
   downloadObjectContent as downloadBlobContent,
   loadObjectMetadata as loadBlobMetadata,
@@ -78,12 +77,13 @@ export default function BlobDetails({
   }
 
   return (
-    <Stack gap="4">
-      <Inline
+    <Block direction="column" gap="md">
+      <Block
+        direction="row"
         data-sqrzl-slot="storage-detail-actions"
         align="center"
-        gap="2"
-        wrap
+        gap="xs"
+        style={{ flexWrap: 'wrap' }}
       >
         <Button variant="secondary" asChild>
           <Link href={blobParentPath(bucketName, blobKey)}>
@@ -97,7 +97,7 @@ export default function BlobDetails({
           <DownloadIcon aria-hidden="true" />
           {downloadPending() ? 'Downloading...' : 'Download blob'}
         </Button>
-      </Inline>
+      </Block>
 
       <Show when={downloadError()}>
         <FieldError role="alert">{downloadError()}</FieldError>
@@ -122,9 +122,9 @@ export default function BlobDetails({
           );
 
           return (
-            <Stack gap="4">
+            <Block direction="column" gap="md">
               <section aria-labelledby="blob-details-title">
-                <Stack gap="3">
+                <Block direction="column" gap="sm">
                   <Toolbar
                     title={<span id="blob-details-title">Details</span>}
                   />
@@ -175,11 +175,11 @@ export default function BlobDetails({
                       </TableBody>
                     </Table>
                   </DataTable>
-                </Stack>
+                </Block>
               </section>
 
               <section aria-labelledby="blob-metadata-title">
-                <Stack gap="3">
+                <Block direction="column" gap="sm">
                   <Toolbar
                     title={
                       <span id="blob-metadata-title">Custom metadata</span>
@@ -213,12 +213,12 @@ export default function BlobDetails({
                       </Table>
                     </DataTable>
                   </Show>
-                </Stack>
+                </Block>
               </section>
-            </Stack>
+            </Block>
           );
         }}
       </Show>
-    </Stack>
+    </Block>
   );
 }

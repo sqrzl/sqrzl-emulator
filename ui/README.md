@@ -1,5 +1,31 @@
 # Sqrzl Admin UI
 
+## Development
+
+Use the normal development command when the Rust emulator is available on
+port 9001. Vite proxies admin API requests to that process:
+
+```bash
+npm run dev
+```
+
+For UI-only development, run the opt-in stateful mock API instead:
+
+```bash
+npm run dev:mock
+```
+
+The mock starts signed out. Log in with username `admin` and password
+`sqrzl-secret`. Its compact walkthrough fixtures cover storage, mail, and text
+messaging, with list pages intentionally capped at three rows. Creates,
+uploads, edits, delivery transitions, retries, and deletes remain visible after
+browser reloads because state lives in the Vite process. Restarting Vite resets
+all state to the same deterministic fixtures. Mock callbacks are recorded but
+never sent, and no provider APIs are called.
+
+Mock mode intercepts every `/admin/v1` request. Unknown API routes return a
+structured mock `404`; they are never forwarded to the Rust-server proxy.
+
 The Sqrzl admin UI is an Askr SPA for the storage administration API.
 
 Keep it small: sign in, search buckets, create/delete buckets, browse
