@@ -26,7 +26,7 @@ jobs:
           shared-key: "ci"
 
       - name: Install cntryl-tools
-        run: cargo install --git https://github.com/cntryl/tools --locked
+        run: cargo install --git https://github.com/cntryl/tools --rev b2a06b1a635de752803f5860339fc3cecbc19742 --locked
 
       - name: Validate Test Structure
         run: cntryl-tools validate-tests
