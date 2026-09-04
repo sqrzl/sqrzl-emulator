@@ -92,7 +92,8 @@
           "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
           "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
           "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
-          "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy"
+          "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
+          "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -354,12 +355,15 @@
       "sas_auth": {
         "status": "partial",
         "verified_by": [
-          "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization"
+          "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
+          "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas"
         ],
         "support_tier": "partial",
-        "sdk_verified_by": [],
+        "sdk_verified_by": [
+          "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow"
+        ],
         "limitations": [
-          "SAS authorization is covered by adapter contract tests, but not yet part of the SDK certification gate."
+          "Blob SAS read, create, write, and delete permissions are verified, including staging and committing a multi-block upload through one SDK-generated SAS. Account SAS and service-level SAS operations remain outside this subset."
         ]
       },
       "block_blob_upload": {
@@ -369,6 +373,8 @@
           "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
           "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations",
           "providers::azure::tests::should_commit_and_list_blocks_after_adapter_restart",
+          "providers::azure::tests::should_discard_block_upload_state_after_a_direct_blob_overwrite",
+          "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas",
           "providers::azure::tests::should_reject_invalid_azure_block_ids_without_staging_them",
           "providers::azure::tests::should_reject_malformed_azure_block_lists_without_committing",
           "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
@@ -380,7 +386,7 @@
           "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated negative, pagination, restart-durability, and provider error-response contract gates."
+          "Put Block payloads are disk-staged and Put Block List composes them without materializing the complete blob. The emulator enforces 4,000 MiB per block, 100,000 uncommitted blocks, 50,000 committed blocks, the approximately 190.7 TiB block-blob ceiling, and cleanup on commit, overwrite, or rejected sessions."
         ]
       },
       "append_blob": {
@@ -575,12 +581,13 @@
         "status": "partial",
         "verified_by": [
           "providers::gcs::tests::should_sort_merge_and_filter_gcs_v2_extension_headers_in_string_to_sign",
-          "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access"
+          "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access",
+          "providers::gcs::tests::should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [],
         "limitations": [
-          "Signed URL V2 validation and canonicalized x-goog-* extension headers are covered by adapter tests, but official SDK signed URL generation is not in the certification gate."
+          "Signed URL V2 validation and canonicalized x-goog-* extension headers are covered. GOOG4-HMAC-SHA256 validates canonical path, query, signed headers, scope, expiry, and payload mode for signed resumable initiation. RSA service-account signed URLs remain outside this HMAC subset."
         ]
       },
       "hmac_auth_v2": {
@@ -603,6 +610,10 @@
           "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
           "providers::gcs::tests::should_complete_resumable_upload_after_adapter_restart",
           "providers::gcs::tests::should_apply_resumable_json_metadata_and_body_name_without_silent_fields",
+          "providers::gcs::tests::should_resume_and_complete_a_multi_chunk_resumable_upload",
+          "providers::gcs::tests::should_reject_resumable_sessions_above_the_gcs_object_limit",
+          "providers::gcs::tests::should_reclaim_an_expired_gcs_resumable_session",
+          "providers::gcs::tests::should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url",
           "providers::tests::should_route_local_gcs_resumable_session_uris_back_to_gcs",
           "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
           "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
@@ -612,7 +623,7 @@
           "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
         ],
         "limitations": [
-          "Resumable sessions persist across restart and accept a single final upload. Initiation supports object name, contentType, and string metadata, while completion accepts x-goog-meta-* metadata; unsupported writable metadata fields such as cacheControl return 501 instead of being silently ignored. Multi-chunk transfers and upload-status probes are explicitly rejected and are not claimed as GCS-compatible."
+          "JSON and XML resumable sessions persist across restart, accept repeated 256 KiB-aligned non-final chunks and status probes, combine CRC32C incrementally, compose on disk, expire after seven days, and enforce the 5 TiB object ceiling. Initiation supports object name, contentType, string metadata, and GOOG4 HMAC signed URLs; unsupported writable metadata fields such as cacheControl return 501 instead of being silently ignored."
         ]
       },
       "json_api_breadth": {
@@ -742,16 +753,19 @@
         ]
       },
       "request_signing": {
-        "status": "missing",
+        "status": "partial",
         "verified_by": [
           "providers::oci::tests::should_reject_malformed_or_wrong_algorithm_signature_authorization",
-          "providers::oci::tests::should_report_valid_oci_signature_shape_as_explicitly_unsupported",
+          "providers::oci::tests::should_verify_oci_rsa_signatures_and_reject_a_tampered_target",
           "interop_auth::should_reject_unsigned_oci_request_given_auth_enforced_when_request_is_missing_signature"
         ],
-        "support_tier": "unsupported",
-        "sdk_verified_by": [],
+        "support_tier": "partial",
+        "sdk_verified_by": [
+          "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows",
+          "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
+        ],
         "limitations": [
-          "OCI RSA-SHA256 request-signature verification is not implemented. When authentication enforcement is enabled, OCI Signature requests are rejected explicitly instead of being accepted through a non-provider HMAC approximation."
+          "OCI RSA-SHA256 request signatures validate the configured tenancy/user/fingerprint key ID, required signed headers, canonical signing lines, request-target integrity, and a five-minute clock window using a configured PKCS#1 or PKCS#8 public key. Additional OCI authorization policy semantics are outside the local emulator."
         ]
       },
       "multipart": {
@@ -763,14 +777,16 @@
           "providers::oci::tests::should_return_native_oci_errors_for_invalid_multipart_requests",
           "providers::oci::tests::should_never_commit_unlisted_or_excluded_oci_multipart_parts",
           "providers::oci::tests::should_preserve_oci_multipart_object_path_components",
-          "providers::oci::tests::should_reject_unsupported_oci_multipart_conditions_without_consuming_session"
+          "providers::oci::tests::should_reject_unsupported_oci_multipart_conditions_without_consuming_session",
+          "providers::oci::tests::should_upload_directly_and_in_parts_through_an_object_par"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
+          "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
+          "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
         ],
         "limitations": [
-          "Only complete, explicitly listed part manifests are committed. Unlisted parts require explicit exclusion, selective commits and conditional completion are rejected as 501 NotImplemented without consuming the upload, and malformed part/session/manifest inputs use OCI-native 400/404 errors."
+          "UploadPart payloads are disk-staged and complete manifests compose without loading the full object. The emulator enforces 10 MiB non-final parts, 50 GiB per part, 10,000 parts, a 10 TiB object ceiling, and supports Object PAR direct PUT plus native PAR multipart initiation. Unlisted parts require explicit exclusion; selective commits and conditional completion return 501 without consuming the session."
         ]
       }
     },

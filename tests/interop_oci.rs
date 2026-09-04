@@ -144,6 +144,7 @@ async fn should_list_prefixed_objects_given_nested_keys_when_querying_oci_bucket
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)] // One native multipart flow keeps initiation, parts, commit, and readback together.
 async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci_upload() {
     let storage = temp_storage();
     call(
@@ -176,6 +177,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
         .get("uploadId")
         .and_then(|value| value.as_str())
         .expect("upload id should exist");
+    let first_part = vec![b'm'; 10 * 1024 * 1024];
 
     let part_one = call(
         storage.clone(),
@@ -186,7 +188,7 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
                 "http://localhost/n/sqrzl-emulator/b/interop-oci/u/multi.txt?uploadId={upload_id}&uploadPartNum=1"
             ),
             &[],
-            b"multi",
+            &first_part,
         ),
     )
     .await;
@@ -247,7 +249,9 @@ async fn should_commit_multipart_object_given_uploaded_parts_when_finalizing_oci
         .await,
     )
     .await;
-    assert_eq!(body, b"multipart");
+    let mut expected = first_part;
+    expected.extend_from_slice(b"part");
+    assert_eq!(body, expected);
 }
 
 #[tokio::test(flavor = "multi_thread")]

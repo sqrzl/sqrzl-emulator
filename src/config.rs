@@ -19,6 +19,14 @@ const ENV_SQRZL_MAX_REQUEST_BYTES: &str = "SQRZL_MAX_REQUEST_BYTES";
 const ENV_SQRZL_BUCKET_LIST: &str = "SQRZL_BUCKET_LIST";
 const ENV_SQRZL_LOG_FORMAT: &str = "SQRZL_LOG_FORMAT";
 const ENV_SQRZL_SMTP_PORT: &str = "SQRZL_SMTP_PORT";
+const ENV_AZURE_ACCOUNT: &str = "AZURE_ACCOUNT";
+const ENV_AZURE_ACCOUNT_KEY: &str = "AZURE_ACCOUNT_KEY";
+const ENV_GCS_HMAC_ACCESS_ID: &str = "GCS_HMAC_ACCESS_ID";
+const ENV_GCS_HMAC_SECRET: &str = "GCS_HMAC_SECRET";
+const ENV_OCI_TENANCY_OCID: &str = "OCI_TENANCY_OCID";
+const ENV_OCI_USER_OCID: &str = "OCI_USER_OCID";
+const ENV_OCI_KEY_FINGERPRINT: &str = "OCI_KEY_FINGERPRINT";
+const ENV_OCI_PUBLIC_KEY_PATH: &str = "OCI_PUBLIC_KEY_PATH";
 
 // Default values
 const DEFAULT_SQRZL_BLOBS_PATH: &str = "./blobs";
@@ -37,6 +45,20 @@ pub enum LogFormat {
     Text,
     /// Structured JSON logs.
     Json,
+}
+
+/// Provider-native authentication overrides. These intentionally use each
+/// vendor name directly rather than the emulator's `SQRZL_` prefix.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VendorCredentials {
+    pub azure_account: Option<String>,
+    pub azure_account_key: Option<String>,
+    pub gcs_hmac_access_id: Option<String>,
+    pub gcs_hmac_secret: Option<String>,
+    pub oci_tenancy_ocid: Option<String>,
+    pub oci_user_ocid: Option<String>,
+    pub oci_key_fingerprint: Option<String>,
+    pub oci_public_key_path: Option<String>,
 }
 
 /// Global application configuration loaded from environment variables.
@@ -58,11 +80,13 @@ pub struct Config {
     pub api_port: u16,
     /// Port for the UI server
     pub ui_port: u16,
-    /// Maximum accepted HTTP request body size; eligible S3 uploads are streamed
-    /// to disk while this limit is enforced.
+    /// Maximum accepted HTTP request body size; provider data upload paths are
+    /// streamed to disk while this per-request limit is enforced.
     pub max_request_bytes: usize,
     /// Port for the SMTP mail-capture server
     pub smtp_port: u16,
+    /// Provider-native credentials and signing configuration.
+    pub vendor_credentials: VendorCredentials,
 }
 
 impl Config {
@@ -95,6 +119,16 @@ impl Config {
         let smtp_port = lookup(ENV_SQRZL_SMTP_PORT)
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(DEFAULT_SQRZL_SMTP_PORT);
+        let vendor_credentials = VendorCredentials {
+            azure_account: lookup(ENV_AZURE_ACCOUNT),
+            azure_account_key: lookup(ENV_AZURE_ACCOUNT_KEY),
+            gcs_hmac_access_id: lookup(ENV_GCS_HMAC_ACCESS_ID),
+            gcs_hmac_secret: lookup(ENV_GCS_HMAC_SECRET),
+            oci_tenancy_ocid: lookup(ENV_OCI_TENANCY_OCID),
+            oci_user_ocid: lookup(ENV_OCI_USER_OCID),
+            oci_key_fingerprint: lookup(ENV_OCI_KEY_FINGERPRINT),
+            oci_public_key_path: lookup(ENV_OCI_PUBLIC_KEY_PATH),
+        };
 
         let enforce_auth = access_key_id.is_some() && secret_access_key.is_some();
 
@@ -109,6 +143,7 @@ impl Config {
             ui_port,
             max_request_bytes,
             smtp_port,
+            vendor_credentials,
         }
     }
 
@@ -120,11 +155,15 @@ impl Config {
     /// - `SQRZL_SECRET_ACCESS_KEY`: AWS secret access key (optional)
     /// - `SQRZL_BLOBS_PATH`: Path to storage directory (default: "./blobs")
     /// - `SQRZL_LIFECYCLE_HOURS`: Hours between lifecycle rule executions (default: 1)
-    /// - `SQRZL_MAX_REQUEST_BYTES`: Maximum request body bytes accepted; eligible S3 uploads stream to disk (default: 128 MiB)
+    /// - `SQRZL_MAX_REQUEST_BYTES`: Maximum request body bytes accepted; provider data uploads stream to disk (default: 128 MiB)
     /// - `SQRZL_ADMIN_AUTH_DISABLED`: Disable `/admin/v1` session auth even when provider auth is enabled
     /// - `SQRZL_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
     /// - `SQRZL_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)
     /// - `SQRZL_SMTP_PORT`: Port for the SMTP mail-capture server (default: 2525)
+    /// - `AZURE_ACCOUNT` / `AZURE_ACCOUNT_KEY`: Azure Shared Key and SAS override
+    /// - `GCS_HMAC_ACCESS_ID` / `GCS_HMAC_SECRET`: GCS HMAC signing override
+    /// - `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_KEY_FINGERPRINT`,
+    ///   `OCI_PUBLIC_KEY_PATH`: OCI RSA request-signing identity
     #[must_use]
     pub fn from_env() -> Self {
         Self::from_env_with(|name| env::var(name).ok())
@@ -210,6 +249,124 @@ impl Config {
     pub fn admin_auth_enforced(&self) -> bool {
         self.enforce_auth && !self.admin_auth_disabled
     }
+
+    #[must_use]
+    pub fn azure_account(&self) -> Option<&str> {
+        self.vendor_credentials
+            .azure_account
+            .as_deref()
+            .or_else(|| self.access_key())
+    }
+
+    #[must_use]
+    pub fn azure_account_key(&self) -> Option<&str> {
+        self.vendor_credentials
+            .azure_account_key
+            .as_deref()
+            .or_else(|| self.secret_key())
+    }
+
+    #[must_use]
+    pub fn azure_auth_enforced(&self) -> bool {
+        self.enforce_auth
+            || self.vendor_credentials.azure_account.is_some()
+            || self.vendor_credentials.azure_account_key.is_some()
+    }
+
+    #[must_use]
+    pub fn gcs_hmac_access_id(&self) -> Option<&str> {
+        self.vendor_credentials
+            .gcs_hmac_access_id
+            .as_deref()
+            .or_else(|| self.access_key())
+    }
+
+    #[must_use]
+    pub fn gcs_hmac_secret(&self) -> Option<&str> {
+        self.vendor_credentials
+            .gcs_hmac_secret
+            .as_deref()
+            .or_else(|| self.secret_key())
+    }
+
+    #[must_use]
+    pub fn gcs_auth_enforced(&self) -> bool {
+        self.enforce_auth
+            || self.vendor_credentials.gcs_hmac_access_id.is_some()
+            || self.vendor_credentials.gcs_hmac_secret.is_some()
+    }
+
+    #[must_use]
+    pub fn oci_auth_enforced(&self) -> bool {
+        self.enforce_auth
+            || self.vendor_credentials.oci_tenancy_ocid.is_some()
+            || self.vendor_credentials.oci_user_ocid.is_some()
+            || self.vendor_credentials.oci_key_fingerprint.is_some()
+            || self.vendor_credentials.oci_public_key_path.is_some()
+    }
+
+    #[must_use]
+    pub fn oci_key_id(&self) -> Option<String> {
+        Some(format!(
+            "{}/{}/{}",
+            self.vendor_credentials.oci_tenancy_ocid.as_deref()?,
+            self.vendor_credentials.oci_user_ocid.as_deref()?,
+            self.vendor_credentials.oci_key_fingerprint.as_deref()?
+        ))
+    }
+
+    /// Reject incomplete provider-native authentication overrides before the
+    /// API listeners start. Generic AWS credentials may supply the matching
+    /// Azure or GCS value, preserving the documented fallback behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a provider-native credential set is incomplete or
+    /// the configured OCI public key is not a readable file.
+    pub fn validate_vendor_credentials(&self) -> Result<(), String> {
+        let azure_configured = self.vendor_credentials.azure_account.is_some()
+            || self.vendor_credentials.azure_account_key.is_some();
+        if azure_configured
+            && (self.azure_account().is_none() || self.azure_account_key().is_none())
+        {
+            return Err(
+                "AZURE_ACCOUNT and AZURE_ACCOUNT_KEY must both resolve when either is configured"
+                    .to_string(),
+            );
+        }
+
+        let gcs_configured = self.vendor_credentials.gcs_hmac_access_id.is_some()
+            || self.vendor_credentials.gcs_hmac_secret.is_some();
+        if gcs_configured
+            && (self.gcs_hmac_access_id().is_none() || self.gcs_hmac_secret().is_none())
+        {
+            return Err(
+                "GCS_HMAC_ACCESS_ID and GCS_HMAC_SECRET must both resolve when either is configured"
+                    .to_string(),
+            );
+        }
+
+        let oci_values = [
+            self.vendor_credentials.oci_tenancy_ocid.as_deref(),
+            self.vendor_credentials.oci_user_ocid.as_deref(),
+            self.vendor_credentials.oci_key_fingerprint.as_deref(),
+            self.vendor_credentials.oci_public_key_path.as_deref(),
+        ];
+        if oci_values.iter().any(Option::is_some) && oci_values.iter().any(Option::is_none) {
+            return Err(
+                "OCI_TENANCY_OCID, OCI_USER_OCID, OCI_KEY_FINGERPRINT, and OCI_PUBLIC_KEY_PATH must all be configured"
+                    .to_string(),
+            );
+        }
+        if let Some(path) = self.vendor_credentials.oci_public_key_path.as_deref() {
+            if !std::path::Path::new(path).is_file() {
+                return Err(format!(
+                    "OCI_PUBLIC_KEY_PATH does not name a readable file: {path}"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn parse_bool_env(value: &str) -> bool {
@@ -276,6 +433,71 @@ mod tests {
         assert_eq!(config.smtp_port, 2626);
         assert!(config.validate_credentials("test-key", "test-secret"));
         assert!(!config.validate_credentials("wrong-key", "test-secret"));
+    }
+
+    #[test]
+    fn should_load_unprefixed_vendor_credentials_with_generic_fallbacks() {
+        // Arrange
+        let config = Config::from_env_with(|name| match name {
+            ENV_SQRZL_ACCESS_KEY_ID => Some("generic-id".to_string()),
+            ENV_SQRZL_SECRET_ACCESS_KEY => Some("generic-secret".to_string()),
+            ENV_AZURE_ACCOUNT => Some("azure-account".to_string()),
+            ENV_AZURE_ACCOUNT_KEY => Some("azure-key".to_string()),
+            ENV_GCS_HMAC_ACCESS_ID => Some("gcs-id".to_string()),
+            ENV_GCS_HMAC_SECRET => Some("gcs-secret".to_string()),
+            ENV_OCI_TENANCY_OCID => Some("tenancy".to_string()),
+            ENV_OCI_USER_OCID => Some("user".to_string()),
+            ENV_OCI_KEY_FINGERPRINT => Some("aa:bb".to_string()),
+            ENV_OCI_PUBLIC_KEY_PATH => Some("/keys/oci.pem".to_string()),
+            _ => None,
+        });
+        let fallback = Config::from_env_with(|name| match name {
+            ENV_SQRZL_ACCESS_KEY_ID => Some("generic-id".to_string()),
+            ENV_SQRZL_SECRET_ACCESS_KEY => Some("generic-secret".to_string()),
+            _ => None,
+        });
+
+        // Act
+        let oci_key_id = config.oci_key_id();
+
+        // Assert
+        assert_eq!(config.azure_account(), Some("azure-account"));
+        assert_eq!(config.azure_account_key(), Some("azure-key"));
+        assert_eq!(config.gcs_hmac_access_id(), Some("gcs-id"));
+        assert_eq!(config.gcs_hmac_secret(), Some("gcs-secret"));
+        assert_eq!(oci_key_id.as_deref(), Some("tenancy/user/aa:bb"));
+        assert!(config.azure_auth_enforced());
+        assert!(config.gcs_auth_enforced());
+        assert!(config.oci_auth_enforced());
+        assert_eq!(fallback.azure_account(), Some("generic-id"));
+        assert_eq!(fallback.gcs_hmac_secret(), Some("generic-secret"));
+    }
+
+    #[test]
+    fn should_reject_partial_provider_native_credentials() {
+        // Arrange
+        let azure = Config::from_env_with(|name| match name {
+            ENV_AZURE_ACCOUNT => Some("account".to_string()),
+            _ => None,
+        });
+        let gcs = Config::from_env_with(|name| match name {
+            ENV_GCS_HMAC_SECRET => Some("secret".to_string()),
+            _ => None,
+        });
+        let oci = Config::from_env_with(|name| match name {
+            ENV_OCI_TENANCY_OCID => Some("tenancy".to_string()),
+            _ => None,
+        });
+
+        // Act
+        let azure_error = azure.validate_vendor_credentials();
+        let gcs_error = gcs.validate_vendor_credentials();
+        let oci_error = oci.validate_vendor_credentials();
+
+        // Assert
+        assert!(azure_error.unwrap_err().contains("AZURE_ACCOUNT_KEY"));
+        assert!(gcs_error.unwrap_err().contains("GCS_HMAC_ACCESS_ID"));
+        assert!(oci_error.unwrap_err().contains("OCI_USER_OCID"));
     }
 
     #[test]

@@ -47,7 +47,27 @@ impl FilesystemStorage {
                 Error::InternalError(format!("Failed to write storage format marker: {err}"))
             })?;
         }
+        Self::purge_obsolete_vendor_upload_state(base_path)?;
         Ok(Self::new(base_path))
+    }
+
+    fn purge_obsolete_vendor_upload_state(base_path: &Path) -> Result<()> {
+        for provider in [
+            "azure-block-session",
+            "azure-committed-blocks",
+            "gcs-resumable-session",
+        ] {
+            let path = base_path.join(".provider-state").join(provider);
+            if path.exists() {
+                fs::remove_dir_all(&path).map_err(|error| {
+                    Error::InternalError(format!(
+                        "Failed to remove obsolete vendor upload state '{}': {error}",
+                        path.display()
+                    ))
+                })?;
+            }
+        }
+        Ok(())
     }
 
     pub fn new(base_path: impl AsRef<Path>) -> Self {
@@ -131,6 +151,26 @@ impl FilesystemStorage {
             .join(".provider-state")
             .join(provider)
             .join(format!("{state_id}.json"))
+    }
+
+    pub(super) fn provider_upload_session_dir(&self, provider: &str, session: &str) -> PathBuf {
+        let provider_id = hex::encode(Sha256::digest(provider.as_bytes()));
+        let session_id = hex::encode(Sha256::digest(session.as_bytes()));
+        self.base_path
+            .join(".provider-uploads")
+            .join(provider_id)
+            .join(session_id)
+    }
+
+    pub(super) fn provider_upload_item_path(
+        &self,
+        provider: &str,
+        session: &str,
+        item: &str,
+    ) -> PathBuf {
+        let item_id = hex::encode(Sha256::digest(item.as_bytes()));
+        self.provider_upload_session_dir(provider, session)
+            .join(format!("{item_id}.blob"))
     }
 
     pub(super) fn bucket_acl_path(&self, bucket: &str) -> PathBuf {

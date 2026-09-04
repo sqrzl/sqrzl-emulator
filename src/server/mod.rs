@@ -18,6 +18,8 @@ mod http;
 mod streaming;
 
 pub(crate) use handlers::handle_request as handle_s3_request;
+#[cfg(test)]
+pub(crate) use http::SpooledPayload;
 pub use http::{Request as RequestExt, RequestParseError, ResponseBuilder, RouteMatch, Router};
 
 ///
@@ -321,6 +323,7 @@ mod adapter_routing_tests {
             ui_port: 9001,
             max_request_bytes,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            vendor_credentials: crate::config::VendorCredentials::default(),
         })
     }
 
@@ -350,6 +353,7 @@ mod adapter_routing_tests {
             ui_port: 0,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            vendor_credentials: crate::config::VendorCredentials::default(),
         });
         let server = Server::new(storage, mail, config, 0);
 

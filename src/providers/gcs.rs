@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::future::Future;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -27,7 +28,7 @@ const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
 const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
 const GCS_UPDATED_KEY: &str = "__sqrzl_gcs_updated";
 const GCS_CRC32C_KEY: &str = "__sqrzl_gcs_crc32c";
-const GCS_RESUMABLE_SESSION_STATE: &str = "gcs-resumable-session";
+const GCS_RESUMABLE_SESSION_STATE: &str = "gcs-resumable-session-v2";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
 const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
 const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
@@ -37,6 +38,8 @@ const AZURE_SOFT_DELETE_DAYS_KEY: &str = "azure_soft_delete_days";
 const GCS_MIN_SOFT_DELETE_SECONDS: u64 = 604_800;
 const GCS_MAX_SOFT_DELETE_SECONDS_EXCLUSIVE: u64 = 7_776_000;
 const GCS_MAX_RETENTION_SECONDS_EXCLUSIVE: u64 = 3_155_760_000;
+const GCS_MAX_OBJECT_SIZE: u64 = 5 * 1024 * 1024 * 1024 * 1024;
+const GCS_RESUMABLE_SESSION_LIFETIME_DAYS: i64 = 7;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ResumableSession {
@@ -50,6 +53,33 @@ struct ResumableSession {
     if_generation_match: Option<String>,
     #[serde(default)]
     if_generation_not_match: Option<String>,
+    #[serde(default)]
+    received: u64,
+    #[serde(default)]
+    total: Option<u64>,
+    #[serde(default)]
+    chunks: Vec<ResumableChunk>,
+    #[serde(default)]
+    calculated_crc32c: u32,
+    initiated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ResumableChunk {
+    item: String,
+    size: u64,
+    crc32c: u32,
+}
+
+enum ResumableRequestRange {
+    Status {
+        total: Option<u64>,
+    },
+    Data {
+        start: u64,
+        end: u64,
+        total: Option<u64>,
+    },
 }
 
 pub struct GcsAdapter {
@@ -72,6 +102,14 @@ struct ParsedUploadMetadata {
     content_type: Option<String>,
     metadata: HashMap<String, String>,
     crc32c: Option<u32>,
+}
+
+struct SpooledMultipartUpload {
+    metadata: ParsedUploadMetadata,
+    content_type: String,
+    offset: u64,
+    len: u64,
+    crc32c: u32,
 }
 
 enum UploadMetadataError {
@@ -534,7 +572,7 @@ impl GcsAdapter {
         let _guard = mutation_lock
             .lock()
             .map_err(|_| "Failed to lock GCS object mutation".to_string())?;
-        let existing = storage.get_object(bucket, key).ok();
+        let existing = storage.get_object_metadata(bucket, key).ok();
         if existing
             .as_ref()
             .is_some_and(|object| Self::object_is_retained(storage, bucket, object))
@@ -586,8 +624,161 @@ impl GcsAdapter {
             return Ok(BlobWriteOutcome::PreconditionFailed);
         }
         let stored = storage
-            .get_object(bucket, key)
+            .get_object_metadata(bucket, key)
             .map_err(|err| err.to_string())?;
+        Ok(BlobWriteOutcome::Stored(Box::new(
+            crate::blob::BlobRecord::from_object(bucket, &stored),
+        )))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn put_spooled_blob_with_generation_match(
+        &self,
+        storage: &Arc<dyn Storage>,
+        bucket: &str,
+        key: &str,
+        req: &Request,
+        content_type: String,
+        metadata: HashMap<String, String>,
+        preconditions: GenerationPreconditions<'_>,
+    ) -> Result<BlobWriteOutcome, String> {
+        let payload = req
+            .spooled_body
+            .as_ref()
+            .ok_or_else(|| "Missing spooled GCS upload payload".to_string())?;
+        let mutation_lock = self.object_mutation_lock(bucket, key)?;
+        let _guard = mutation_lock
+            .lock()
+            .map_err(|_| "Failed to lock GCS object mutation".to_string())?;
+        let existing = storage.get_object_metadata(bucket, key).ok();
+        if existing
+            .as_ref()
+            .is_some_and(|object| Self::object_is_retained(storage, bucket, object))
+        {
+            return Ok(BlobWriteOutcome::RetentionPolicyNotMet);
+        }
+        let generation = Self::next_generation(existing.as_ref());
+        let metadata = Self::metadata_with_gcs_state(metadata, generation, "1".to_string(), None);
+        let mut object = crate::models::Object::new_with_metadata_and_etag(
+            key.to_string(),
+            Vec::new(),
+            content_type,
+            metadata,
+            hex::encode(payload.md5),
+        );
+        object.size = payload.len;
+        object.provider_metadata.insert(
+            GCS_CRC32C_KEY.to_string(),
+            BASE64.encode(payload.crc32c.to_be_bytes()),
+        );
+        let condition = match (preconditions.expected, preconditions.rejected) {
+            (Some("0"), None) => Some(ObjectCondition::Missing),
+            (Some(expected), None) => Some(ObjectCondition::Metadata {
+                key: GCS_GENERATION_KEY.to_string(),
+                value: expected.to_string(),
+            }),
+            (None, Some(rejected)) if existing.is_some() => Some(ObjectCondition::MetadataNot {
+                key: GCS_GENERATION_KEY.to_string(),
+                value: rejected.to_string(),
+            }),
+            (None | Some(_), Some(_)) => return Ok(BlobWriteOutcome::PreconditionFailed),
+            (None, None) => None,
+        };
+        let written = if let Some(condition) = condition.as_ref() {
+            storage.put_object_streamed_if(
+                bucket,
+                key.to_string(),
+                object,
+                &payload.path,
+                condition,
+            )
+        } else {
+            storage
+                .put_object_streamed(bucket, key.to_string(), object, &payload.path)
+                .map(|()| true)
+        }
+        .map_err(|error| error.to_string())?;
+        if !written {
+            return Ok(BlobWriteOutcome::PreconditionFailed);
+        }
+        let stored = storage
+            .get_object_metadata(bucket, key)
+            .map_err(|error| error.to_string())?;
+        Ok(BlobWriteOutcome::Stored(Box::new(
+            crate::blob::BlobRecord::from_object(bucket, &stored),
+        )))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn put_staged_blob_with_generation_match(
+        &self,
+        storage: &Arc<dyn Storage>,
+        provider: &str,
+        session: &str,
+        items: &[String],
+        bucket: &str,
+        key: &str,
+        size: u64,
+        crc32c: u32,
+        content_type: String,
+        metadata: HashMap<String, String>,
+        preconditions: GenerationPreconditions<'_>,
+    ) -> Result<BlobWriteOutcome, String> {
+        let mutation_lock = self.object_mutation_lock(bucket, key)?;
+        let _guard = mutation_lock
+            .lock()
+            .map_err(|_| "Failed to lock GCS object mutation".to_string())?;
+        let existing = storage.get_object_metadata(bucket, key).ok();
+        if existing
+            .as_ref()
+            .is_some_and(|object| Self::object_is_retained(storage, bucket, object))
+        {
+            return Ok(BlobWriteOutcome::RetentionPolicyNotMet);
+        }
+        let generation = Self::next_generation(existing.as_ref());
+        let metadata = Self::metadata_with_gcs_state(metadata, generation, "1".to_string(), None);
+        let mut object = crate::models::Object::new_with_metadata_and_etag(
+            key.to_string(),
+            Vec::new(),
+            content_type,
+            metadata,
+            uuid::Uuid::new_v4().simple().to_string(),
+        );
+        object.size = size;
+        object.provider_metadata.insert(
+            GCS_CRC32C_KEY.to_string(),
+            BASE64.encode(crc32c.to_be_bytes()),
+        );
+        let condition = match (preconditions.expected, preconditions.rejected) {
+            (Some("0"), None) => Some(ObjectCondition::Missing),
+            (Some(expected), None) => Some(ObjectCondition::Metadata {
+                key: GCS_GENERATION_KEY.to_string(),
+                value: expected.to_string(),
+            }),
+            (None, Some(rejected)) if existing.is_some() => Some(ObjectCondition::MetadataNot {
+                key: GCS_GENERATION_KEY.to_string(),
+                value: rejected.to_string(),
+            }),
+            (None | Some(_), Some(_)) => return Ok(BlobWriteOutcome::PreconditionFailed),
+            (None, None) => None,
+        };
+        let written = storage
+            .compose_upload_payloads(
+                provider,
+                session,
+                items,
+                bucket,
+                key.to_string(),
+                object,
+                condition.as_ref(),
+            )
+            .map_err(|error| error.to_string())?;
+        if !written {
+            return Ok(BlobWriteOutcome::PreconditionFailed);
+        }
+        let stored = storage
+            .get_object_metadata(bucket, key)
+            .map_err(|error| error.to_string())?;
         Ok(BlobWriteOutcome::Stored(Box::new(
             crate::blob::BlobRecord::from_object(bucket, &stored),
         )))
@@ -900,6 +1091,170 @@ impl GcsAdapter {
         ))
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn parse_spooled_multipart_upload(
+        content_type: &str,
+        path: &std::path::Path,
+    ) -> Result<SpooledMultipartUpload, UploadMetadataError> {
+        const MAX_CONTROL_BYTES: usize = 1024 * 1024;
+        let boundary = Self::multipart_boundary(content_type).ok_or_else(|| {
+            UploadMetadataError::Invalid("Missing multipart boundary".to_string())
+        })?;
+        let boundary_line = format!("--{boundary}\r\n").into_bytes();
+        let closing = format!("\r\n--{boundary}--").into_bytes();
+        let file = std::fs::File::open(path).map_err(|error| {
+            UploadMetadataError::Invalid(format!("Unable to read multipart upload: {error}"))
+        })?;
+        let file_len = file
+            .metadata()
+            .map_err(|error| {
+                UploadMetadataError::Invalid(format!("Unable to inspect multipart upload: {error}"))
+            })?
+            .len();
+        let mut reader = BufReader::new(file);
+        let mut line = Vec::new();
+        reader.read_until(b'\n', &mut line).map_err(|error| {
+            UploadMetadataError::Invalid(format!("Unable to read multipart boundary: {error}"))
+        })?;
+        if line != boundary_line {
+            return Err(UploadMetadataError::Invalid(
+                "Multipart body does not start with its boundary".to_string(),
+            ));
+        }
+
+        let metadata_headers = Self::read_multipart_headers(&mut reader, MAX_CONTROL_BYTES)?;
+        if !metadata_headers
+            .to_ascii_lowercase()
+            .contains("application/json")
+        {
+            return Err(UploadMetadataError::Invalid(
+                "The first multipart part must contain object metadata JSON".to_string(),
+            ));
+        }
+        let mut metadata_body = Vec::new();
+        loop {
+            line.clear();
+            reader.read_until(b'\n', &mut line).map_err(|error| {
+                UploadMetadataError::Invalid(format!("Unable to read multipart metadata: {error}"))
+            })?;
+            if line.is_empty() {
+                return Err(UploadMetadataError::Invalid(
+                    "Missing multipart media boundary".to_string(),
+                ));
+            }
+            if line == boundary_line {
+                break;
+            }
+            metadata_body.extend_from_slice(&line);
+            if metadata_body.len() > MAX_CONTROL_BYTES {
+                return Err(UploadMetadataError::Invalid(
+                    "Multipart metadata exceeds the 1 MiB control-body limit".to_string(),
+                ));
+            }
+        }
+        while metadata_body.ends_with(b"\r\n") {
+            metadata_body.truncate(metadata_body.len() - 2);
+        }
+        let metadata = Self::parse_json_upload_metadata(&metadata_body)?;
+        let media_headers = Self::read_multipart_headers(&mut reader, MAX_CONTROL_BYTES)?;
+        let media_content_type = media_headers.lines().find_map(|header| {
+            let (name, value) = header.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("content-type")
+                .then(|| value.trim().to_string())
+        });
+        let offset = reader.stream_position().map_err(|error| {
+            UploadMetadataError::Invalid(format!("Unable to locate multipart media: {error}"))
+        })?;
+        let suffix_len = closing.len() as u64;
+        if file_len < offset + suffix_len {
+            return Err(UploadMetadataError::Invalid(
+                "Missing closing multipart boundary".to_string(),
+            ));
+        }
+        let mut file = reader.into_inner();
+        let mut tail = vec![0_u8; closing.len() + 2];
+        let tail_len = tail
+            .len()
+            .min(usize::try_from(file_len).unwrap_or(usize::MAX));
+        tail.truncate(tail_len);
+        let tail_len = i64::try_from(tail_len).map_err(|_| {
+            UploadMetadataError::Invalid("Multipart ending is too large".to_string())
+        })?;
+        file.seek(SeekFrom::End(-tail_len)).map_err(|error| {
+            UploadMetadataError::Invalid(format!("Unable to locate multipart ending: {error}"))
+        })?;
+        file.read_exact(&mut tail).map_err(|error| {
+            UploadMetadataError::Invalid(format!("Unable to read multipart ending: {error}"))
+        })?;
+        let trailing_crlf = tail.ends_with(b"\r\n");
+        let closing_start = tail.len() - closing.len() - usize::from(trailing_crlf) * 2;
+        if tail.get(closing_start..closing_start + closing.len()) != Some(closing.as_slice()) {
+            return Err(UploadMetadataError::Invalid(
+                "Missing closing multipart boundary".to_string(),
+            ));
+        }
+        let media_end = file_len - closing.len() as u64 - if trailing_crlf { 2 } else { 0 };
+        let len = media_end.checked_sub(offset).ok_or_else(|| {
+            UploadMetadataError::Invalid("Multipart media range is invalid".to_string())
+        })?;
+        file.seek(SeekFrom::Start(offset)).map_err(|error| {
+            UploadMetadataError::Invalid(format!("Unable to seek multipart media: {error}"))
+        })?;
+        let mut checksum = 0;
+        let mut remaining = len;
+        let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+        while remaining > 0 {
+            let take = usize::try_from(remaining.min(buffer.len() as u64)).map_err(|_| {
+                UploadMetadataError::Invalid("Multipart media range is too large".to_string())
+            })?;
+            file.read_exact(&mut buffer[..take]).map_err(|error| {
+                UploadMetadataError::Invalid(format!("Unable to read multipart media: {error}"))
+            })?;
+            checksum = crc32c::crc32c_append(checksum, &buffer[..take]);
+            remaining -= take as u64;
+        }
+        Ok(SpooledMultipartUpload {
+            content_type: media_content_type
+                .or_else(|| metadata.content_type.clone())
+                .unwrap_or_else(|| "application/octet-stream".to_string()),
+            metadata,
+            offset,
+            len,
+            crc32c: checksum,
+        })
+    }
+
+    fn read_multipart_headers(
+        reader: &mut BufReader<std::fs::File>,
+        limit: usize,
+    ) -> Result<String, UploadMetadataError> {
+        let mut bytes = Vec::new();
+        loop {
+            let mut line = Vec::new();
+            reader.read_until(b'\n', &mut line).map_err(|error| {
+                UploadMetadataError::Invalid(format!("Unable to read multipart headers: {error}"))
+            })?;
+            if line.is_empty() {
+                return Err(UploadMetadataError::Invalid(
+                    "Missing multipart part headers".to_string(),
+                ));
+            }
+            if line == b"\r\n" {
+                break;
+            }
+            bytes.extend_from_slice(&line);
+            if bytes.len() > limit {
+                return Err(UploadMetadataError::Invalid(
+                    "Multipart headers exceed the control-body limit".to_string(),
+                ));
+            }
+        }
+        String::from_utf8(bytes).map_err(|_| {
+            UploadMetadataError::Invalid("Multipart part headers must be UTF-8".to_string())
+        })
+    }
+
     fn find_bytes(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
         if needle.is_empty() || start > haystack.len() {
             return None;
@@ -1025,7 +1380,7 @@ impl GcsAdapter {
     fn sign(config: &AuthConfig, payload: &str) -> Result<String, String> {
         type HmacSha1 = Hmac<Sha1>;
         let secret = config
-            .secret_key()
+            .gcs_hmac_secret()
             .ok_or_else(|| "Missing GCS secret key".to_string())?;
         let key = BASE64
             .decode(secret)
@@ -1035,6 +1390,156 @@ impl GcsAdapter {
             HmacSha1::new_from_slice(&key).map_err(|err| format!("Invalid GCS key: {err}"))?;
         mac.update(payload.as_bytes());
         Ok(BASE64.encode(mac.finalize().into_bytes()))
+    }
+
+    fn sign_sha256(key: &[u8], payload: &[u8]) -> Result<Vec<u8>, String> {
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(key)
+            .map_err(|error| format!("Invalid GCS HMAC key: {error}"))?;
+        mac.update(payload);
+        Ok(mac.finalize().into_bytes().to_vec())
+    }
+
+    fn gcs_secret_bytes(config: &AuthConfig) -> Result<Vec<u8>, String> {
+        let secret = config
+            .gcs_hmac_secret()
+            .ok_or_else(|| "Missing GCS secret key".to_string())?;
+        Ok(BASE64
+            .decode(secret)
+            .ok()
+            .unwrap_or_else(|| secret.as_bytes().to_vec()))
+    }
+
+    fn percent_encode_v4(value: &str, preserve_slash: bool) -> String {
+        let mut encoded = String::with_capacity(value.len());
+        for byte in value.bytes() {
+            if byte.is_ascii_alphanumeric()
+                || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                || (preserve_slash && byte == b'/')
+            {
+                encoded.push(char::from(byte));
+            } else {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+        encoded
+    }
+
+    fn canonical_v4_query(req: &Request) -> String {
+        let mut parameters = req
+            .uri
+            .query()
+            .unwrap_or_default()
+            .split('&')
+            .filter_map(|parameter| {
+                let (name, value) = parameter.split_once('=').unwrap_or((parameter, ""));
+                if name.eq_ignore_ascii_case("X-Goog-Signature") {
+                    return None;
+                }
+                let name = urlencoding::decode(name)
+                    .map_or_else(|_| name.to_string(), std::borrow::Cow::into_owned);
+                let value = urlencoding::decode(value)
+                    .map_or_else(|_| value.to_string(), std::borrow::Cow::into_owned);
+                Some((
+                    Self::percent_encode_v4(&name, false),
+                    Self::percent_encode_v4(&value, false),
+                ))
+            })
+            .collect::<Vec<_>>();
+        parameters.sort_unstable();
+        parameters
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("&")
+    }
+
+    fn validate_v4_signed_url(req: &Request, config: &AuthConfig) -> Result<(), String> {
+        let algorithm = req
+            .query_param("X-Goog-Algorithm")
+            .ok_or_else(|| "Missing X-Goog-Algorithm".to_string())?;
+        if algorithm != "GOOG4-HMAC-SHA256" {
+            return Err("Unsupported GCS V4 signing algorithm".to_string());
+        }
+        let credential = req
+            .query_param("X-Goog-Credential")
+            .ok_or_else(|| "Missing X-Goog-Credential".to_string())?;
+        let (access_id, scope) = credential
+            .split_once('/')
+            .ok_or_else(|| "Invalid X-Goog-Credential".to_string())?;
+        if config.gcs_hmac_access_id() != Some(access_id) {
+            return Err("Invalid GCS HMAC access ID".to_string());
+        }
+        let scope_parts = scope.split('/').collect::<Vec<_>>();
+        if scope_parts.len() != 4
+            || scope_parts[2] != "storage"
+            || scope_parts[3] != "goog4_request"
+        {
+            return Err("Invalid GCS V4 credential scope".to_string());
+        }
+        let timestamp = req
+            .query_param("X-Goog-Date")
+            .ok_or_else(|| "Missing X-Goog-Date".to_string())?;
+        let signed_at = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y%m%dT%H%M%SZ")
+            .map_err(|_| "Invalid X-Goog-Date".to_string())?
+            .and_utc();
+        if scope_parts[0] != signed_at.format("%Y%m%d").to_string() {
+            return Err("GCS V4 credential date does not match X-Goog-Date".to_string());
+        }
+        let expires = req
+            .query_param("X-Goog-Expires")
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|value| (1..=604_800).contains(value))
+            .ok_or_else(|| "Invalid X-Goog-Expires".to_string())?;
+        let now = chrono::Utc::now();
+        if now < signed_at - chrono::Duration::minutes(15)
+            || now > signed_at + chrono::Duration::seconds(expires)
+        {
+            return Err("GCS V4 signed URL has expired or is not valid yet".to_string());
+        }
+        let signed_headers = req
+            .query_param("X-Goog-SignedHeaders")
+            .ok_or_else(|| "Missing X-Goog-SignedHeaders".to_string())?;
+        let mut canonical_headers = String::new();
+        for name in signed_headers.split(';') {
+            if name != name.to_ascii_lowercase() {
+                return Err("GCS V4 signed header names must be lowercase".to_string());
+            }
+            let value = req
+                .header(name)
+                .ok_or_else(|| format!("Missing signed header {name}"))?;
+            let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+            let _ = writeln!(canonical_headers, "{name}:{normalized}");
+        }
+        let canonical_uri = Self::percent_encode_v4(req.path(), true);
+        let canonical_request = format!(
+            "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
+            req.method(),
+            canonical_uri,
+            Self::canonical_v4_query(req),
+            canonical_headers,
+            signed_headers
+        );
+        let string_to_sign = format!(
+            "GOOG4-HMAC-SHA256\n{timestamp}\n{scope}\n{}",
+            hex::encode(Sha256::digest(canonical_request.as_bytes()))
+        );
+        let secret = Self::gcs_secret_bytes(config)?;
+        let mut initial_key = b"GOOG4".to_vec();
+        initial_key.extend_from_slice(&secret);
+        let date_key = Self::sign_sha256(&initial_key, scope_parts[0].as_bytes())?;
+        let region_key = Self::sign_sha256(&date_key, scope_parts[1].as_bytes())?;
+        let service_key = Self::sign_sha256(&region_key, b"storage")?;
+        let signing_key = Self::sign_sha256(&service_key, b"goog4_request")?;
+        let expected = hex::encode(Self::sign_sha256(&signing_key, string_to_sign.as_bytes())?);
+        let provided = req
+            .query_param("X-Goog-Signature")
+            .ok_or_else(|| "Missing X-Goog-Signature".to_string())?;
+        if expected.eq_ignore_ascii_case(provided) {
+            Ok(())
+        } else {
+            Err("GCS V4 signed URL signature mismatch".to_string())
+        }
     }
 
     fn canonicalized_extension_headers(req: &Request) -> Result<String, String> {
@@ -1135,8 +1640,20 @@ impl GcsAdapter {
         bucket: &str,
         object: Option<&str>,
     ) -> Result<(), Response<Body>> {
-        if !config.enforce_auth {
+        if !config.gcs_auth_enforced() {
             return Ok(());
+        }
+
+        if req.query_param("X-Goog-Algorithm").is_some() {
+            return Self::validate_v4_signed_url(req, config).map_err(|message| {
+                Self::authorization_error(
+                    req,
+                    StatusCode::FORBIDDEN,
+                    "SignatureDoesNotMatch",
+                    "forbidden",
+                    &message,
+                )
+            });
         }
 
         if let (Some(access_id), Some(expires), Some(signature)) = (
@@ -1154,7 +1671,7 @@ impl GcsAdapter {
                     "Request has expired",
                 ));
             }
-            if config.access_key() != Some(access_id) {
+            if config.gcs_hmac_access_id() != Some(access_id) {
                 return Err(Self::authorization_error(
                     req,
                     StatusCode::FORBIDDEN,
@@ -1209,7 +1726,8 @@ impl GcsAdapter {
             ));
         };
         if let Some(token) = authorization.strip_prefix("Bearer ") {
-            if config.secret_key() == Some(token) || config.access_key() == Some(token) {
+            if config.gcs_hmac_secret() == Some(token) || config.gcs_hmac_access_id() == Some(token)
+            {
                 return Ok(());
             }
             return Err(Self::authorization_error(
@@ -1220,7 +1738,7 @@ impl GcsAdapter {
                 "Invalid bearer token",
             ));
         }
-        let prefix = format!("GOOG1 {}:", config.access_key().unwrap_or_default());
+        let prefix = format!("GOOG1 {}:", config.gcs_hmac_access_id().unwrap_or_default());
         let Some(signature) = authorization.strip_prefix(&prefix) else {
             let status = if Self::is_json_api_request(req) {
                 StatusCode::UNAUTHORIZED
@@ -1339,6 +1857,7 @@ mod tests {
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            vendor_credentials: crate::config::VendorCredentials::default(),
         })
     }
 
@@ -1354,6 +1873,7 @@ mod tests {
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            vendor_credentials: crate::config::VendorCredentials::default(),
         })
     }
 
@@ -1467,6 +1987,86 @@ mod tests {
         // Assert
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(read_test_body(response).await, b"authenticated");
+    }
+
+    #[tokio::test]
+    async fn should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url() {
+        // Arrange
+        let adapter = GcsAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("signed-uploads".to_string()).unwrap();
+        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+        let date = &timestamp[..8];
+        let scope = format!("{date}/auto/storage/goog4_request");
+        let credential = format!("test-access/{scope}");
+        let unsigned_url = format!(
+            "http://localhost/signed-uploads/large.bin?X-Goog-Algorithm=GOOG4-HMAC-SHA256&X-Goog-Credential={}&X-Goog-Date={timestamp}&X-Goog-Expires=600&X-Goog-SignedHeaders=host",
+            urlencoding::encode(&credential)
+        );
+        let unsigned = parsed_request(
+            "POST",
+            &unsigned_url,
+            &[
+                ("host", "storage.googleapis.com"),
+                ("x-goog-resumable", "start"),
+            ],
+            b"",
+        )
+        .await;
+        let canonical_request = format!(
+            "POST\n{}\n{}\nhost:storage.googleapis.com\n\nhost\nUNSIGNED-PAYLOAD",
+            GcsAdapter::percent_encode_v4(unsigned.path(), true),
+            GcsAdapter::canonical_v4_query(&unsigned)
+        );
+        let string_to_sign = format!(
+            "GOOG4-HMAC-SHA256\n{timestamp}\n{scope}\n{}",
+            hex::encode(Sha256::digest(canonical_request.as_bytes()))
+        );
+        let secret = GcsAdapter::gcs_secret_bytes(&gcs_auth()).unwrap();
+        let date_key = GcsAdapter::sign_sha256(
+            &[b"GOOG4".as_slice(), secret.as_slice()].concat(),
+            date.as_bytes(),
+        )
+        .unwrap();
+        let region_key = GcsAdapter::sign_sha256(&date_key, b"auto").unwrap();
+        let service_key = GcsAdapter::sign_sha256(&region_key, b"storage").unwrap();
+        let signing_key = GcsAdapter::sign_sha256(&service_key, b"goog4_request").unwrap();
+        let signature =
+            hex::encode(GcsAdapter::sign_sha256(&signing_key, string_to_sign.as_bytes()).unwrap());
+        let signed_url = format!("{unsigned_url}&X-Goog-Signature={signature}");
+        let signed = parsed_request(
+            "POST",
+            &signed_url,
+            &[
+                ("host", "storage.googleapis.com"),
+                ("x-goog-resumable", "start"),
+            ],
+            b"",
+        )
+        .await;
+        let tampered = parsed_request(
+            "POST",
+            &signed_url.replace("large.bin", "other.bin"),
+            &[
+                ("host", "storage.googleapis.com"),
+                ("x-goog-resumable", "start"),
+            ],
+            b"",
+        )
+        .await;
+
+        // Act
+        let initiated = adapter
+            .handle_request(&storage, &gcs_auth(), &signed)
+            .expect("signed initiation should complete");
+        let rejected = adapter
+            .handle_request(&storage, &gcs_auth(), &tampered)
+            .expect("tampered initiation should complete");
+
+        // Assert
+        assert_eq!(initiated.status(), StatusCode::CREATED);
+        assert!(initiated.headers().contains_key("location"));
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -4653,7 +5253,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn should_reject_partial_resumable_chunk_without_consuming_session() {
+    async fn should_resume_and_complete_a_multi_chunk_resumable_upload() {
         // Arrange
         let adapter = GcsAdapter::new();
         let storage = temp_storage();
@@ -4671,14 +5271,15 @@ mod tests {
         let location = header_value(&init, "location")
             .expect("session location should exist")
             .to_string();
+        let first_payload = vec![b'a'; 256 * 1024];
         let chunk = parsed_request(
             "PUT",
             &location,
             &[
                 ("host", "storage.googleapis.com"),
-                ("content-range", "bytes 0-2/6"),
+                ("content-range", "bytes 0-262143/262148"),
             ],
-            b"abc",
+            &first_payload,
         )
         .await;
 
@@ -4688,8 +5289,258 @@ mod tests {
             .expect("partial chunk should respond");
 
         // Assert
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(header_value(&response, "range"), Some("bytes=0-262143"));
         assert!(storage.get_object("chunks", "item.txt").is_err());
+
+        let status = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "PUT",
+                    &location,
+                    &[
+                        ("host", "storage.googleapis.com"),
+                        ("content-range", "bytes */262148"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .expect("status query should respond");
+        assert_eq!(status.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(header_value(&status, "range"), Some("bytes=0-262143"));
+
+        let completed = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "PUT",
+                    &location,
+                    &[
+                        ("host", "storage.googleapis.com"),
+                        ("content-range", "bytes 262144-262147/262148"),
+                    ],
+                    b"tail",
+                )
+                .await,
+            )
+            .expect("final chunk should complete");
+        assert_eq!(completed.status(), StatusCode::OK);
+        let stored = storage.get_object("chunks", "item.txt").unwrap();
+        assert_eq!(stored.size, 262_148);
+        assert_eq!(&stored.data[..4], b"aaaa");
+        assert_eq!(&stored.data[stored.data.len() - 4..], b"tail");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_complete_a_spooled_gcs_resumable_chunk() {
+        // Arrange
+        let adapter = GcsAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("spooled".to_string()).unwrap();
+        let initiated = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    "http://localhost/upload/storage/v1/b/spooled/o?uploadType=resumable&name=item.txt",
+                    &[("host", "storage.googleapis.com")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("session initiation should respond");
+        let location = header_value(&initiated, "location")
+            .expect("session location should exist")
+            .to_string();
+        let payload = b"data";
+        let spool_path =
+            std::env::temp_dir().join(format!("sqrzl-gcs-spooled-test-{}", uuid::Uuid::new_v4()));
+        fs::write(&spool_path, payload).unwrap();
+        let mut crc64 = crc64fast_nvme::Digest::new();
+        std::hash::Hasher::write(&mut crc64, payload);
+        let mut chunk = parsed_request(
+            "PUT",
+            &location,
+            &[
+                ("host", "storage.googleapis.com"),
+                ("content-range", "bytes 0-3/4"),
+            ],
+            b"",
+        )
+        .await;
+        chunk.spooled_body = Some(crate::server::SpooledPayload::new(
+            spool_path,
+            u64::try_from(payload.len()).expect("test payload length should fit in u64"),
+            md5::compute(payload).0,
+            hex::encode(Sha256::digest(payload)),
+            sha2::Sha384::digest(payload).into(),
+            crc32c::crc32c(payload),
+            crc64.sum64(),
+        ));
+
+        // Act
+        let response = adapter
+            .handle_request(&storage, &auth_disabled(), &chunk)
+            .expect("spooled resumable chunk should respond");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            storage.get_object("spooled", "item.txt").unwrap().data,
+            payload
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_resumable_sessions_above_the_gcs_object_limit() {
+        // Arrange
+        let adapter = GcsAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("limits".to_string()).unwrap();
+        let above_limit = (GCS_MAX_OBJECT_SIZE + 1).to_string();
+        let json_init = parsed_request(
+            "POST",
+            "http://localhost/upload/storage/v1/b/limits/o?uploadType=resumable&name=item.txt",
+            &[
+                ("host", "storage.googleapis.com"),
+                ("x-upload-content-length", &above_limit),
+            ],
+            b"",
+        )
+        .await;
+        let xml_init = parsed_request(
+            "POST",
+            "http://localhost/limits/item.txt",
+            &[
+                ("host", "storage.googleapis.com"),
+                ("x-goog-resumable", "start"),
+                ("x-upload-content-length", &above_limit),
+            ],
+            b"",
+        )
+        .await;
+
+        // Act
+        let json_response = adapter
+            .handle_request(&storage, &auth_disabled(), &json_init)
+            .expect("JSON initiation should respond");
+        let xml_response = adapter
+            .handle_request(&storage, &auth_disabled(), &xml_init)
+            .expect("XML initiation should respond");
+
+        // Assert
+        assert_eq!(json_response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(xml_response.status(), StatusCode::BAD_REQUEST);
+        assert!(adapter.resumable_sessions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reclaim_an_expired_gcs_resumable_session() {
+        // Arrange
+        let adapter = GcsAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("expiry".to_string()).unwrap();
+        let initiated = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    "http://localhost/upload/storage/v1/b/expiry/o?uploadType=resumable&name=item.txt",
+                    &[("host", "storage.googleapis.com")],
+                    b"",
+                )
+                .await,
+            )
+            .expect("session initiation should respond");
+        let location = header_value(&initiated, "location")
+            .expect("session location should exist")
+            .to_string();
+        let session_id = location
+            .rsplit('/')
+            .next()
+            .expect("session id should exist")
+            .to_string();
+        let first_payload = vec![b'a'; 256 * 1024];
+        let partial = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "PUT",
+                    &location,
+                    &[
+                        ("host", "storage.googleapis.com"),
+                        ("content-range", "bytes 0-262143/*"),
+                    ],
+                    &first_payload,
+                )
+                .await,
+            )
+            .expect("partial upload should respond");
+        assert_eq!(partial.status(), StatusCode::PERMANENT_REDIRECT);
+        let expired = {
+            let mut sessions = adapter.resumable_sessions.lock().unwrap();
+            let session = sessions
+                .get_mut(&session_id)
+                .expect("session should remain active");
+            session.initiated_at = chrono::Utc::now()
+                - chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS + 1);
+            session.clone()
+        };
+        state::save_json(
+            storage.as_ref(),
+            GCS_RESUMABLE_SESSION_STATE,
+            &session_id,
+            &expired,
+        )
+        .unwrap();
+
+        // Act
+        let response = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "PUT",
+                    &location,
+                    &[
+                        ("host", "storage.googleapis.com"),
+                        ("content-range", "bytes */*"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .expect("expired session query should respond");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(adapter.resumable_sessions.lock().unwrap().is_empty());
+        assert!(matches!(
+            storage.get_provider_state(GCS_RESUMABLE_SESSION_STATE, &session_id),
+            Err(crate::error::Error::KeyNotFound)
+        ));
+        assert!(storage
+            .compose_upload_payloads(
+                "gcs",
+                &session_id,
+                &["chunk-00000000000000000000".to_string()],
+                "expiry",
+                "must-not-exist".to_string(),
+                crate::models::Object::new(
+                    "must-not-exist".to_string(),
+                    Vec::new(),
+                    "application/octet-stream".to_string(),
+                ),
+                None,
+            )
+            .is_err());
     }
 }
 
@@ -5221,16 +6072,78 @@ impl GcsAdapter {
                     )),
                 }
             }
+            Method::POST if req.header("x-goog-resumable") == Some("start") => {
+                self.create_xml_resumable_session(storage, req, bucket, object)
+            }
             _ => Ok(Self::unsupported_xml_operation()),
         }
     }
 
+    fn create_xml_resumable_session(
+        &self,
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        if !req.payload_is_empty() {
+            return Ok(Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                "A resumable initiation request must not contain object data.",
+            ));
+        }
+        let declared_total = req
+            .header("x-upload-content-length")
+            .and_then(|value| value.parse::<u64>().ok());
+        if declared_total.is_some_and(|total| total > GCS_MAX_OBJECT_SIZE) {
+            return Ok(Self::object_too_large_response(false));
+        }
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let session = ResumableSession {
+            bucket: bucket.to_string(),
+            key: object.to_string(),
+            content_type: req
+                .header("x-upload-content-type")
+                .or_else(|| req.header("content-type"))
+                .unwrap_or("application/octet-stream")
+                .to_string(),
+            metadata: Self::metadata_from_headers(req),
+            crc32c: None,
+            if_generation_match: req.header("x-goog-if-generation-match").map(str::to_string),
+            if_generation_not_match: None,
+            received: 0,
+            total: declared_total,
+            chunks: Vec::new(),
+            calculated_crc32c: 0,
+            initiated_at: chrono::Utc::now(),
+        };
+        state::save_json(
+            storage.as_ref(),
+            GCS_RESUMABLE_SESSION_STATE,
+            &session_id,
+            &session,
+        )?;
+        self.resumable_sessions
+            .lock()
+            .map_err(|_| "Failed to lock resumable sessions".to_string())?
+            .insert(session_id.clone(), session);
+        let location = format!("{}/upload/resumable/{session_id}", request_origin(req));
+        Ok(Self::response(StatusCode::CREATED)
+            .header("location", &location)
+            .empty())
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn put_xml_object(
         storage: &Arc<dyn Storage>,
         req: &Request,
         bucket: &str,
         object: &str,
     ) -> Response<Body> {
+        if req.payload_len() > GCS_MAX_OBJECT_SIZE {
+            return Self::object_too_large_response(false);
+        }
         if Self::existing_object_is_retained(storage, bucket, object) {
             return Self::error_response(
                 StatusCode::FORBIDDEN,
@@ -5242,25 +6155,67 @@ impl GcsAdapter {
             Ok(condition) => condition,
             Err(response) => return response,
         };
-        let existing = storage.get_object(bucket, object).ok();
+        let existing = storage.get_object_metadata(bucket, object).ok();
         let metadata = Self::metadata_with_gcs_state(
             Self::metadata_from_headers(req),
             Self::next_generation(existing.as_ref()),
             "1".to_string(),
             None,
         );
-        let mut object_record = crate::models::Object::new_with_metadata(
-            object.to_string(),
-            req.body.to_vec(),
-            req.header("content-type")
-                .unwrap_or("application/octet-stream")
-                .to_string(),
-            metadata,
+        let mut object_record = if let Some(payload) = &req.spooled_body {
+            let mut object_record = crate::models::Object::new_with_metadata_and_etag(
+                object.to_string(),
+                Vec::new(),
+                req.header("content-type")
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+                metadata,
+                hex::encode(payload.md5),
+            );
+            object_record.size = payload.len;
+            object_record
+        } else {
+            crate::models::Object::new_with_metadata(
+                object.to_string(),
+                req.body.to_vec(),
+                req.header("content-type")
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+                metadata,
+            )
+        };
+        object_record.provider_metadata.insert(
+            GCS_CRC32C_KEY.to_string(),
+            BASE64.encode(req.payload_crc32c().to_be_bytes()),
         );
-        object_record
-            .provider_metadata
-            .insert(GCS_CRC32C_KEY.to_string(), Self::encoded_crc32c(&req.body));
-        let written = if let Some(condition) = condition {
+        let written = if let Some(payload) = &req.spooled_body {
+            let result = if let Some(condition) = condition.as_ref() {
+                storage.put_object_streamed_if(
+                    bucket,
+                    object.to_string(),
+                    object_record,
+                    &payload.path,
+                    condition,
+                )
+            } else {
+                storage
+                    .put_object_streamed(bucket, object.to_string(), object_record, &payload.path)
+                    .map(|()| true)
+            };
+            match result {
+                Ok(written) => written,
+                Err(crate::error::Error::BucketNotFound) => {
+                    return Self::xml_bucket_not_found(bucket);
+                }
+                Err(error) => {
+                    return Self::error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "InternalError",
+                        &error.to_string(),
+                    );
+                }
+            }
+        } else if let Some(condition) = condition {
             match storage.put_object_if(bucket, object.to_string(), object_record, &condition) {
                 Ok(written) => written,
                 Err(crate::error::Error::BucketNotFound) => {
@@ -5290,7 +6245,7 @@ impl GcsAdapter {
         if !written {
             return Self::xml_precondition_failed_response();
         }
-        let stored_object = match storage.get_object(bucket, object) {
+        let stored_object = match storage.get_object_metadata(bucket, object) {
             Ok(object) => object,
             Err(crate::error::Error::BucketNotFound) => {
                 return Self::xml_bucket_not_found(bucket);
@@ -5323,7 +6278,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match storage.as_ref().get_blob(bucket, object) {
+        let metadata = match storage.get_object_metadata(bucket, object) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound) => {
                 return Ok(Self::error_response(
@@ -5343,6 +6298,13 @@ impl GcsAdapter {
                 ));
             }
         };
+        if let Some(range_header) = req.header("range") {
+            return Self::object_range_response(storage, bucket, object, &metadata, range_header);
+        }
+        let blob = storage
+            .as_ref()
+            .get_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
         Self::object_media_response_for_blob(storage, req, bucket, object, blob)
     }
 
@@ -5367,7 +6329,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match storage.as_ref().get_blob(bucket, object) {
+        let blob = match storage.get_object_metadata(bucket, object) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::empty_response(StatusCode::NOT_FOUND));
@@ -5564,6 +6526,22 @@ impl GcsAdapter {
         )
     }
 
+    fn object_too_large_response(json_api: bool) -> Response<Body> {
+        if json_api {
+            Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "The uploaded object exceeds the 5 TiB Cloud Storage limit.",
+            )
+        } else {
+            Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "EntityTooLarge",
+                "The uploaded object exceeds the 5 TiB Cloud Storage limit.",
+            )
+        }
+    }
+
     fn upload_metadata_error_response(error: UploadMetadataError) -> Response<Body> {
         match error {
             UploadMetadataError::Invalid(message) => {
@@ -5584,6 +6562,9 @@ impl GcsAdapter {
         req: &Request,
         bucket: &str,
     ) -> Result<Response<Body>, String> {
+        if req.payload_len() > GCS_MAX_OBJECT_SIZE {
+            return Ok(Self::object_too_large_response(true));
+        }
         if let Some(response) = Self::invalid_json_mutation_headers(req) {
             return Ok(response);
         }
@@ -5594,8 +6575,14 @@ impl GcsAdapter {
             Ok(expected) => expected,
             Err(error) => return Ok(Self::upload_metadata_error_response(error)),
         };
-        if let Err(error) = Self::validate_crc32c(expected_crc32c, &req.body) {
-            return Ok(Self::upload_metadata_error_response(error));
+        if expected_crc32c.is_some_and(|expected| expected != req.payload_crc32c()) {
+            return Ok(Self::upload_metadata_error_response(
+                UploadMetadataError::ChecksumMismatch(format!(
+                    "Provided CRC32C \"{}\" does not match calculated CRC32C \"{}\"",
+                    BASE64.encode(expected_crc32c.unwrap_or_default().to_be_bytes()),
+                    BASE64.encode(req.payload_crc32c().to_be_bytes())
+                )),
+            ));
         }
         let Some(key) = req.query_param("name") else {
             return Ok(Self::json_upload_error(
@@ -5615,17 +6602,29 @@ impl GcsAdapter {
             expected: req.query_param("ifGenerationMatch"),
             rejected: req.query_param("ifGenerationNotMatch"),
         };
-        let stored = self.put_blob_with_generation_match(
-            storage,
-            bucket,
-            key,
-            BlobWrite {
-                data: req.body.to_vec(),
+        let stored = if req.spooled_body.is_some() {
+            self.put_spooled_blob_with_generation_match(
+                storage,
+                bucket,
+                key,
+                req,
                 content_type,
-                metadata: Self::metadata_from_headers(req),
+                Self::metadata_from_headers(req),
                 preconditions,
-            },
-        )?;
+            )?
+        } else {
+            self.put_blob_with_generation_match(
+                storage,
+                bucket,
+                key,
+                BlobWrite {
+                    data: req.body.to_vec(),
+                    content_type,
+                    metadata: Self::metadata_from_headers(req),
+                    preconditions,
+                },
+            )?
+        };
         let stored = match stored {
             BlobWriteOutcome::Stored(stored) => stored,
             BlobWriteOutcome::PreconditionFailed => {
@@ -5638,6 +6637,7 @@ impl GcsAdapter {
         Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_multipart_upload(
         &self,
         storage: &Arc<dyn Storage>,
@@ -5659,11 +6659,92 @@ impl GcsAdapter {
             ));
         }
         let content_type = req.header("content-type").unwrap_or("multipart/related");
+        if let Some(payload) = &req.spooled_body {
+            let upload = match Self::parse_spooled_multipart_upload(content_type, &payload.path) {
+                Ok(upload) => upload,
+                Err(error) => return Ok(Self::upload_metadata_error_response(error)),
+            };
+            if upload.len > GCS_MAX_OBJECT_SIZE {
+                return Ok(Self::object_too_large_response(true));
+            }
+            if upload
+                .metadata
+                .crc32c
+                .is_some_and(|expected| expected != upload.crc32c)
+            {
+                return Ok(Self::upload_metadata_error_response(
+                    UploadMetadataError::ChecksumMismatch(format!(
+                        "Provided CRC32C \"{}\" does not match calculated CRC32C \"{}\"",
+                        BASE64.encode(upload.metadata.crc32c.unwrap_or_default().to_be_bytes()),
+                        BASE64.encode(upload.crc32c.to_be_bytes())
+                    )),
+                ));
+            }
+            let Some(key) = req
+                .query_param("name")
+                .map(str::to_string)
+                .or_else(|| upload.metadata.name.clone())
+            else {
+                return Ok(Self::json_upload_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    "Required parameter: name",
+                ));
+            };
+            if Self::existing_object_is_retained(storage, bucket, &key) {
+                return Ok(Self::retention_policy_not_met_response());
+            }
+            let session = uuid::Uuid::new_v4().to_string();
+            storage
+                .stage_upload_payload(
+                    "gcs-multipart",
+                    &session,
+                    "media",
+                    &payload.path,
+                    upload.offset,
+                    upload.len,
+                )
+                .map_err(|error| error.to_string())?;
+            let preconditions = GenerationPreconditions {
+                expected: req.query_param("ifGenerationMatch"),
+                rejected: req.query_param("ifGenerationNotMatch"),
+            };
+            let result = self.put_staged_blob_with_generation_match(
+                storage,
+                "gcs-multipart",
+                &session,
+                &["media".to_string()],
+                bucket,
+                &key,
+                upload.len,
+                upload.crc32c,
+                upload.content_type,
+                upload.metadata.metadata,
+                preconditions,
+            );
+            let cleanup = storage.delete_upload_session("gcs-multipart", &session);
+            let stored = match result? {
+                BlobWriteOutcome::Stored(stored) => stored,
+                BlobWriteOutcome::PreconditionFailed => {
+                    cleanup.map_err(|error| error.to_string())?;
+                    return Ok(Self::upload_precondition_failed(preconditions));
+                }
+                BlobWriteOutcome::RetentionPolicyNotMet => {
+                    cleanup.map_err(|error| error.to_string())?;
+                    return Ok(Self::retention_policy_not_met_response());
+                }
+            };
+            cleanup.map_err(|error| error.to_string())?;
+            return Ok(Self::gcs_object_json_response(StatusCode::OK, &stored));
+        }
         let (upload_metadata, object_content_type, data) =
             match Self::parse_multipart_upload(content_type, &req.body) {
                 Ok(upload) => upload,
                 Err(error) => return Ok(Self::upload_metadata_error_response(error)),
             };
+        if data.len() as u64 > GCS_MAX_OBJECT_SIZE {
+            return Ok(Self::object_too_large_response(true));
+        }
         if let Err(error) = Self::validate_crc32c(upload_metadata.crc32c, &data) {
             return Ok(Self::upload_metadata_error_response(error));
         }
@@ -5728,6 +6809,12 @@ impl GcsAdapter {
                 ),
             ));
         }
+        let declared_total = req
+            .header("x-upload-content-length")
+            .and_then(|value| value.parse::<u64>().ok());
+        if declared_total.is_some_and(|total| total > GCS_MAX_OBJECT_SIZE) {
+            return Ok(Self::object_too_large_response(true));
+        }
         let upload_metadata = match Self::parse_json_upload_metadata(&req.body) {
             Ok(metadata) => metadata,
             Err(error) => return Ok(Self::upload_metadata_error_response(error)),
@@ -5756,6 +6843,11 @@ impl GcsAdapter {
             crc32c: upload_metadata.crc32c,
             if_generation_match: req.query_param("ifGenerationMatch").map(str::to_string),
             if_generation_not_match: req.query_param("ifGenerationNotMatch").map(str::to_string),
+            received: 0,
+            total: declared_total,
+            chunks: Vec::new(),
+            calculated_crc32c: 0,
+            initiated_at: chrono::Utc::now(),
         };
         state::save_json(
             storage.as_ref(),
@@ -5773,48 +6865,151 @@ impl GcsAdapter {
             .empty())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn complete_resumable_upload(
         &self,
         storage: &Arc<dyn Storage>,
         req: &Request,
         session_id: &str,
     ) -> Result<Response<Body>, String> {
+        if req.method() == Method::DELETE {
+            let Some(_) = self.load_resumable_session(storage, session_id)? else {
+                return Ok(Self::json_upload_error(
+                    StatusCode::NOT_FOUND,
+                    "NOT_FOUND",
+                    "The resumable upload session does not exist.",
+                ));
+            };
+            self.remove_resumable_session(storage, session_id)?;
+            return Ok(Self::response(StatusCode::NO_CONTENT).empty());
+        }
         if req.method() != Method::PUT {
             return Ok(Self::json_upload_error(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "METHOD_NOT_ALLOWED",
-                "Resumable upload sessions require PUT.",
+                "Resumable upload sessions require PUT or DELETE.",
             ));
         }
         if let Some(response) = Self::invalid_json_mutation_headers(req) {
             return Ok(response);
         }
-        if let Some(content_range) = req.header("content-range") {
-            if !Self::is_complete_resumable_range(content_range, req.body.len()) {
-                return Ok(Self::json_error(
-                    StatusCode::NOT_IMPLEMENTED,
-                    "notImplemented",
-                    "Chunked resumable uploads are not supported by this emulator surface",
-                ));
-            }
-        }
-        let header_crc32c = match Self::request_crc32c(req) {
-            Ok(expected) => expected,
-            Err(error) => return Ok(Self::upload_metadata_error_response(error)),
-        };
-        let Some(session) = self.take_resumable_session(storage, session_id)? else {
+        let Some(mut session) = self.load_resumable_session(storage, session_id)? else {
             return Ok(Self::json_upload_error(
                 StatusCode::NOT_FOUND,
                 "NOT_FOUND",
                 "The resumable upload session does not exist.",
             ));
         };
+
+        let range = match Self::parse_resumable_range(req) {
+            Ok(range) => range,
+            Err(response) => return Ok(response),
+        };
+        if let ResumableRequestRange::Status { total } = range {
+            if session.total.is_some() && total.is_some() && session.total != total {
+                return Ok(Self::json_upload_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    "The upload total does not match the existing resumable session.",
+                ));
+            }
+            return Ok(Self::resume_incomplete_response(session.received));
+        }
+        let ResumableRequestRange::Data { start, end, total } = range else {
+            unreachable!();
+        };
+        if total.is_some_and(|total| total > GCS_MAX_OBJECT_SIZE) {
+            return Ok(Self::object_too_large_response(true));
+        }
+        if end >= GCS_MAX_OBJECT_SIZE {
+            return Ok(Self::object_too_large_response(true));
+        }
+        let request_len = if total == Some(0) && req.payload_is_empty() {
+            0
+        } else {
+            end.saturating_sub(start).saturating_add(1)
+        };
+        if request_len != req.payload_len() {
+            return Ok(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Content-Range does not match the request body length.",
+            ));
+        }
+        if start > session.received {
+            return Ok(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "The resumable upload contains a gap before this chunk.",
+            ));
+        }
+        if session.total.is_some() && total.is_some() && session.total != total {
+            return Ok(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "The upload total does not match the existing resumable session.",
+            ));
+        }
+        session.total = session.total.or(total);
+        let final_request = total.is_some_and(|total| end.checked_add(1) == Some(total));
+        if !final_request && !req.payload_len().is_multiple_of(256 * 1024) {
+            return Ok(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Non-final resumable chunks must be a multiple of 256 KiB.",
+            ));
+        }
+
+        let committed_end = session.received.saturating_sub(1);
+        if end > committed_end {
+            let source_offset = session.received.saturating_sub(start);
+            let new_len = end + 1 - session.received;
+            let item = format!("chunk-{:020}", session.chunks.len());
+            let chunk_crc32c = Self::request_range_crc32c(req, source_offset, new_len)?;
+            Self::stage_resumable_payload(storage, req, session_id, &item, source_offset, new_len)?;
+            session.calculated_crc32c = crc32c::crc32c_combine(
+                session.calculated_crc32c,
+                chunk_crc32c,
+                usize::try_from(new_len).map_err(|_| "GCS chunk is too large".to_string())?,
+            );
+            session.chunks.push(ResumableChunk {
+                item,
+                size: new_len,
+                crc32c: chunk_crc32c,
+            });
+            session.received = end + 1;
+        }
+
+        state::save_json(
+            storage.as_ref(),
+            GCS_RESUMABLE_SESSION_STATE,
+            session_id,
+            &session,
+        )?;
+        self.resumable_sessions
+            .lock()
+            .map_err(|_| "Failed to lock resumable sessions".to_string())?
+            .insert(session_id.to_string(), session.clone());
+        if !final_request || session.total != Some(session.received) {
+            return Ok(Self::resume_incomplete_response(session.received));
+        }
+
+        let header_crc32c = match Self::request_crc32c(req) {
+            Ok(expected) => expected,
+            Err(error) => return Ok(Self::upload_metadata_error_response(error)),
+        };
         let expected_crc32c = match Self::combined_crc32c(session.crc32c, header_crc32c) {
             Ok(expected) => expected,
             Err(error) => return Ok(Self::upload_metadata_error_response(error)),
         };
-        if let Err(error) = Self::validate_crc32c(expected_crc32c, &req.body) {
-            return Ok(Self::upload_metadata_error_response(error));
+        if expected_crc32c.is_some_and(|expected| expected != session.calculated_crc32c) {
+            return Ok(Self::upload_metadata_error_response(
+                UploadMetadataError::ChecksumMismatch(format!(
+                    "Provided CRC32C \"{}\" does not match calculated CRC32C \"{}\"",
+                    BASE64.encode(expected_crc32c.unwrap_or_default().to_be_bytes()),
+                    BASE64.encode(session.calculated_crc32c.to_be_bytes())
+                )),
+            ));
         }
         if Self::foreign_data_protection_active(storage, &session.bucket) {
             return Ok(Self::foreign_data_protection_json_response());
@@ -5826,71 +7021,259 @@ impl GcsAdapter {
             expected: session.if_generation_match.as_deref(),
             rejected: session.if_generation_not_match.as_deref(),
         };
-        let mut metadata = session.metadata;
+        let mut metadata = session.metadata.clone();
         metadata.extend(Self::metadata_from_headers(req));
-        let stored = self.put_blob_with_generation_match(
-            storage,
-            &session.bucket,
-            &session.key,
-            BlobWrite {
-                data: req.body.to_vec(),
-                content_type: session.content_type,
-                metadata,
-                preconditions,
-            },
-        )?;
-        let stored = match stored {
-            BlobWriteOutcome::Stored(stored) => stored,
-            BlobWriteOutcome::PreconditionFailed => {
+        let mutation_lock = self.object_mutation_lock(&session.bucket, &session.key)?;
+        let _guard = mutation_lock
+            .lock()
+            .map_err(|_| "Failed to lock GCS object mutation".to_string())?;
+        let existing = storage
+            .get_object_metadata(&session.bucket, &session.key)
+            .ok();
+        let generation = Self::next_generation(existing.as_ref());
+        let metadata = Self::metadata_with_gcs_state(metadata, generation, "1".to_string(), None);
+        let mut object = crate::models::Object::new_with_metadata_and_etag(
+            session.key.clone(),
+            Vec::new(),
+            session.content_type.clone(),
+            metadata,
+            uuid::Uuid::new_v4().simple().to_string(),
+        );
+        object.size = session.received;
+        object.provider_metadata.insert(
+            GCS_CRC32C_KEY.to_string(),
+            BASE64.encode(session.calculated_crc32c.to_be_bytes()),
+        );
+        let condition = match (preconditions.expected, preconditions.rejected) {
+            (Some("0"), None) => Some(ObjectCondition::Missing),
+            (Some(expected), None) => Some(ObjectCondition::Metadata {
+                key: GCS_GENERATION_KEY.to_string(),
+                value: expected.to_string(),
+            }),
+            (None, Some(rejected)) if existing.is_some() => Some(ObjectCondition::MetadataNot {
+                key: GCS_GENERATION_KEY.to_string(),
+                value: rejected.to_string(),
+            }),
+            (None | Some(_), Some(_)) => {
                 return Ok(Self::upload_precondition_failed(preconditions));
             }
-            BlobWriteOutcome::RetentionPolicyNotMet => {
-                return Ok(Self::retention_policy_not_met_response());
-            }
+            (None, None) => None,
         };
-        storage
-            .delete_provider_state(GCS_RESUMABLE_SESSION_STATE, session_id)
-            .map_err(|err| err.to_string())?;
+        let items = session
+            .chunks
+            .iter()
+            .map(|chunk| chunk.item.clone())
+            .collect::<Vec<_>>();
+        let written = storage
+            .compose_upload_payloads(
+                "gcs",
+                session_id,
+                &items,
+                &session.bucket,
+                session.key.clone(),
+                object,
+                condition.as_ref(),
+            )
+            .map_err(|error| error.to_string())?;
+        if !written {
+            return Ok(Self::upload_precondition_failed(preconditions));
+        }
+        let stored = storage
+            .get_object_metadata(&session.bucket, &session.key)
+            .map_err(|error| error.to_string())?;
+        let stored = Box::new(crate::blob::BlobRecord::from_object(
+            &session.bucket,
+            &stored,
+        ));
+        self.remove_resumable_session(storage, session_id)?;
         Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
     }
 
-    fn is_complete_resumable_range(value: &str, body_len: usize) -> bool {
-        let Some((range, total)) = value.strip_prefix("bytes ").and_then(|v| v.split_once('/'))
-        else {
-            return false;
-        };
-        let Some((start, end)) = range.split_once('-') else {
-            return false;
-        };
-        let Ok(start) = start.parse::<usize>() else {
-            return false;
-        };
-        let Ok(end) = end.parse::<usize>() else {
-            return false;
-        };
-        let Ok(total) = total.parse::<usize>() else {
-            return false;
-        };
-        start == 0 && end.checked_add(1) == Some(total) && total == body_len
-    }
-
-    fn take_resumable_session(
+    fn load_resumable_session(
         &self,
         storage: &Arc<dyn Storage>,
         session_id: &str,
     ) -> Result<Option<ResumableSession>, String> {
-        Ok({
-            let mut sessions = self
-                .resumable_sessions
-                .lock()
-                .map_err(|_| "Failed to lock resumable sessions".to_string())?;
-            sessions.remove(session_id)
+        let session = self
+            .resumable_sessions
+            .lock()
+            .map_err(|_| "Failed to lock resumable sessions".to_string())?
+            .get(session_id)
+            .cloned()
+            .or(state::load_json(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )?);
+        if session.as_ref().is_some_and(|session| {
+            chrono::Utc::now().signed_duration_since(session.initiated_at)
+                >= chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS)
+        }) {
+            self.remove_resumable_session(storage, session_id)?;
+            return Ok(None);
         }
-        .or(state::load_json(
-            storage.as_ref(),
-            GCS_RESUMABLE_SESSION_STATE,
-            session_id,
-        )?))
+        Ok(session)
+    }
+
+    fn remove_resumable_session(
+        &self,
+        storage: &Arc<dyn Storage>,
+        session_id: &str,
+    ) -> Result<(), String> {
+        self.resumable_sessions
+            .lock()
+            .map_err(|_| "Failed to lock resumable sessions".to_string())?
+            .remove(session_id);
+        storage
+            .delete_provider_state(GCS_RESUMABLE_SESSION_STATE, session_id)
+            .map_err(|error| error.to_string())?;
+        storage
+            .delete_upload_session("gcs", session_id)
+            .map_err(|error| error.to_string())
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn parse_resumable_range(req: &Request) -> Result<ResumableRequestRange, Response<Body>> {
+        let Some(value) = req.header("content-range") else {
+            if req.payload_is_empty() {
+                return Ok(ResumableRequestRange::Data {
+                    start: 0,
+                    end: 0,
+                    total: Some(0),
+                });
+            }
+            return Ok(ResumableRequestRange::Data {
+                start: 0,
+                end: req.payload_len() - 1,
+                total: Some(req.payload_len()),
+            });
+        };
+        let Some(value) = value.strip_prefix("bytes ") else {
+            return Err(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Content-Range is invalid.",
+            ));
+        };
+        let Some((range, total)) = value.split_once('/') else {
+            return Err(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Content-Range is invalid.",
+            ));
+        };
+        let total = if total == "*" {
+            None
+        } else {
+            Some(total.parse::<u64>().map_err(|_| {
+                Self::json_upload_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    "Content-Range total is invalid.",
+                )
+            })?)
+        };
+        if range == "*" {
+            if !req.payload_is_empty() {
+                return Err(Self::json_upload_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    "A resumable status query must have an empty body.",
+                ));
+            }
+            return Ok(ResumableRequestRange::Status { total });
+        }
+        let Some((start, end)) = range.split_once('-') else {
+            return Err(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Content-Range byte range is invalid.",
+            ));
+        };
+        let start = start.parse::<u64>().map_err(|_| {
+            Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Content-Range start is invalid.",
+            )
+        })?;
+        let end = end.parse::<u64>().map_err(|_| {
+            Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Content-Range end is invalid.",
+            )
+        })?;
+        if end < start || total.is_some_and(|total| end >= total) {
+            return Err(Self::json_upload_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "Content-Range exceeds the declared upload size.",
+            ));
+        }
+        Ok(ResumableRequestRange::Data { start, end, total })
+    }
+
+    fn resume_incomplete_response(received: u64) -> Response<Body> {
+        let mut response = Self::response(StatusCode::PERMANENT_REDIRECT);
+        if received > 0 {
+            response = response.header("range", &format!("bytes=0-{}", received - 1));
+        }
+        response.empty()
+    }
+
+    fn stage_resumable_payload(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        session_id: &str,
+        item: &str,
+        source_offset: u64,
+        len: u64,
+    ) -> Result<(), String> {
+        if let Some(payload) = &req.spooled_body {
+            return storage
+                .stage_upload_payload("gcs", session_id, item, &payload.path, source_offset, len)
+                .map_err(|error| error.to_string());
+        }
+        let temporary =
+            std::env::temp_dir().join(format!("sqrzl-gcs-buffered-{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::write(&temporary, &req.body)
+            .map_err(|error| format!("Failed to stage buffered GCS payload: {error}"))?;
+        let result =
+            storage.stage_upload_payload("gcs", session_id, item, &temporary, source_offset, len);
+        let _ = std::fs::remove_file(&temporary);
+        result.map_err(|error| error.to_string())
+    }
+
+    fn request_range_crc32c(req: &Request, offset: u64, len: u64) -> Result<u32, String> {
+        if let Some(payload) = &req.spooled_body {
+            let mut file = std::fs::File::open(&payload.path)
+                .map_err(|error| format!("Failed to open GCS request spool: {error}"))?;
+            file.seek(SeekFrom::Start(offset))
+                .map_err(|error| format!("Failed to seek GCS request spool: {error}"))?;
+            let mut remaining = len;
+            let mut checksum = 0;
+            let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+            while remaining > 0 {
+                let take = usize::try_from(remaining.min(buffer.len() as u64))
+                    .map_err(|_| "GCS request range is too large".to_string())?;
+                let read = file
+                    .read(&mut buffer[..take])
+                    .map_err(|error| format!("Failed to read GCS request spool: {error}"))?;
+                if read == 0 {
+                    return Err("GCS request spool ended before the selected range".to_string());
+                }
+                checksum = crc32c::crc32c_append(checksum, &buffer[..read]);
+                remaining -= read as u64;
+            }
+            return Ok(checksum);
+        }
+        let start = usize::try_from(offset).map_err(|_| "GCS range offset is too large")?;
+        let end = usize::try_from(offset + len).map_err(|_| "GCS range end is too large")?;
+        req.body
+            .get(start..end)
+            .map(crc32c::crc32c)
+            .ok_or_else(|| "GCS request range exceeds the buffered body".to_string())
     }
 
     fn gcs_object_json_response(
@@ -6504,7 +7887,7 @@ impl GcsAdapter {
 
     fn existing_object_is_retained(storage: &Arc<dyn Storage>, bucket: &str, key: &str) -> bool {
         storage
-            .get_object(bucket, key)
+            .get_object_metadata(bucket, key)
             .is_ok_and(|object| Self::object_is_retained(storage, bucket, &object))
     }
 
@@ -6680,7 +8063,7 @@ impl GcsAdapter {
             Err(response) => return Ok(*response),
         };
         if alt_media {
-            return Self::object_media_response_for_blob(storage, req, bucket, object, blob);
+            return Self::object_media_response(storage, req, bucket, object);
         }
         Ok(Self::json_response(
             StatusCode::OK,
@@ -6762,7 +8145,7 @@ impl GcsAdapter {
             ));
         }
         let updated_object = storage
-            .get_object(bucket, object)
+            .get_object_metadata(bucket, object)
             .map_err(|err| err.to_string())?;
         let updated = crate::blob::BlobRecord::from_object(bucket, &updated_object);
         Ok(Self::json_response(
@@ -6848,7 +8231,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Response<Body> {
-        storage.get_object(bucket, object).map_or_else(
+        storage.get_object_metadata(bucket, object).map_or_else(
             |_| Self::json_not_found(object),
             |current| {
                 Self::check_gcs_preconditions(req, &current)
@@ -6864,7 +8247,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<crate::models::Object, Box<Response<Body>>> {
-        let blob = match storage.as_ref().get_blob(bucket, object) {
+        let blob = match storage.get_object_metadata(bucket, object) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound) => {
                 return Err(Box::new(Self::json_not_found(object)));

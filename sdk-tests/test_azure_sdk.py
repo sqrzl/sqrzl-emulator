@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 
 import pytest
 
@@ -12,7 +13,7 @@ def _service(sqrzl_server):
     return azure_blob.BlobServiceClient(
         account_url=f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}",
         credential=(
-            sqrzl_server.secret_access_key if sqrzl_server.enforce_auth else None
+            sqrzl_server.azure_account_key if sqrzl_server.enforce_auth else None
         ),
     )
 
@@ -57,14 +58,16 @@ def test_azure_block_blob_workflow(sqrzl_server):
         base64.b64encode(b"block-2").decode("ascii"),
     ]
 
-    blob.stage_block(block_id=block_ids[0], data=b"first-")
-    blob.stage_block(block_id=block_ids[1], data=b"second")
+    first_block = b"a" * (4 * 1024 * 1024)
+    second_block = b"b" * (4 * 1024 * 1024)
+    blob.stage_block(block_id=block_ids[0], data=first_block)
+    blob.stage_block(block_id=block_ids[1], data=second_block)
     blob.commit_block_list(
         [azure_blob.BlobBlock(block_id=block_id) for block_id in block_ids],
         content_settings=azure_blob.ContentSettings(content_type="text/plain"),
     )
 
-    assert blob.download_blob().readall() == b"first-second"
+    assert blob.download_blob().readall() == first_block + second_block
     block_list = blob.get_block_list(block_list_type="committed")
     committed_blocks = (
         block_list[0]
@@ -77,5 +80,45 @@ def test_azure_block_blob_workflow(sqrzl_server):
     ]
     assert parsed_ids == block_ids
 
+    blob.delete_blob()
+    service.delete_container(container_name)
+
+
+def test_azure_sas_block_blob_workflow(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    if not sqrzl_server.enforce_auth:
+        pytest.skip("SAS verification requires the authenticated SDK lane")
+
+    service = _service(sqrzl_server)
+    container_name = sqrzl_server.bucket_name("sdk-azure-sas-block")
+    blob_name = "large/signed.bin"
+    container = service.create_container(container_name)
+    token = azure_blob.generate_blob_sas(
+        account_name=sqrzl_server.azure_account,
+        container_name=container_name,
+        blob_name=blob_name,
+        account_key=sqrzl_server.azure_account_key,
+        permission=azure_blob.BlobSasPermissions(
+            read=True, create=True, write=True, delete=True
+        ),
+        expiry=datetime(2035, 1, 1, tzinfo=timezone.utc),
+    )
+    blob = azure_blob.BlobClient.from_blob_url(
+        f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}/{container_name}/{blob_name}?{token}"
+    )
+    block_ids = [
+        base64.b64encode(b"signed-block-1").decode("ascii"),
+        base64.b64encode(b"signed-block-2").decode("ascii"),
+    ]
+
+    first_block = b"s" * (4 * 1024 * 1024)
+    second_block = b"b" * (4 * 1024 * 1024)
+    blob.stage_block(block_id=block_ids[0], data=first_block)
+    blob.stage_block(block_id=block_ids[1], data=second_block)
+    blob.commit_block_list(
+        [azure_blob.BlobBlock(block_id=block_id) for block_id in block_ids]
+    )
+
+    assert blob.download_blob().readall() == first_block + second_block
     blob.delete_blob()
     service.delete_container(container_name)

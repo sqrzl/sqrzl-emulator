@@ -3,7 +3,7 @@ use crate::models::{policy::Acl, Bucket, MultipartUpload, Object};
 use crate::storage::{
     AclStore, BucketStore, DirectoryEntry, DirectoryEntryKind, LifecycleStore, LockFreeIndex,
     MultipartStore, ObjectCondition, ObjectListingStore, ObjectStore, PolicyStore,
-    ProviderStateStore, TagStore, VersionStore, MULTIPART_MAX_OBJECT_SIZE_KEY,
+    ProviderStateStore, TagStore, UploadStore, VersionStore, MULTIPART_MAX_OBJECT_SIZE_KEY,
     MULTIPART_MAX_PART_SIZE_KEY, MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY, MULTIPART_TAGS_KEY,
     S3_MAXIMUM_OBJECT_SIZE, S3_MAXIMUM_PART_SIZE, S3_MINIMUM_NON_FINAL_PART_SIZE,
 };
@@ -169,7 +169,7 @@ impl FilesystemStorage {
             }
             return Ok(true);
         }
-        match (condition, self.get_object(bucket, key)) {
+        match (condition, self.get_object_metadata(bucket, key)) {
             (
                 ObjectCondition::Missing | ObjectCondition::MissingOrEtagNotIn(_),
                 Err(Error::KeyNotFound),
@@ -442,6 +442,30 @@ impl ObjectStore for FilesystemStorage {
             object,
             ObjectPayload::Spooled(payload_path),
         )
+    }
+
+    fn put_object_streamed_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        let object_lock = self.object_lock(bucket, &key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for conditional streamed write".to_string())
+        })?;
+        if !self.object_condition_matches(bucket, &key, condition)? {
+            return Ok(false);
+        }
+        self.put_object_locked_with_payload(
+            bucket,
+            &key,
+            object,
+            ObjectPayload::Spooled(payload_path),
+        )?;
+        Ok(true)
     }
 
     fn put_object_if(
@@ -815,6 +839,174 @@ impl ProviderStateStore for FilesystemStorage {
         if path.exists() {
             fs::remove_file(path).map_err(|e| {
                 Error::InternalError(format!("Failed to delete provider state: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl UploadStore for FilesystemStorage {
+    fn stage_upload_payload(
+        &self,
+        provider: &str,
+        session: &str,
+        item: &str,
+        payload_path: &Path,
+        source_offset: u64,
+        len: u64,
+    ) -> Result<()> {
+        let destination = self.provider_upload_item_path(provider, session, item);
+        let source_len = fs::metadata(payload_path)
+            .map_err(|error| {
+                Error::InternalError(format!("Failed to inspect upload payload: {error}"))
+            })?
+            .len();
+        let end = source_offset
+            .checked_add(len)
+            .ok_or(Error::EntityTooLarge)?;
+        if end > source_len {
+            return Err(Error::InvalidRequest(
+                "Staged upload range exceeds the request payload".to_string(),
+            ));
+        }
+        if source_offset == 0 && len == source_len {
+            return Self::atomic_move(payload_path, &destination);
+        }
+
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                Error::InternalError(format!(
+                    "Failed to create upload session directory: {error}"
+                ))
+            })?;
+        }
+        let temporary = destination.with_extension(format!("tmp-{}", Uuid::new_v4()));
+        let copy_result = (|| -> Result<()> {
+            let mut source = fs::File::open(payload_path).map_err(|error| {
+                Error::InternalError(format!("Failed to open upload payload: {error}"))
+            })?;
+            source
+                .seek(SeekFrom::Start(source_offset))
+                .map_err(|error| {
+                    Error::InternalError(format!("Failed to seek upload payload: {error}"))
+                })?;
+            let mut destination_file = fs::File::create(&temporary).map_err(|error| {
+                Error::InternalError(format!("Failed to create staged upload payload: {error}"))
+            })?;
+            let copied =
+                std::io::copy(&mut source.take(len), &mut destination_file).map_err(|error| {
+                    Error::InternalError(format!("Failed to stage upload payload: {error}"))
+                })?;
+            if copied != len {
+                return Err(Error::InvalidRequest(
+                    "Upload payload ended before the selected range".to_string(),
+                ));
+            }
+            destination_file.sync_all().map_err(|error| {
+                Error::InternalError(format!("Failed to sync staged upload payload: {error}"))
+            })?;
+            fs::rename(&temporary, &destination).map_err(|error| {
+                Error::InternalError(format!("Failed to commit staged upload payload: {error}"))
+            })?;
+            Ok(())
+        })();
+        if copy_result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        copy_result
+    }
+
+    fn compose_upload_payloads(
+        &self,
+        provider: &str,
+        session: &str,
+        items: &[String],
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: Option<&ObjectCondition>,
+    ) -> Result<bool> {
+        let spool_dir = self.base_path.join(".spool");
+        fs::create_dir_all(&spool_dir).map_err(|error| {
+            Error::InternalError(format!("Failed to create composition directory: {error}"))
+        })?;
+        let scratch = spool_dir.join(format!(".compose-{}.tmp", Uuid::new_v4()));
+        let compose_result = (|| -> Result<()> {
+            let mut destination = fs::File::create(&scratch).map_err(|error| {
+                Error::InternalError(format!("Failed to create composed payload: {error}"))
+            })?;
+            for item in items {
+                let path = self.provider_upload_item_path(provider, session, item);
+                let mut source = fs::File::open(path).map_err(|error| {
+                    Error::InternalError(format!("Failed to open staged upload item: {error}"))
+                })?;
+                std::io::copy(&mut source, &mut destination).map_err(|error| {
+                    Error::InternalError(format!("Failed to compose upload item: {error}"))
+                })?;
+            }
+            destination.sync_all().map_err(|error| {
+                Error::InternalError(format!("Failed to sync composed upload: {error}"))
+            })?;
+            Ok(())
+        })();
+        if let Err(error) = compose_result {
+            let _ = fs::remove_file(&scratch);
+            return Err(error);
+        }
+
+        let written = if let Some(condition) = condition {
+            self.put_object_streamed_if(bucket, key, object, &scratch, condition)?
+        } else {
+            self.put_object_streamed(bucket, key, object, &scratch)?;
+            true
+        };
+        if scratch.exists() {
+            let _ = fs::remove_file(&scratch);
+        }
+        Ok(written)
+    }
+
+    fn delete_upload_session(&self, provider: &str, session: &str) -> Result<()> {
+        let path = self.provider_upload_session_dir(provider, session);
+        if path.exists() {
+            fs::remove_dir_all(path).map_err(|error| {
+                Error::InternalError(format!("Failed to remove upload session: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn retain_upload_items(&self, provider: &str, session: &str, items: &[String]) -> Result<()> {
+        let session_path = self.provider_upload_session_dir(provider, session);
+        if !session_path.exists() {
+            return Ok(());
+        }
+        let retained = items
+            .iter()
+            .map(|item| self.provider_upload_item_path(provider, session, item))
+            .collect::<std::collections::HashSet<_>>();
+        for entry in fs::read_dir(&session_path).map_err(|error| {
+            Error::InternalError(format!("Failed to inspect upload session: {error}"))
+        })? {
+            let entry = entry.map_err(|error| {
+                Error::InternalError(format!("Failed to inspect upload item: {error}"))
+            })?;
+            if entry.file_type().is_ok_and(|kind| kind.is_file())
+                && !retained.contains(&entry.path())
+            {
+                fs::remove_file(entry.path()).map_err(|error| {
+                    Error::InternalError(format!(
+                        "Failed to remove unreferenced upload item: {error}"
+                    ))
+                })?;
+            }
+        }
+        if session_path
+            .read_dir()
+            .is_ok_and(|mut entries| entries.next().is_none())
+        {
+            fs::remove_dir(&session_path).map_err(|error| {
+                Error::InternalError(format!("Failed to remove empty upload session: {error}"))
             })?;
         }
         Ok(())
@@ -3049,6 +3241,57 @@ mod tests {
     }
 
     #[test]
+    fn should_preserve_staged_upload_range_composition_across_storage_restart() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        storage.create_bucket("uploads".to_string()).unwrap();
+        let first = base.join("first.request");
+        let second = base.join("second.request");
+        std::fs::write(&first, b"hello ").unwrap();
+        std::fs::write(&second, b"xxworldyy").unwrap();
+        storage
+            .stage_upload_payload("vendor", "session", "one", &first, 0, 6)
+            .unwrap();
+        storage
+            .stage_upload_payload("vendor", "session", "two", &second, 2, 5)
+            .unwrap();
+        drop(storage);
+        let reopened = FilesystemStorage::new(&base);
+        let mut object = Object::new(
+            "joined.bin".to_string(),
+            Vec::new(),
+            "application/octet-stream".to_string(),
+        );
+        object.size = 11;
+
+        // Act
+        let written = reopened
+            .compose_upload_payloads(
+                "vendor",
+                "session",
+                &["one".to_string(), "two".to_string()],
+                "uploads",
+                "joined.bin".to_string(),
+                object,
+                None,
+            )
+            .unwrap();
+        let session_path = reopened.provider_upload_session_dir("vendor", "session");
+        reopened.delete_upload_session("vendor", "session").unwrap();
+
+        // Assert
+        assert!(written);
+        assert_eq!(
+            reopened.get_object("uploads", "joined.bin").unwrap().data,
+            b"hello world"
+        );
+        assert!(!session_path.exists());
+        assert!(!base.join(".spool").read_dir().unwrap().any(|_| true));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn should_refuse_nonempty_legacy_storage_without_deleting_it() {
         // Arrange
         let base = temp_path();
@@ -3067,6 +3310,40 @@ mod tests {
             Error::InvalidRequest(message) if message.contains("Legacy nonempty storage")
         ));
         assert_eq!(std::fs::read(&legacy).unwrap(), b"keep me");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_remove_only_obsolete_payload_bearing_vendor_upload_state() {
+        // Arrange
+        let base = temp_path();
+        let _ = FilesystemStorage::open(&base).unwrap();
+        let provider_state = base.join(".provider-state");
+        for provider in [
+            "azure-block-session",
+            "azure-committed-blocks",
+            "gcs-resumable-session",
+        ] {
+            let directory = provider_state.join(provider);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("legacy.json"), b"payload-bearing state").unwrap();
+        }
+        let retained = provider_state.join("retained-provider");
+        std::fs::create_dir_all(&retained).unwrap();
+        std::fs::write(retained.join("state.json"), b"keep me").unwrap();
+
+        // Act
+        let reopened = FilesystemStorage::open(&base);
+
+        // Assert
+        assert!(reopened.is_ok());
+        assert!(!provider_state.join("azure-block-session").exists());
+        assert!(!provider_state.join("azure-committed-blocks").exists());
+        assert!(!provider_state.join("gcs-resumable-session").exists());
+        assert_eq!(
+            std::fs::read(retained.join("state.json")).unwrap(),
+            b"keep me"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

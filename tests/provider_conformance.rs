@@ -1649,28 +1649,24 @@ async fn should_route_non_upload_gcs_methods_before_enforcing_upload_framing() {
     .await;
 
     // Assert
-    for response in [media_get, session_delete] {
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_gcs_json_error(&body_text(response).await, "methodNotAllowed");
-    }
+    assert_eq!(media_get.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_gcs_json_error(&body_text(media_get).await, "methodNotAllowed");
+    assert_eq!(session_delete.status(), StatusCode::NO_CONTENT);
     assert!(storage.get_object("method-gcs-json", "get-object").is_err());
     assert!(storage
         .get_object("method-gcs-json", "session-object")
         .is_err());
-    let completed = call(
+    let cancelled = call(
         storage.clone(),
         auth_disabled(),
         request("PUT", &location, &[("content-length", "7")], b"payload"),
     )
     .await;
-    assert_eq!(completed.status(), StatusCode::OK);
-    assert_eq!(
-        storage
-            .get_object("method-gcs-json", "session-object")
-            .unwrap()
-            .data,
-        b"payload"
-    );
+    assert_eq!(cancelled.status(), StatusCode::NOT_FOUND);
+    assert_gcs_json_error(&body_text(cancelled).await, "notFound");
+    assert!(storage
+        .get_object("method-gcs-json", "session-object")
+        .is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]

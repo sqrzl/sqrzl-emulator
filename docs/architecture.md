@@ -264,6 +264,8 @@ flowchart TB
     ObjectLocks["Per-object Mutex registry"]
     UploadCache["Multipart uploads cache"]
     AtomicWrite["atomic_write temp file then rename"]
+    StreamSpool["request spool<br/>incremental digests + bounded bytes"]
+    UploadCompose["UploadStore<br/>stage ranges + disk-to-disk compose"]
 
     Root["SQRZL_BLOBS_PATH"]
     BucketDir["bucket directory"]
@@ -274,6 +276,8 @@ flowchart TB
     Versions["versions/{version_id}<br/>object.blob + object.meta.json"]
     Multipart[".multipart/{upload_id}<br/>upload.json + part files"]
     ProviderState[".provider-state/{provider}<br/>restart-safe sidecars"]
+    RequestSpool[".spool<br/>in-flight request files"]
+    ProviderUploads[".provider-uploads/{provider}/{session}<br/>staged blocks, chunks, and parts"]
 
     StorageAggregate --> CapabilityTraits --> FS
     CapabilityTraits --> Indexed
@@ -282,6 +286,8 @@ flowchart TB
     FS --> ObjectLocks
     FS --> UploadCache
     FS --> AtomicWrite
+    FS --> StreamSpool
+    FS --> UploadCompose
     FS --> Root
     Root --> BucketDir
     BucketDir --> BucketControl
@@ -291,13 +297,30 @@ flowchart TB
     ObjectDir --> Versions
     BucketDir --> Multipart
     Root --> ProviderState
+    Root --> RequestSpool
+    Root --> ProviderUploads
 ```
+
+Large data-plane request bodies are streamed into root-level spool files while
+MD5, SHA-256, SHA-384, CRC32C, and Azure-compatible CRC64 are calculated
+incrementally. Provider adapters keep only session metadata in memory and in
+`.provider-state`; durable payload bytes live in `.provider-uploads`. Azure
+block lists, GCS resumable chunks, and OCI multipart parts are assembled through
+ordered disk-to-disk copies, and the final file is atomically moved into the
+object layout. S3 multipart completion follows the same no-whole-object-read
+rule through its existing `.multipart` layout.
+
+Startup purges abandoned request spools. Request cancellation, provider
+rejection, abort, completion, overwrite, expired GCS sessions, and obsolete
+pre-streaming provider state all remove their owned staging files. The storage
+root therefore remains the single capacity boundary for both committed objects
+and uploads in progress.
 
 ## Auth And Authorization
 
 ```mermaid
 flowchart TD
-    Config["Config<br/>SQRZL_ACCESS_KEY_ID<br/>SQRZL_SECRET_ACCESS_KEY<br/>SQRZL_ADMIN_AUTH_DISABLED"]
+    Config["Config<br/>SQRZL_ACCESS_KEY_ID / SECRET<br/>AZURE_ACCOUNT / ACCOUNT_KEY<br/>GCS_HMAC_ACCESS_ID / SECRET<br/>OCI identity + RSA public key"]
     ProviderRequest["Provider API request"]
     AdminRequest["Admin UI/API request"]
 
