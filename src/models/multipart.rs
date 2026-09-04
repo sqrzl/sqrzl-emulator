@@ -15,8 +15,6 @@ pub struct MultipartUpload {
     #[serde(default)]
     pub provider_metadata: HashMap<String, String>,
     pub parts: Vec<Part>,
-    #[serde(default, skip_serializing)]
-    pub part_data: HashMap<u32, Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +41,6 @@ impl MultipartUpload {
             metadata,
             provider_metadata,
             parts: Vec::new(),
-            part_data: HashMap::new(),
         }
     }
 }

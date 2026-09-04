@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use tracing::warn;
 
 /// Verify `SigV4` signature in the request.
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err, clippy::too_many_lines)]
 pub(crate) fn verify_sigv4_signature(
     req: &dyn crate::auth::HttpRequestLike,
     auth_config: &AuthConfig,
@@ -26,7 +26,38 @@ pub(crate) fn verify_sigv4_signature(
         let complete_presign = (query.contains("X-Amz-Credential=")
             && query.contains("X-Amz-Signature="))
             || (query.contains("AWSAccessKeyId=") && query.contains("Signature="));
-        if complete_presign || !has_credential {
+        if complete_presign {
+            let req_id = header_utils::generate_request_id();
+            let query_params = crate::server::http::parse_query_params(Some(query));
+            let presigned =
+                crate::auth::PresignedUrl::from_query_params("", "", req.method(), &query_params)
+                    .map_err(|message| {
+                    xml_error_response(StatusCode::BAD_REQUEST, "InvalidRequest", &message, &req_id)
+                })?;
+            let Some(access_key) = auth_config.access_key() else {
+                return Ok(true);
+            };
+            let Some(secret_key) = auth_config.secret_key() else {
+                return Ok(true);
+            };
+            let config = crate::auth::PresignedUrlConfig {
+                access_key: access_key.to_string(),
+                secret_key: secret_key.to_string(),
+            };
+            return presigned
+                .validate_request(req, &config)
+                .map(|()| true)
+                .map_err(|message| {
+                    warn!("Presigned URL signature verification failed: {message}");
+                    xml_error_response(
+                        StatusCode::FORBIDDEN,
+                        "SignatureDoesNotMatch",
+                        "The provided signature does not match",
+                        &req_id,
+                    )
+                });
+        }
+        if !has_credential {
             return Ok(true);
         }
         let req_id = header_utils::generate_request_id();
@@ -198,11 +229,15 @@ fn uri_encode(value: &str, encode_slash: bool) -> String {
 }
 
 fn canonical_uri(path: &str) -> String {
-    if path.is_empty() {
-        "/".to_string()
-    } else {
-        uri_encode(path, false)
-    }
+    let path = if path.is_empty() { "/" } else { path };
+    path.split('/')
+        .map(|segment| {
+            let decoded = urlencoding::decode(segment)
+                .map_or_else(|_| segment.to_string(), std::borrow::Cow::into_owned);
+            uri_encode(&decoded, true)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn canonical_query_string(query: Option<&str>) -> String {
@@ -242,7 +277,9 @@ pub(crate) fn build_canonical_request(
     let canonical_uri = canonical_uri(req.path());
     let canonical_query = canonical_query_string(req.query());
 
-    let mut canonical_headers: Vec<String> = signed_headers
+    let mut names = signed_headers.to_vec();
+    names.sort();
+    let canonical_headers: Vec<String> = names
         .iter()
         .map(|name| {
             let value = req.header(name).unwrap_or("");
@@ -251,19 +288,18 @@ pub(crate) fn build_canonical_request(
         })
         .collect();
 
-    canonical_headers.sort();
-
     let canonical_headers_str = canonical_headers.join("\n");
-    let signed_headers_str = {
-        let mut names = signed_headers.to_vec();
-        names.sort();
-        names.join(";")
-    };
+    let signed_headers_str = names.join(";");
 
     let payload_hash = req
         .header("x-amz-content-sha256")
         .filter(|value| !value.is_empty())
-        .map_or_else(|| sha256_hex(req.body()), std::string::ToString::to_string);
+        .map(std::string::ToString::to_string)
+        .or_else(|| {
+            req.content_sha256_hint()
+                .map(std::string::ToString::to_string)
+        })
+        .unwrap_or_else(|| sha256_hex(req.body()));
 
     format!(
         "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers_str}\n\n{signed_headers_str}\n{payload_hash}"

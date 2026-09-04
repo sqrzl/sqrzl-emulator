@@ -633,64 +633,46 @@ impl Authorizer {
 
         match condition {
             NumericCondition::Equals => request_values.iter().any(|request_value| {
-                request_value
-                    .parse::<f64>()
-                    .ok()
-                    .is_some_and(|request_number| {
-                        expected_numbers
-                            .iter()
-                            .any(|expected| request_number.total_cmp(expected).is_eq())
-                    })
+                request_value.parse::<f64>().is_ok_and(|request_number| {
+                    expected_numbers
+                        .iter()
+                        .any(|expected| request_number.total_cmp(expected).is_eq())
+                })
             }),
             NumericCondition::NotEquals => request_values.iter().all(|request_value| {
-                request_value
-                    .parse::<f64>()
-                    .ok()
-                    .is_some_and(|request_number| {
-                        expected_numbers
-                            .iter()
-                            .all(|expected| !request_number.total_cmp(expected).is_eq())
-                    })
+                request_value.parse::<f64>().is_ok_and(|request_number| {
+                    expected_numbers
+                        .iter()
+                        .all(|expected| !request_number.total_cmp(expected).is_eq())
+                })
             }),
             NumericCondition::LessThan => request_values.iter().any(|request_value| {
-                request_value
-                    .parse::<f64>()
-                    .ok()
-                    .is_some_and(|request_number| {
-                        expected_numbers
-                            .iter()
-                            .any(|expected| request_number < *expected)
-                    })
+                request_value.parse::<f64>().is_ok_and(|request_number| {
+                    expected_numbers
+                        .iter()
+                        .any(|expected| request_number < *expected)
+                })
             }),
             NumericCondition::LessThanEquals => request_values.iter().any(|request_value| {
-                request_value
-                    .parse::<f64>()
-                    .ok()
-                    .is_some_and(|request_number| {
-                        expected_numbers
-                            .iter()
-                            .any(|expected| request_number <= *expected)
-                    })
+                request_value.parse::<f64>().is_ok_and(|request_number| {
+                    expected_numbers
+                        .iter()
+                        .any(|expected| request_number <= *expected)
+                })
             }),
             NumericCondition::GreaterThan => request_values.iter().any(|request_value| {
-                request_value
-                    .parse::<f64>()
-                    .ok()
-                    .is_some_and(|request_number| {
-                        expected_numbers
-                            .iter()
-                            .any(|expected| request_number > *expected)
-                    })
+                request_value.parse::<f64>().is_ok_and(|request_number| {
+                    expected_numbers
+                        .iter()
+                        .any(|expected| request_number > *expected)
+                })
             }),
             NumericCondition::GreaterThanEquals => request_values.iter().any(|request_value| {
-                request_value
-                    .parse::<f64>()
-                    .ok()
-                    .is_some_and(|request_number| {
-                        expected_numbers
-                            .iter()
-                            .any(|expected| request_number >= *expected)
-                    })
+                request_value.parse::<f64>().is_ok_and(|request_number| {
+                    expected_numbers
+                        .iter()
+                        .any(|expected| request_number >= *expected)
+                })
             }),
         }
     }

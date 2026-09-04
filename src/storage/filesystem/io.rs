@@ -148,7 +148,7 @@ impl FilesystemStorage {
             | ".lifecycle.json"
             | ".policy.json"
             | "bucket.acl.json" => true,
-            ".multipart" => entry
+            ".multipart" | ".spool" => entry
                 .path()
                 .read_dir()
                 .is_ok_and(|entries| entries.flatten().next().is_none()),
@@ -380,35 +380,6 @@ impl FilesystemStorage {
         Ok(())
     }
 
-    pub(super) fn ensure_upload_exists(&self, bucket: &str, upload_id: &str) -> Result<()> {
-        {
-            let cache = self
-                .uploads_cache
-                .lock()
-                .map_err(|_| Error::InternalError("Failed to lock uploads cache".to_string()))?;
-            if let Some(uploads) = cache.get(bucket) {
-                if uploads.contains_key(upload_id) {
-                    return Ok(());
-                }
-
-                return Err(Error::NoSuchUpload);
-            }
-        }
-
-        let uploads = self.load_uploads_from_disk(bucket)?;
-        let upload_exists = uploads.contains_key(upload_id);
-        self.uploads_cache
-            .lock()
-            .map_err(|_| Error::InternalError("Failed to lock uploads cache".to_string()))?
-            .insert(bucket.to_string(), uploads);
-
-        if upload_exists {
-            Ok(())
-        } else {
-            Err(Error::NoSuchUpload)
-        }
-    }
-
     fn normalize_upload_parts(upload: &mut MultipartUpload) {
         upload.parts.sort_unstable_by_key(|part| part.part_number);
     }
@@ -541,5 +512,99 @@ impl FilesystemStorage {
         }
 
         write_result
+    }
+
+    /// Moves an already-written file into place as `dest`, without reading
+    /// its contents into memory. Prefers a same-filesystem rename; falls
+    /// back to copy-then-remove when `src` and `dest` live on different
+    /// filesystems (rename cannot cross a mount boundary).
+    pub(super) fn atomic_move(src: &Path, dest: &Path) -> Result<()> {
+        let parent = dest
+            .parent()
+            .ok_or_else(|| Error::InternalError("Invalid file path".to_string()))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| Error::InternalError(format!("Failed to create parent directory: {e}")))?;
+
+        if fs::rename(src, dest).is_ok() {
+            return Ok(());
+        }
+
+        fs::copy(src, dest)
+            .map_err(|e| Error::InternalError(format!("Failed to move payload into place: {e}")))?;
+        fs::remove_file(src)
+            .map_err(|e| Error::InternalError(format!("Failed to remove spooled payload: {e}")))?;
+        Ok(())
+    }
+
+    /// A scratch path, on the same filesystem as this bucket's blob storage,
+    /// for a file that will be moved into place with [`Self::atomic_move`].
+    pub(super) fn spool_scratch_path(&self, bucket: &str) -> PathBuf {
+        self.bucket_dir(bucket)
+            .join(".spool")
+            .join(format!("{}.tmp", Uuid::new_v4()))
+    }
+
+    /// Same as [`Self::write_object_files`], but the object payload is moved
+    /// in from `payload_path` (already fully written to disk) instead of
+    /// being copied out of `object.data`, so completing a write never
+    /// requires the whole payload to be resident in memory at once.
+    pub(super) fn write_object_files_from_path(
+        &self,
+        bucket: &str,
+        object_id: &str,
+        object: &Object,
+        payload_path: &Path,
+    ) -> Result<()> {
+        let object_id_dir = self.object_id_dir(bucket, object_id);
+        fs::create_dir_all(&object_id_dir)
+            .map_err(|e| Error::InternalError(format!("Failed to create object directory: {e}")))?;
+
+        let object_data_path = self.object_data_path(bucket, object_id);
+        Self::atomic_move(payload_path, &object_data_path)?;
+
+        let metadata_path = self.object_metadata_path(bucket, object_id);
+        let metadata_json = serde_json::to_string(object)
+            .map_err(|e| Error::InternalError(format!("Failed to serialize metadata: {e}")))?;
+        Self::atomic_write(&metadata_path, metadata_json.as_bytes())?;
+
+        Ok(())
+    }
+
+    /// Records a part's `etag`/`size` in the upload's part list. Shared by
+    /// [`super::FilesystemStorage`]'s in-memory and streamed `upload_part`
+    /// implementations, both of which write the part's bytes to disk
+    /// themselves before calling this.
+    pub(super) fn record_uploaded_part(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        etag: String,
+        size: u64,
+    ) -> Result<String> {
+        let upload_path = self.upload_record_path(bucket, upload_id);
+        let mut cache = self
+            .uploads_cache
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock uploads cache".to_string()))?;
+        let uploads = cache
+            .get_mut(bucket)
+            .ok_or_else(|| Error::InternalError("Missing uploads cache entry".to_string()))?;
+        let upload = uploads.get_mut(upload_id).ok_or(Error::NoSuchUpload)?;
+        let part = crate::models::Part {
+            part_number,
+            etag: etag.clone(),
+            size,
+            last_modified: chrono::Utc::now(),
+        };
+        match upload
+            .parts
+            .binary_search_by_key(&part_number, |existing| existing.part_number)
+        {
+            Ok(index) => upload.parts[index] = part,
+            Err(index) => upload.parts.insert(index, part),
+        }
+        Self::write_upload_record_at_path(&upload_path, upload)?;
+        Ok(etag)
     }
 }

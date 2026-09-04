@@ -79,7 +79,9 @@ flowchart TB
 ```mermaid
 flowchart TD
     Request["HTTP request on API port"]
-    Parse["Request::from_hyper_with_max_body<br/>src/server/http.rs"]
+    Streamable{"S3 object PUT or UploadPart?"}
+    Stream["spool_request<br/>stream to disk + hash"]
+    Parse["Request::from_hyper_with_max_body<br/>buffer control payload"]
     BodyLimit{"Body exceeds<br/>SQRZL_MAX_REQUEST_BYTES?"}
     Health{"GET /healthz?"}
     Registry["AdapterRegistry::handle<br/>src/providers/mod.rs"]
@@ -104,7 +106,10 @@ flowchart TD
     TooLarge["AdapterRegistry::render_payload_too_large<br/>provider-shaped 413 response"]
     HealthResponse["health::response"]
 
-    Request --> Parse
+    Request --> Streamable
+    Streamable -- yes --> Stream
+    Streamable -- no --> Parse
+    Stream --> BodyLimit
     Parse --> BodyLimit
     BodyLimit -- yes --> TooLarge
     BodyLimit -- no --> Health

@@ -147,6 +147,19 @@ impl ObjectStore for IndexedStorage {
         Ok(())
     }
 
+    fn put_object_streamed(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &std::path::Path,
+    ) -> Result<()> {
+        self.inner
+            .put_object_streamed(bucket, key.clone(), object, payload_path)?;
+        self.update_index_put(bucket, key);
+        Ok(())
+    }
+
     fn put_object_if(
         &self,
         bucket: &str,
@@ -176,6 +189,10 @@ impl ObjectStore for IndexedStorage {
 
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
         self.inner.get_object(bucket, key)
+    }
+
+    fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<Object> {
+        self.inner.get_object_metadata(bucket, key)
     }
 
     fn get_object_range(
@@ -318,6 +335,19 @@ impl MultipartStore for IndexedStorage {
         self.inner.upload_part(bucket, upload_id, part_number, data)
     }
 
+    fn upload_part_streamed(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        payload_path: &std::path::Path,
+        len: u64,
+        etag: String,
+    ) -> Result<String> {
+        self.inner
+            .upload_part_streamed(bucket, upload_id, part_number, payload_path, len, etag)
+    }
+
     fn list_multipart_uploads(&self, bucket: &str) -> Result<Vec<MultipartUpload>> {
         self.inner.list_multipart_uploads(bucket)
     }
@@ -332,6 +362,16 @@ impl MultipartStore for IndexedStorage {
 
     fn complete_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<String> {
         self.inner.complete_multipart_upload(bucket, upload_id)
+    }
+
+    fn complete_multipart_upload_with_parts(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+    ) -> Result<String> {
+        self.inner
+            .complete_multipart_upload_with_parts(bucket, upload_id, parts)
     }
 
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {

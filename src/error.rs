@@ -41,6 +41,9 @@ pub enum Error {
     #[error("Your proposed upload is smaller than the minimum allowed object size")]
     EntityTooSmall,
 
+    #[error("Your proposed upload exceeds the maximum allowed object size")]
+    EntityTooLarge,
+
     #[error("Incomplete multipart upload")]
     IncompleteMultipartUpload,
 
@@ -82,6 +85,7 @@ impl Error {
             | Error::InvalidPartNumber
             | Error::InvalidPartOrder
             | Error::EntityTooSmall
+            | Error::EntityTooLarge
             | Error::IncompleteMultipartUpload
             | Error::InvalidPolicy(_) => http::StatusCode::BAD_REQUEST,
             Error::MethodNotAllowed(_) => http::StatusCode::METHOD_NOT_ALLOWED,
@@ -105,6 +109,7 @@ impl Error {
             Error::InvalidPartNumber => "InvalidPartNumber",
             Error::InvalidPartOrder => "InvalidPartOrder",
             Error::EntityTooSmall => "EntityTooSmall",
+            Error::EntityTooLarge => "EntityTooLarge",
             Error::IncompleteMultipartUpload => "IncompleteMultipartUpload",
             Error::NoSuchVersion => "NoSuchVersion",
             Error::NoSuchLifecycleConfiguration => "NoSuchLifecycleConfiguration",

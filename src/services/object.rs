@@ -33,6 +33,20 @@ pub fn get_object(
     storage.get_object(bucket, key)
 }
 
+/// Reads object attributes without materializing payload bytes when the
+/// selected storage backend supports a metadata-only path.
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
+pub fn get_object_metadata(
+    storage: &(impl ObjectStore + ?Sized),
+    bucket: &str,
+    key: &str,
+) -> Result<Object> {
+    storage.get_object_metadata(bucket, key)
+}
+
 ///
 /// # Errors
 ///
@@ -234,6 +248,22 @@ pub fn upload_part(
 /// # Errors
 ///
 /// Returns an error when the underlying emulator operation fails.
+pub fn upload_part_streamed(
+    storage: &(impl MultipartStore + ?Sized),
+    bucket: &str,
+    upload_id: &str,
+    part_number: u32,
+    payload_path: &std::path::Path,
+    len: u64,
+    etag: String,
+) -> Result<String> {
+    storage.upload_part_streamed(bucket, upload_id, part_number, payload_path, len, etag)
+}
+
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
 pub fn list_multipart_uploads(
     storage: &(impl MultipartStore + ?Sized),
     bucket: &str,
@@ -253,6 +283,47 @@ pub fn create_multipart_upload(
     storage.create_multipart_upload(bucket, key)
 }
 
+/// Creates an S3 multipart upload while preserving object attributes from
+/// the initiation request and attaching S3 part/object size constraints.
+///
+/// # Errors
+///
+/// Returns an error when the underlying emulator operation fails.
+pub fn create_s3_multipart_upload_with_metadata<MS, PS>(
+    storage: &(impl MultipartStore + ?Sized),
+    bucket: &str,
+    key: String,
+    content_type: Option<String>,
+    metadata: HashMap<String, String, MS>,
+    provider_metadata: HashMap<String, String, PS>,
+) -> Result<MultipartUpload>
+where
+    MS: BuildHasher,
+    PS: BuildHasher,
+{
+    let metadata = metadata.into_iter().collect();
+    let mut provider_metadata = provider_metadata.into_iter().collect::<HashMap<_, _>>();
+    provider_metadata.insert(
+        crate::storage::MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY.to_string(),
+        crate::storage::S3_MINIMUM_NON_FINAL_PART_SIZE.to_string(),
+    );
+    provider_metadata.insert(
+        crate::storage::MULTIPART_MAX_PART_SIZE_KEY.to_string(),
+        crate::storage::S3_MAXIMUM_PART_SIZE.to_string(),
+    );
+    provider_metadata.insert(
+        crate::storage::MULTIPART_MAX_OBJECT_SIZE_KEY.to_string(),
+        crate::storage::S3_MAXIMUM_OBJECT_SIZE.to_string(),
+    );
+    storage.create_multipart_upload_with_metadata(
+        bucket,
+        key,
+        content_type,
+        metadata,
+        provider_metadata,
+    )
+}
+
 ///
 /// # Errors
 ///
@@ -263,6 +334,19 @@ pub fn complete_multipart_upload(
     upload_id: &str,
 ) -> Result<String> {
     storage.complete_multipart_upload(bucket, upload_id)
+}
+
+///
+/// # Errors
+///
+/// Returns an error when the multipart completion manifest is invalid.
+pub fn complete_multipart_upload_with_parts(
+    storage: &(impl MultipartStore + ?Sized),
+    bucket: &str,
+    upload_id: &str,
+    parts: &[(u32, String)],
+) -> Result<String> {
+    storage.complete_multipart_upload_with_parts(bucket, upload_id, parts)
 }
 
 ///

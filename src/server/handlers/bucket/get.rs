@@ -1,6 +1,5 @@
 use super::helpers::{
-    bucket_get_action, build_list_objects_v2_entries, decode_list_objects_v2_token,
-    encode_list_objects_v2_token, list_objects_v2_start_index, S3_CORS_XML_KEY,
+    bucket_get_action, decode_list_objects_v2_token, encode_list_objects_v2_token, S3_CORS_XML_KEY,
     S3_OBJECT_LOCK_ENABLED_KEY, S3_REQUEST_PAYMENT_KEY, S3_VERSIONING_STATUS_KEY,
     S3_WEBSITE_XML_KEY,
 };
@@ -10,10 +9,33 @@ use super::{
     xml_utils, AuthConfig, Body, ResponseBuilder, Storage,
 };
 use crate::error::Error;
+use crate::models::MultipartUpload;
 use crate::server::http::Request;
 use http::StatusCode;
 use hyper::Response;
+use std::collections::HashSet;
 use std::sync::Arc;
+
+enum MultipartUploadListingEntry {
+    Upload(MultipartUpload),
+    CommonPrefix(String),
+}
+
+impl MultipartUploadListingEntry {
+    fn key(&self) -> &str {
+        match self {
+            Self::Upload(upload) => &upload.key,
+            Self::CommonPrefix(prefix) => prefix,
+        }
+    }
+
+    fn upload_id(&self) -> Option<&str> {
+        match self {
+            Self::Upload(upload) => Some(&upload.upload_id),
+            Self::CommonPrefix(_) => None,
+        }
+    }
+}
 
 pub async fn bucket_get_or_list_objects(
     storage: Arc<dyn Storage>,
@@ -321,23 +343,130 @@ fn get_versioning(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn list_multipart_uploads(
     storage: &Arc<dyn Storage>,
     bucket: &str,
     req: &Request,
     req_id: &str,
 ) -> Response<Body> {
+    let prefix = req.query_param("prefix").unwrap_or("");
+    let delimiter = req
+        .query_param("delimiter")
+        .filter(|value| !value.is_empty());
+    let key_marker = req
+        .query_param("key-marker")
+        .filter(|value| !value.is_empty());
+    let upload_id_marker = req
+        .query_param("upload-id-marker")
+        .filter(|value| !value.is_empty());
+    if upload_id_marker.is_some() && key_marker.is_none() {
+        return xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidArgument",
+            "upload-id-marker requires key-marker.",
+            req_id,
+        );
+    }
+    let max_uploads = match req.query_param("max-uploads") {
+        Some(value) => match value.parse::<u32>() {
+            Ok(value) => usize::try_from(value.min(1_000)).unwrap_or(1_000),
+            Err(_) => {
+                return xml_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidArgument",
+                    "max-uploads must be a non-negative integer.",
+                    req_id,
+                );
+            }
+        },
+        None => 1_000,
+    };
+    let encoding_type = req.query_param("encoding-type");
+    if encoding_type.is_some_and(|value| !value.eq_ignore_ascii_case("url")) {
+        return xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidArgument",
+            "encoding-type must be url when provided.",
+            req_id,
+        );
+    }
+
     match tokio::task::block_in_place(|| {
         bucket_service::list_multipart_uploads(storage.as_ref(), bucket)
     }) {
-        Ok(uploads) => bucket_xml_response(
-            storage.as_ref(),
-            bucket,
-            req,
-            req_id,
-            StatusCode::OK,
-            xml_utils::list_multipart_uploads_xml(&uploads, bucket),
-        ),
+        Ok(uploads) => {
+            let mut seen_prefixes = HashSet::new();
+            let mut entries = uploads
+                .into_iter()
+                .filter(|upload| upload.key.starts_with(prefix))
+                .filter_map(|upload| {
+                    let Some(delimiter) = delimiter else {
+                        return Some(MultipartUploadListingEntry::Upload(upload));
+                    };
+                    let remainder = &upload.key[prefix.len()..];
+                    let Some(index) = remainder.find(delimiter) else {
+                        return Some(MultipartUploadListingEntry::Upload(upload));
+                    };
+                    let common_prefix =
+                        upload.key[..prefix.len() + index + delimiter.len()].to_string();
+                    seen_prefixes
+                        .insert(common_prefix.clone())
+                        .then_some(MultipartUploadListingEntry::CommonPrefix(common_prefix))
+                })
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| {
+                left.key()
+                    .cmp(right.key())
+                    .then_with(|| left.upload_id().cmp(&right.upload_id()))
+            });
+            entries.retain(|entry| match key_marker {
+                None => true,
+                Some(marker) if entry.key() > marker => true,
+                Some(marker) if entry.key() == marker => upload_id_marker
+                    .is_some_and(|id| entry.upload_id().is_some_and(|entry_id| entry_id > id)),
+                Some(_) => false,
+            });
+
+            let is_truncated = entries.len() > max_uploads;
+            entries.truncate(max_uploads);
+            let next_key_marker = is_truncated
+                .then(|| entries.last().map(|entry| entry.key().to_string()))
+                .flatten();
+            let next_upload_id_marker = is_truncated
+                .then(|| {
+                    entries
+                        .last()
+                        .and_then(MultipartUploadListingEntry::upload_id)
+                        .map(str::to_string)
+                })
+                .flatten();
+            let mut page_uploads = Vec::new();
+            let mut common_prefixes = Vec::new();
+            for entry in entries {
+                match entry {
+                    MultipartUploadListingEntry::Upload(upload) => page_uploads.push(upload),
+                    MultipartUploadListingEntry::CommonPrefix(prefix) => {
+                        common_prefixes.push(prefix);
+                    }
+                }
+            }
+            let xml = xml_utils::list_multipart_uploads_xml(&xml_utils::ListMultipartUploadsXml {
+                uploads: &page_uploads,
+                common_prefixes: &common_prefixes,
+                bucket,
+                key_marker,
+                upload_id_marker,
+                next_key_marker: next_key_marker.as_deref(),
+                next_upload_id_marker: next_upload_id_marker.as_deref(),
+                prefix,
+                delimiter,
+                encoding_type,
+                max_uploads,
+                is_truncated,
+            });
+            bucket_xml_response(storage.as_ref(), bucket, req, req_id, StatusCode::OK, xml)
+        }
         Err(Error::BucketNotFound) => no_such_bucket_response(req_id),
         Err(Error::NoSuchUpload) => xml_error_response(
             StatusCode::NOT_FOUND,
@@ -484,29 +613,44 @@ fn list_objects_v2(
         Some(value) if value.is_empty() || value.eq_ignore_ascii_case("true")
     );
 
+    let marker = continuation_marker.as_deref().or(start_after);
     match tokio::task::block_in_place(|| {
-        object_service::list_objects(storage.as_ref(), bucket, Some(prefix), None, None, None)
+        object_service::list_objects(
+            storage.as_ref(),
+            bucket,
+            Some(prefix),
+            delimiter,
+            marker,
+            Some(max_keys),
+        )
     }) {
         Ok(result) => {
-            let entries = build_list_objects_v2_entries(result.objects, prefix, delimiter);
-            let start_index =
-                list_objects_v2_start_index(&entries, continuation_marker.as_deref(), start_after);
-            let page_end = (start_index.saturating_add(max_keys)).min(entries.len());
-            let page_entries = entries.get(start_index..page_end).unwrap_or_default();
-            let truncated = page_end < entries.len();
-            let next_continuation_marker =
-                next_continuation_token(&entries, page_entries, start_index, page_end, truncated);
-            let next_continuation_token =
-                next_continuation_marker.map(encode_list_objects_v2_token);
+            let mut entries = result
+                .objects
+                .into_iter()
+                .map(xml_utils::ListObjectsV2Entry::Object)
+                .chain(
+                    result
+                        .common_prefixes
+                        .into_iter()
+                        .map(xml_utils::ListObjectsV2Entry::CommonPrefix),
+                )
+                .collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.token().cmp(right.token()));
+            let next_continuation_token = result
+                .is_truncated
+                .then_some(result.next_marker)
+                .flatten()
+                .map(|marker| encode_list_objects_v2_token(&marker));
 
             let xml = xml_utils::list_objects_v2_xml(
-                page_entries,
+                &entries,
                 bucket,
                 prefix,
                 delimiter,
                 max_keys,
-                page_entries.len(),
-                truncated,
+                entries.len(),
+                result.is_truncated,
                 continuation_token,
                 next_continuation_token.as_deref(),
                 start_after,
@@ -574,36 +718,16 @@ fn max_keys_or_error(req: &Request, req_id: &str) -> Result<usize, Box<Response<
     let Some(raw) = req.query_param("max-keys") else {
         return Ok(1_000);
     };
-    raw.parse::<u32>().map(|value| value as usize).map_err(|_| {
-        Box::new(xml_error_response(
-            StatusCode::BAD_REQUEST,
-            "InvalidArgument",
-            "max-keys must be a non-negative integer.",
-            req_id,
-        ))
-    })
-}
-
-fn next_continuation_token<'a>(
-    entries: &'a [xml_utils::ListObjectsV2Entry],
-    page_entries: &'a [xml_utils::ListObjectsV2Entry],
-    start_index: usize,
-    page_end: usize,
-    truncated: bool,
-) -> Option<&'a str> {
-    if !truncated {
-        return None;
-    }
-
-    if page_end > start_index {
-        return page_entries
-            .last()
-            .map(crate::utils::xml::ListObjectsV2Entry::token);
-    }
-
-    entries
-        .get(start_index)
-        .map(crate::utils::xml::ListObjectsV2Entry::token)
+    raw.parse::<u32>()
+        .map(|value| usize::try_from(value.min(1_000)).unwrap_or(1_000))
+        .map_err(|_| {
+            Box::new(xml_error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                "max-keys must be a non-negative integer.",
+                req_id,
+            ))
+        })
 }
 
 fn bucket_xml_response(

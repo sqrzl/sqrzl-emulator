@@ -2,13 +2,12 @@ use crate::server::handlers::cors;
 use crate::server::http::{Request, ResponseBuilder};
 use crate::services::bucket as bucket_service;
 use crate::storage::BucketStore;
-use crate::utils::xml as xml_utils;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use quick_xml::escape::unescape;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(super) const S3_REQUEST_PAYMENT_KEY: &str = "s3_requester_pays";
 pub(super) const S3_WEBSITE_XML_KEY: &str = "s3_website_xml";
@@ -387,62 +386,6 @@ where
     let mut bucket_record = bucket_service::get_bucket(storage, bucket)?;
     update(&mut bucket_record.metadata);
     bucket_service::update_bucket_metadata(storage, bucket, bucket_record.metadata)
-}
-
-pub(super) fn build_list_objects_v2_entries(
-    objects: Vec<crate::models::Object>,
-    prefix: &str,
-    delimiter: Option<&str>,
-) -> Vec<xml_utils::ListObjectsV2Entry> {
-    let mut entries = Vec::new();
-    let mut seen_common_prefixes = HashSet::new();
-    let delimiter = delimiter.filter(|value| !value.is_empty());
-
-    for object in objects {
-        if let Some(delimiter) = delimiter {
-            if let Some(stripped_key) = object.key.strip_prefix(prefix) {
-                if let Some(index) = stripped_key.find(delimiter) {
-                    let common_prefix =
-                        format!("{}{}", prefix, &stripped_key[..index + delimiter.len()]);
-                    if seen_common_prefixes.insert(common_prefix.clone()) {
-                        entries.push(xml_utils::ListObjectsV2Entry::CommonPrefix(common_prefix));
-                    }
-                    continue;
-                }
-            }
-        }
-
-        entries.push(xml_utils::ListObjectsV2Entry::Object(object));
-    }
-
-    entries
-}
-
-pub(super) fn list_objects_v2_start_index(
-    entries: &[xml_utils::ListObjectsV2Entry],
-    continuation_token: Option<&str>,
-    start_after: Option<&str>,
-) -> usize {
-    if let Some(token) = continuation_token {
-        if let Some(position) = entries.iter().position(|entry| entry.token() == token) {
-            return position + 1;
-        }
-
-        if let Some(position) = entries.iter().position(|entry| entry.token() > token) {
-            return position;
-        }
-
-        return entries.len();
-    }
-
-    if let Some(start_after) = start_after {
-        return entries
-            .iter()
-            .position(|entry| entry.token() > start_after)
-            .unwrap_or(entries.len());
-    }
-
-    0
 }
 
 pub(super) fn encode_list_objects_v2_token(marker: &str) -> String {

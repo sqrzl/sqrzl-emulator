@@ -144,7 +144,7 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_LIFECYCLE_HOURS` | Positive integer hours | `1` | Interval between lifecycle-rule passes. Invalid or zero values use the default. |
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
 | `SQRZL_UI_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9001` | Admin UI listener inside the container. Normally keep this at `9001`. |
-| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum buffered HTTP request body or SMTP `DATA` payload. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
+| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum HTTP request body or SMTP `DATA` payload. S3 object PUT and UploadPart bodies stream to disk while enforcing this cap; other HTTP bodies remain buffered. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
 | `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names use the Amazon S3 general-purpose rules: 3–63 lowercase letters, digits, periods, or hyphens; an alphanumeric first and last character; no adjacent periods, IP-address form, or AWS-reserved affix. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
 | `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
@@ -410,7 +410,7 @@ Common problems:
 | Container exits with “Legacy nonempty storage” | The mounted root predates format v2 or contains unrelated files. Archive it, point `SQRZL_BLOBS_PATH` at an empty mount, or reset a disposable volume. |
 | Data disappears after restart | Mount a named volume or bind mount at `/app/blobs`; container-local writable layers are disposable. |
 | Host port is already in use | Change the host side of the Compose mapping, such as `"19000:9000"`. |
-| Upload receives `413` | Increase `SQRZL_MAX_REQUEST_BYTES` to a positive byte count and recreate the container. |
+| Upload receives `413` | Increase `SQRZL_MAX_REQUEST_BYTES` to a positive byte count and recreate the container. S3 multipart uploads can also use more, smaller parts while remaining within the 10,000-part service limit. |
 | Startup bucket is rejected | Use the Amazon S3 general-purpose bucket-name rules summarized in the environment table. |
 
 ## Development and contract references

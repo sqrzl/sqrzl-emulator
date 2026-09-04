@@ -17,6 +17,49 @@ pub struct Request {
     pub body: Bytes,
     pub path_params: HashMap<String, String>,
     pub query_params: HashMap<String, String>,
+    /// Set when the request body was streamed straight to a file on disk
+    /// instead of being buffered into `body` (see
+    /// `crate::server::streaming`). `body` is empty whenever this is `Some`.
+    pub spooled_body: Option<SpooledPayload>,
+}
+
+/// A request body already written to disk, with digests computed while it
+/// was streamed there so callers never need to re-read it to hash it.
+#[derive(Clone)]
+pub struct SpooledPayload {
+    pub path: std::path::PathBuf,
+    pub len: u64,
+    pub md5: [u8; 16],
+    pub sha256_hex: String,
+    _cleanup: std::sync::Arc<SpooledPayloadCleanup>,
+}
+
+struct SpooledPayloadCleanup {
+    path: std::path::PathBuf,
+}
+
+impl Drop for SpooledPayloadCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+impl SpooledPayload {
+    #[must_use]
+    pub(crate) fn new(
+        path: std::path::PathBuf,
+        len: u64,
+        md5: [u8; 16],
+        sha256_hex: String,
+    ) -> Self {
+        Self {
+            _cleanup: std::sync::Arc::new(SpooledPayloadCleanup { path: path.clone() }),
+            path,
+            len,
+            md5,
+            sha256_hex,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -81,6 +124,12 @@ impl HttpRequestLike for Request {
             })
             .collect()
     }
+
+    fn content_sha256_hint(&self) -> Option<&str> {
+        self.spooled_body
+            .as_ref()
+            .map(|spooled| spooled.sha256_hex.as_str())
+    }
 }
 
 impl Request {
@@ -102,6 +151,7 @@ impl Request {
     /// # Errors
     ///
     /// Returns an error when the underlying emulator operation fails.
+    #[allow(clippy::result_large_err)]
     pub async fn from_hyper_with_max_body<B>(
         req: HyperRequest<B>,
         max_request_bytes: Option<usize>,
@@ -133,32 +183,27 @@ impl Request {
                 },
             })?;
 
-        let mut query_params = HashMap::new();
-        if let Some(query) = parts.uri.query() {
-            for param in query.split('&') {
-                if param.is_empty() {
-                    continue;
-                }
+        Ok(Self::from_parts(parts, body_bytes, None))
+    }
 
-                if let Some((key, value)) = param.split_once('=') {
-                    let decoded_key = urlencoding::decode(key).unwrap_or_default().to_string();
-                    let decoded_value = urlencoding::decode(value).unwrap_or_default().to_string();
-                    query_params.insert(decoded_key, decoded_value);
-                } else {
-                    let decoded_key = urlencoding::decode(param).unwrap_or_default().to_string();
-                    query_params.insert(decoded_key, String::new());
-                }
-            }
-        }
-
-        Ok(Request {
+    /// Builds a [`Request`] from already-split hyper parts and an
+    /// already-obtained body, either buffered (`spooled_body: None`) or
+    /// already spooled to disk (`spooled_body: Some(..)`, in which case
+    /// `body` should be empty).
+    pub(crate) fn from_parts(
+        parts: http::request::Parts,
+        body: Bytes,
+        spooled_body: Option<SpooledPayload>,
+    ) -> Self {
+        Request {
+            query_params: parse_query_params(parts.uri.query()),
             method: parts.method,
             uri: parts.uri,
             headers: parts.headers,
-            body: body_bytes,
+            body,
             path_params: HashMap::new(),
-            query_params,
-        })
+            spooled_body,
+        }
     }
 
     pub fn path(&self) -> &str {
@@ -186,12 +231,35 @@ impl Request {
     }
 }
 
-enum CollectBodyError {
+pub(crate) fn parse_query_params(query: Option<&str>) -> HashMap<String, String> {
+    let mut query_params = HashMap::new();
+    let Some(query) = query else {
+        return query_params;
+    };
+    for param in query.split('&') {
+        if param.is_empty() {
+            continue;
+        }
+
+        if let Some((key, value)) = param.split_once('=') {
+            let decoded_key = urlencoding::decode(key).unwrap_or_default().to_string();
+            let decoded_value = urlencoding::decode(value).unwrap_or_default().to_string();
+            query_params.insert(decoded_key, decoded_value);
+        } else {
+            let decoded_key = urlencoding::decode(param).unwrap_or_default().to_string();
+            query_params.insert(decoded_key, String::new());
+        }
+    }
+    query_params
+}
+
+#[derive(Debug)]
+pub(crate) enum CollectBodyError {
     BodyRead(String),
     BodyTooLarge { max_request_bytes: usize },
 }
 
-async fn collect_body<B>(
+pub(crate) async fn collect_body<B>(
     mut body: B,
     max_request_bytes: Option<usize>,
 ) -> Result<Bytes, CollectBodyError>
@@ -535,9 +603,15 @@ impl Router {
     }
 
     pub fn route(req: &Request) -> RouteMatch {
-        let method = req.method();
-        let path = req.path().strip_prefix('/').unwrap_or(req.path());
-        let host_bucket = req.host().and_then(Self::bucket_from_host);
+        Self::route_from_parts(req.method(), req.path(), req.host())
+    }
+
+    /// Same routing rules as [`Self::route`], operating on just the method,
+    /// path, and `Host` header rather than a fully parsed [`Request`] — so a
+    /// route can be determined before a request body has been read at all.
+    pub(crate) fn route_from_parts(method: &Method, path: &str, host: Option<&str>) -> RouteMatch {
+        let path = path.strip_prefix('/').unwrap_or(path);
+        let host_bucket = host.and_then(Self::bucket_from_host);
 
         // Virtual-hosted-style object operations take precedence over path-style parsing.
         if let Some(bucket) = host_bucket {
@@ -549,7 +623,7 @@ impl Router {
         }
 
         if path.is_empty() {
-            return if method == Method::GET {
+            return if *method == Method::GET {
                 RouteMatch::ListBuckets
             } else {
                 RouteMatch::NotFound

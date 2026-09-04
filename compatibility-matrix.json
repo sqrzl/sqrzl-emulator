@@ -92,14 +92,16 @@
           "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
           "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
           "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
-          "server::handlers::object::s3_contract_tests::should_reject_upload_part_copy_without_storing_an_empty_part"
+          "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
+          "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
+          "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
+          "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
         ],
         "limitations": [
-          "CompleteMultipartUpload validates the ordered part manifest, ETags, and the 5 MiB minimum for every non-final part when every uploaded part is selected. Selecting only a subset of uploaded parts, conditional completion headers, and Object Lock parameters on multipart initiation are explicitly rejected before mutation as unsupported. UploadPartCopy returns 501 NotImplemented and does not store an empty part."
+          "Core multipart create, upload, paginated listing, selected-part completion, abort, UploadPartCopy, and SigV4-presigned UploadPart flows are supported. Conditional completion headers and Object Lock parameters on multipart initiation remain outside the certified subset."
         ]
       },
       "versioning": {
