@@ -27,7 +27,7 @@ use bytes::Bytes;
 use http::request::Parts;
 use http_body_util::BodyExt;
 use md5::Context as Md5Context;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha384};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use uuid::Uuid;
@@ -55,29 +55,53 @@ impl Drop for PartialSpoolFile {
     }
 }
 
-/// Whether this request's body should be streamed straight to disk rather
-/// than buffered: a `PUT` that the S3 adapter — specifically, not Azure,
-/// GCS, or OCI, which share the same generic `/bucket/key`-shaped routing
-/// and are told apart only by headers/query params inspected here via
-/// [`AdapterRegistry::resolve_by_head`] — will treat as an object key write
-/// (covering both a plain object write and, via its
-/// `partNumber`/`uploadId` query params, a multipart `UploadPart`),
-/// excluding the small subresource writes (`?tagging`, `?acl`) whose
-/// handlers still read the body as in-memory XML.
+/// Whether this request carries object data that must be streamed to disk.
+///
+/// The decision is deliberately made from the request head. Provider control
+/// documents (multipart manifests, block lists, metadata, ACLs, and similar
+/// small XML/JSON payloads) remain buffered, while direct object bodies and
+/// provider-native part/chunk requests are spooled.
 pub(crate) fn is_streamable_object_put(parts: &Parts, adapters: &AdapterRegistry) -> bool {
-    if parts.method != http::Method::PUT {
-        return false;
-    }
-    let host = parts.headers.get("host").and_then(|v| v.to_str().ok());
-    let route = Router::route_from_parts(&parts.method, parts.uri.path(), host);
-    if !matches!(route, RouteMatch::ObjectPut(_, _)) {
-        return false;
-    }
     let query = parse_query_params(parts.uri.query());
-    if query.contains_key("tagging") || query.contains_key("acl") {
-        return false;
+    match adapters.resolve_by_head(&parts.method, &parts.uri, &parts.headers) {
+        Some("azure-blob") => {
+            parts.method == http::Method::PUT
+                && parts.uri.path().trim_matches('/').split('/').count() >= 3
+                && matches!(query.get("comp").map(String::as_str), None | Some("block"))
+        }
+        Some("gcs") => {
+            (parts.method == http::Method::PUT
+                && parts.uri.path().starts_with("/upload/resumable/"))
+                || (parts.method == http::Method::POST
+                    && parts.uri.path().starts_with("/upload/storage/v1/")
+                    && matches!(
+                        query.get("uploadType").map(String::as_str),
+                        Some("media" | "multipart")
+                    ))
+                || (parts.method == http::Method::PUT
+                    && !parts.uri.path().starts_with("/storage/v1/")
+                    && !parts.uri.path().starts_with("/upload/storage/v1/")
+                    && parts.uri.path().trim_matches('/').split('/').count() >= 2)
+        }
+        Some("oci-object") => {
+            parts.method == http::Method::PUT
+                && (parts.uri.path().contains("/o/") || parts.uri.path().contains("/u/"))
+        }
+        Some("s3") => {
+            if parts.method != http::Method::PUT
+                || query.contains_key("tagging")
+                || query.contains_key("acl")
+            {
+                return false;
+            }
+            let host = parts.headers.get("host").and_then(|v| v.to_str().ok());
+            matches!(
+                Router::route_from_parts(&parts.method, parts.uri.path(), host),
+                RouteMatch::ObjectPut(_, _)
+            )
+        }
+        _ => false,
     }
-    adapters.resolve_by_head(&parts.method, &parts.uri, &parts.headers) == Some("s3")
 }
 
 /// Streams `body` into a scratch file under `spool_dir`, enforcing
@@ -145,6 +169,9 @@ where
     let mut writer = BufWriter::new(file);
     let mut md5_ctx = Md5Context::new();
     let mut sha256_ctx = Sha256::new();
+    let mut sha384_ctx = Sha384::new();
+    let mut crc32c = 0;
+    let mut crc64 = crc64fast_nvme::Digest::new();
     let mut total: u64 = 0;
     let max_request_bytes_u64 = max_request_bytes as u64;
 
@@ -163,6 +190,9 @@ where
             .map_err(|e| CollectBodyError::BodyRead(format!("Failed to write spool file: {e}")))?;
         md5_ctx.consume(data);
         sha256_ctx.update(data);
+        sha384_ctx.update(data);
+        crc32c = crc32c::crc32c_append(crc32c, data);
+        crc64.write(data);
     }
 
     writer
@@ -181,6 +211,9 @@ where
         total,
         md5_ctx.finalize().0,
         hex::encode(sha256_ctx.finalize()),
+        sha384_ctx.finalize().into(),
+        crc32c,
+        crc64.sum64(),
     );
     partial_file.disarm();
     Ok(payload)
@@ -325,24 +358,82 @@ mod tests {
     }
 
     #[test]
-    fn should_not_stream_requests_another_provider_adapter_owns() {
+    fn should_stream_azure_data_uploads_but_not_control_bodies() {
         // Arrange
-        // A PUT shaped exactly like an S3 object write, but carrying an
-        // Azure Blob header: Azure's handler still reads `req.body`
-        // directly, so this must fall back to full buffering rather than
-        // being spooled out from under it.
         let adapters = AdapterRegistry::default();
-        let p = parts(
+        let blob = parts(
             Method::PUT,
             "http://localhost/account/container/blob",
             &[("x-ms-version", "2023-11-03")],
         );
+        let block = parts(
+            Method::PUT,
+            "http://localhost/account/container/blob?comp=block&blockid=YmxvY2stMDAwMQ==",
+            &[("x-ms-version", "2023-11-03")],
+        );
+        let block_list = parts(
+            Method::PUT,
+            "http://localhost/account/container/blob?comp=blocklist",
+            &[("x-ms-version", "2023-11-03")],
+        );
 
         // Act
-        let streamable = is_streamable_object_put(&p, &adapters);
+        let blob_streamable = is_streamable_object_put(&blob, &adapters);
+        let block_streamable = is_streamable_object_put(&block, &adapters);
+        let block_list_streamable = is_streamable_object_put(&block_list, &adapters);
 
         // Assert
-        assert!(!streamable);
+        assert!(blob_streamable);
+        assert!(block_streamable);
+        assert!(!block_list_streamable);
+    }
+
+    #[test]
+    fn should_classify_gcs_data_upload_routes_as_streamable() {
+        // Arrange
+        let adapters = AdapterRegistry::default();
+        let media = parts(
+            Method::POST,
+            "http://localhost/upload/storage/v1/b/bucket/o?uploadType=media&name=large.bin",
+            &[("host", "storage.googleapis.com")],
+        );
+        let resumable_chunk = parts(
+            Method::PUT,
+            "http://localhost/upload/resumable/session-id",
+            &[("host", "storage.googleapis.com")],
+        );
+
+        // Act
+        let media_streamable = is_streamable_object_put(&media, &adapters);
+        let chunk_streamable = is_streamable_object_put(&resumable_chunk, &adapters);
+
+        // Assert
+        assert!(media_streamable);
+        assert!(chunk_streamable);
+    }
+
+    #[test]
+    fn should_classify_oci_data_upload_routes_as_streamable() {
+        // Arrange
+        let adapters = AdapterRegistry::default();
+        let direct = parts(
+            Method::PUT,
+            "http://localhost/n/sqrzl-emulator/b/bucket/o/large.bin",
+            &[],
+        );
+        let part = parts(
+            Method::PUT,
+            "http://localhost/n/sqrzl-emulator/b/bucket/u/large.bin?uploadId=session&uploadPartNum=1",
+            &[],
+        );
+
+        // Act
+        let direct_streamable = is_streamable_object_put(&direct, &adapters);
+        let part_streamable = is_streamable_object_put(&part, &adapters);
+
+        // Assert
+        assert!(direct_streamable);
+        assert!(part_streamable);
     }
 
     #[tokio::test]
@@ -358,6 +449,11 @@ mod tests {
         assert_eq!(spooled.len, payload.len() as u64);
         assert_eq!(spooled.md5, md5::compute(&payload).0);
         assert_eq!(spooled.sha256_hex, hex::encode(Sha256::digest(&payload)));
+        assert_eq!(spooled.sha384, Sha384::digest(&payload).as_slice());
+        assert_eq!(spooled.crc32c, crc32c::crc32c(&payload));
+        let mut crc64 = crc64fast_nvme::Digest::new();
+        crc64.write(&payload);
+        assert_eq!(spooled.crc64_nvme, crc64.sum64());
         let on_disk = std::fs::read(&spooled.path).expect("spooled file should exist");
         assert_eq!(on_disk, payload);
 

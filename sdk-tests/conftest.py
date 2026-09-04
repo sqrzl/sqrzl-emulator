@@ -32,6 +32,13 @@ class SqrzlSettings:
     access_key_id: str
     secret_access_key: str
     azure_account: str
+    azure_account_key: str
+    gcs_hmac_access_id: str
+    gcs_hmac_secret: str
+    oci_tenancy_ocid: str
+    oci_user_ocid: str
+    oci_key_fingerprint: str
+    oci_private_key_path: Path | None
     smtp_port: int
     storage_dir: Path | None
     enabled_providers: frozenset[str]
@@ -123,7 +130,21 @@ def sqrzl_server() -> SqrzlSettings:
             ui_url=os.getenv("SQRZL_UI_URL", "").rstrip("/"),
             access_key_id=os.getenv("SQRZL_ACCESS_KEY_ID", DEFAULT_ACCESS_KEY),
             secret_access_key=os.getenv("SQRZL_SECRET_ACCESS_KEY", DEFAULT_SECRET_KEY),
-            azure_account=os.getenv("SQRZL_AZURE_ACCOUNT", AZURE_ACCOUNT),
+            azure_account=os.getenv("AZURE_ACCOUNT", AZURE_ACCOUNT),
+            azure_account_key=os.getenv("AZURE_ACCOUNT_KEY", DEFAULT_SECRET_KEY),
+            gcs_hmac_access_id=os.getenv("GCS_HMAC_ACCESS_ID", DEFAULT_ACCESS_KEY),
+            gcs_hmac_secret=os.getenv("GCS_HMAC_SECRET", DEFAULT_SECRET_KEY),
+            oci_tenancy_ocid=os.getenv("OCI_TENANCY_OCID", "ocid1.tenancy.oc1..sqrzl"),
+            oci_user_ocid=os.getenv("OCI_USER_OCID", "ocid1.user.oc1..sqrzl"),
+            oci_key_fingerprint=os.getenv(
+                "OCI_KEY_FINGERPRINT",
+                "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
+            ),
+            oci_private_key_path=(
+                Path(os.environ["OCI_PRIVATE_KEY_PATH"])
+                if "OCI_PRIVATE_KEY_PATH" in os.environ
+                else None
+            ),
             smtp_port=smtp_port,
             storage_dir=None,
             enabled_providers=enabled_providers,
@@ -134,7 +155,9 @@ def sqrzl_server() -> SqrzlSettings:
     api_port = _reserve_port()
     smtp_port = _reserve_port()
     ui_port = _reserve_port()
-    storage_dir = Path(tempfile.mkdtemp(prefix="sqrzl-sdk-storage-"))
+    runtime_dir = Path(tempfile.mkdtemp(prefix="sqrzl-sdk-runtime-"))
+    storage_dir = runtime_dir / "blobs"
+    storage_dir.mkdir()
     binary = _ensure_binary()
     env = os.environ.copy()
     env.update(
@@ -157,9 +180,51 @@ def sqrzl_server() -> SqrzlSettings:
     if enforce_auth:
         env["SQRZL_ACCESS_KEY_ID"] = DEFAULT_ACCESS_KEY
         env["SQRZL_SECRET_ACCESS_KEY"] = DEFAULT_SECRET_KEY
+        env["AZURE_ACCOUNT"] = AZURE_ACCOUNT
+        env["AZURE_ACCOUNT_KEY"] = DEFAULT_SECRET_KEY
+        env["GCS_HMAC_ACCESS_ID"] = DEFAULT_ACCESS_KEY
+        env["GCS_HMAC_SECRET"] = DEFAULT_SECRET_KEY
+        serialization = pytest.importorskip(
+            "cryptography.hazmat.primitives.serialization"
+        )
+        rsa = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.rsa")
+        oci_private_key_path = runtime_dir / "oci_api_key.pem"
+        oci_public_key_path = runtime_dir / "oci_api_key_public.pem"
+        oci_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        oci_private_key_path.write_bytes(
+            oci_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        oci_public_key_path.write_bytes(
+            oci_key.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        env["OCI_TENANCY_OCID"] = "ocid1.tenancy.oc1..sqrzl"
+        env["OCI_USER_OCID"] = "ocid1.user.oc1..sqrzl"
+        env["OCI_KEY_FINGERPRINT"] = (
+            "00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff"
+        )
+        env["OCI_PUBLIC_KEY_PATH"] = str(oci_public_key_path)
     else:
+        oci_private_key_path = None
         env.pop("SQRZL_ACCESS_KEY_ID", None)
         env.pop("SQRZL_SECRET_ACCESS_KEY", None)
+        for name in [
+            "AZURE_ACCOUNT",
+            "AZURE_ACCOUNT_KEY",
+            "GCS_HMAC_ACCESS_ID",
+            "GCS_HMAC_SECRET",
+            "OCI_TENANCY_OCID",
+            "OCI_USER_OCID",
+            "OCI_KEY_FINGERPRINT",
+            "OCI_PUBLIC_KEY_PATH",
+        ]:
+            env.pop(name, None)
 
     process = subprocess.Popen(
         [str(binary)],
@@ -175,6 +240,13 @@ def sqrzl_server() -> SqrzlSettings:
         access_key_id=DEFAULT_ACCESS_KEY,
         secret_access_key=DEFAULT_SECRET_KEY,
         azure_account=AZURE_ACCOUNT,
+        azure_account_key=DEFAULT_SECRET_KEY,
+        gcs_hmac_access_id=DEFAULT_ACCESS_KEY,
+        gcs_hmac_secret=DEFAULT_SECRET_KEY,
+        oci_tenancy_ocid="ocid1.tenancy.oc1..sqrzl",
+        oci_user_ocid="ocid1.user.oc1..sqrzl",
+        oci_key_fingerprint="00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff",
+        oci_private_key_path=oci_private_key_path,
         smtp_port=smtp_port,
         storage_dir=storage_dir,
         enabled_providers=enabled_providers,
@@ -191,4 +263,4 @@ def sqrzl_server() -> SqrzlSettings:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
-        shutil.rmtree(storage_dir, ignore_errors=True)
+        shutil.rmtree(runtime_dir, ignore_errors=True)

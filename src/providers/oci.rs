@@ -1,17 +1,25 @@
-use super::ProviderAdapter;
+use super::{state, ProviderAdapter};
 use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::{BlobBackend, BlobRange, CreateUploadSessionRequest};
 use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
-use crate::storage::{ObjectCondition, Storage};
+use crate::storage::{
+    ObjectCondition, Storage, MULTIPART_MAX_OBJECT_SIZE_KEY, MULTIPART_MAX_PART_SIZE_KEY,
+    MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use hyper::Response;
-use sha2::{Digest, Sha256, Sha384};
+use rsa::pkcs1::DecodeRsaPublicKey;
+use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey};
+use rsa::pkcs8::DecodePublicKey;
+use rsa::sha2::Sha256 as RsaSha256;
+use rsa::signature::Verifier;
+use rsa::RsaPublicKey;
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub struct OciAdapter;
 
@@ -25,10 +33,29 @@ const OCI_CACHE_CONTROL_KEY: &str = "oci-cache-control";
 const OCI_CONTENT_DISPOSITION_KEY: &str = "oci-content-disposition";
 const OCI_BUCKET_STORAGE_TIER_KEY: &str = "oci-storage-tier";
 const OCI_NAMESPACE: &str = "sqrzl-emulator";
+const OCI_MAX_OBJECT_SIZE: u64 = 10 * 1024 * 1024 * 1024 * 1024;
+const OCI_MAX_PART_SIZE: u64 = 50 * 1024 * 1024 * 1024;
+const OCI_MIN_NON_FINAL_PART_SIZE: u64 = 10 * 1024 * 1024;
+const OCI_PAR_STATE: &str = "oci-preauthenticated-request-v2";
+const OCI_PAR_INDEX_STATE: &str = "oci-preauthenticated-request-index-v2";
 const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
 const S3_OBJECT_LOCK_ENABLED_KEY: &str = "s3_object_lock_enabled";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
 const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct OciPreauthenticatedRequest {
+    id: String,
+    token: String,
+    name: String,
+    bucket: String,
+    object_name: Option<String>,
+    access_type: String,
+    time_created: chrono::DateTime<chrono::Utc>,
+    time_expires: chrono::DateTime<chrono::Utc>,
+}
+
+static OCI_PAR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 const AZURE_VERSIONING_KEY: &str = "azure_versioning_enabled";
 const AZURE_SOFT_DELETE_DAYS_KEY: &str = "azure_soft_delete_days";
 const OCI_VALID_LIST_FIELDS: [&str; 8] = [
@@ -81,7 +108,9 @@ impl OciAdapter {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
 
-        uri.path().starts_with("/n/") || authorization.starts_with("Signature ")
+        uri.path().starts_with("/n/")
+            || uri.path().starts_with("/p/")
+            || authorization.starts_with("Signature ")
     }
 
     fn payload_too_large_response(max_request_bytes: usize) -> Response<Body> {
@@ -439,20 +468,9 @@ impl OciAdapter {
         Ok(None)
     }
 
-    fn crc32c(data: &[u8]) -> u32 {
-        let mut crc = !0_u32;
-        for byte in data {
-            crc ^= u32::from(*byte);
-            for _ in 0..8 {
-                crc = (crc >> 1) ^ (0x82f6_3b78_u32 & (0_u32.wrapping_sub(crc & 1)));
-            }
-        }
-        !crc
-    }
-
     #[allow(clippy::result_large_err)]
     fn put_provider_metadata(req: &Request) -> Result<HashMap<String, String>, Response<Body>> {
-        let content_md5 = BASE64.encode(md5::compute(&req.body).0);
+        let content_md5 = BASE64.encode(req.payload_md5());
         if let Some(provided) = req
             .header("content-md5")
             .filter(|provided| *provided != content_md5)
@@ -473,19 +491,19 @@ impl OciAdapter {
                     OCI_CONTENT_CRC32C_KEY,
                     "opc-content-crc32c",
                     "CRC32C",
-                    BASE64.encode(Self::crc32c(&req.body).to_be_bytes()),
+                    BASE64.encode(req.payload_crc32c().to_be_bytes()),
                 ),
                 "SHA256" => (
                     OCI_CONTENT_SHA256_KEY,
                     "opc-content-sha256",
                     "SHA256",
-                    BASE64.encode(Sha256::digest(&req.body)),
+                    BASE64.encode(req.payload_sha256()),
                 ),
                 "SHA384" => (
                     OCI_CONTENT_SHA384_KEY,
                     "opc-content-sha384",
                     "SHA384",
-                    BASE64.encode(Sha384::digest(&req.body)),
+                    BASE64.encode(req.payload_sha384()),
                 ),
                 _ => {
                     return Err(Self::error_response(
@@ -574,8 +592,9 @@ impl OciAdapter {
     }
 
     #[allow(clippy::result_large_err)]
+    #[allow(clippy::too_many_lines)]
     fn authorize(req: &Request, config: &AuthConfig) -> Result<(), Response<Body>> {
-        if !config.enforce_auth {
+        if !config.oci_auth_enforced() {
             return Ok(());
         }
 
@@ -633,11 +652,86 @@ impl OciAdapter {
         {
             return Err(malformed());
         }
-        Err(Self::error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "NotImplemented",
-            "OCI RSA-SHA256 request-signature verification is not implemented.",
-        ))
+        let Some(expected_key_id) = config.oci_key_id() else {
+            return Err(Self::error_response(
+                StatusCode::UNAUTHORIZED,
+                "NotAuthenticated",
+                "OCI authentication is enabled but its RSA identity is incomplete.",
+            ));
+        };
+        if parameters.get("keyId") != Some(&expected_key_id.as_str()) {
+            return Err(Self::error_response(
+                StatusCode::UNAUTHORIZED,
+                "NotAuthenticated",
+                "The OCI signing key ID is not configured.",
+            ));
+        }
+        let signed_headers = parameters["headers"].split_whitespace().collect::<Vec<_>>();
+        if !signed_headers.contains(&"(request-target)")
+            || !signed_headers.contains(&"host")
+            || (!signed_headers.contains(&"date") && !signed_headers.contains(&"x-date"))
+        {
+            return Err(malformed());
+        }
+        let request_date = req
+            .header("x-date")
+            .or_else(|| req.header("date"))
+            .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc));
+        if request_date.is_none_or(|date| {
+            chrono::Utc::now().signed_duration_since(date).abs() > chrono::Duration::minutes(5)
+        }) {
+            return Err(Self::error_response(
+                StatusCode::UNAUTHORIZED,
+                "NotAuthenticated",
+                "The OCI request date is outside the permitted clock skew.",
+            ));
+        }
+        let mut signing_lines = Vec::with_capacity(signed_headers.len());
+        for name in signed_headers {
+            if name == "(request-target)" {
+                let target = req
+                    .uri
+                    .path_and_query()
+                    .map_or(req.path(), http::uri::PathAndQuery::as_str);
+                signing_lines.push(format!(
+                    "(request-target): {} {target}",
+                    req.method().as_str().to_ascii_lowercase()
+                ));
+                continue;
+            }
+            if name != name.to_ascii_lowercase() {
+                return Err(malformed());
+            }
+            let Some(value) = req.header(name) else {
+                return Err(malformed());
+            };
+            signing_lines.push(format!(
+                "{name}: {}",
+                value.split_whitespace().collect::<Vec<_>>().join(" ")
+            ));
+        }
+        let Some(public_key_path) = config.vendor_credentials.oci_public_key_path.as_deref() else {
+            return Err(malformed());
+        };
+        let pem = std::fs::read_to_string(public_key_path).map_err(|_| malformed())?;
+        let public_key = RsaPublicKey::from_public_key_pem(&pem)
+            .or_else(|_| RsaPublicKey::from_pkcs1_pem(&pem))
+            .map_err(|_| malformed())?;
+        let signature_bytes = BASE64
+            .decode(parameters["signature"])
+            .map_err(|_| malformed())?;
+        let signature =
+            RsaSignature::try_from(signature_bytes.as_slice()).map_err(|_| malformed())?;
+        VerifyingKey::<RsaSha256>::new(public_key)
+            .verify(signing_lines.join("\n").as_bytes(), &signature)
+            .map_err(|_| {
+                Self::error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "NotAuthenticated",
+                    "OCI request signature verification failed.",
+                )
+            })
     }
 
     fn handle_request(
@@ -647,6 +741,9 @@ impl OciAdapter {
         req: &Request,
     ) -> Result<Response<Body>, String> {
         let _ = self.name();
+        if req.path().starts_with("/p/") {
+            return Self::handle_par_request(storage, req);
+        }
         let (namespace, parts, explicit_namespace) = match Self::parse_path(req) {
             Ok(parsed) => parsed,
             Err(msg) => {
@@ -690,6 +787,10 @@ impl OciAdapter {
             return Self::handle_multipart_request(storage, req, &namespace, &parts);
         }
 
+        if parts.len() >= 3 && parts[0] == "b" && parts[2] == "p" {
+            return Self::handle_par_control(storage, req, &namespace, &parts);
+        }
+
         if parts.len() >= 3 && parts[0] == "b" && parts[2] == "o" {
             return Self::handle_object_request(storage, req, &parts);
         }
@@ -721,6 +822,356 @@ impl OciAdapter {
             "MethodNotAllowed",
             "Unsupported OCI namespace operation",
         )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn handle_par_control(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        namespace: &str,
+        parts: &[String],
+    ) -> Result<Response<Body>, String> {
+        let bucket = &parts[1];
+        if storage.get_bucket(bucket).is_err() {
+            return Ok(Self::bucket_not_found());
+        }
+        let lock = OCI_PAR_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock
+            .lock()
+            .map_err(|_| "Failed to lock OCI PAR state".to_string())?;
+        if parts.len() == 3 && req.method() == Method::POST {
+            let payload: serde_json::Value = serde_json::from_slice(&req.body)
+                .map_err(|_| "The OCI PAR request body is not valid JSON".to_string())?;
+            let name = payload
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "The OCI PAR name is required".to_string())?;
+            let access_type = payload
+                .get("accessType")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "The OCI PAR accessType is required".to_string())?;
+            if !matches!(
+                access_type,
+                "ObjectRead"
+                    | "ObjectWrite"
+                    | "ObjectReadWrite"
+                    | "AnyObjectRead"
+                    | "AnyObjectWrite"
+                    | "AnyObjectReadWrite"
+            ) {
+                return Ok(Self::invalid_parameter("The PAR accessType is invalid."));
+            }
+            let object_name = payload
+                .get("objectName")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            if access_type.starts_with("Object") && object_name.is_none() {
+                return Ok(Self::invalid_parameter(
+                    "Object-scoped PARs require objectName.",
+                ));
+            }
+            let expires = payload
+                .get("timeExpires")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.with_timezone(&chrono::Utc));
+            let Some(time_expires) = expires.filter(|value| *value > chrono::Utc::now()) else {
+                return Ok(Self::invalid_parameter(
+                    "timeExpires must be a future RFC3339 timestamp.",
+                ));
+            };
+            let id = uuid::Uuid::new_v4().simple().to_string();
+            let par = OciPreauthenticatedRequest {
+                token: id.clone(),
+                id: id.clone(),
+                name: name.to_string(),
+                bucket: bucket.clone(),
+                object_name,
+                access_type: access_type.to_string(),
+                time_created: chrono::Utc::now(),
+                time_expires,
+            };
+            state::save_json(storage.as_ref(), OCI_PAR_STATE, &id, &par)?;
+            let mut index: Vec<String> =
+                state::load_json(storage.as_ref(), OCI_PAR_INDEX_STATE, bucket)?
+                    .unwrap_or_default();
+            index.push(id);
+            state::save_json(storage.as_ref(), OCI_PAR_INDEX_STATE, bucket, &index)?;
+            return Ok(Self::json_response(
+                StatusCode::OK,
+                &Self::par_json(namespace, &par).to_string(),
+            ));
+        }
+        if parts.len() == 3 && req.method() == Method::GET {
+            let index: Vec<String> =
+                state::load_json(storage.as_ref(), OCI_PAR_INDEX_STATE, bucket)?
+                    .unwrap_or_default();
+            let preauthenticated_requests = index
+                .into_iter()
+                .filter_map(|id| {
+                    state::load_json::<OciPreauthenticatedRequest>(
+                        storage.as_ref(),
+                        OCI_PAR_STATE,
+                        &id,
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .filter(|par| par.time_expires > chrono::Utc::now())
+                .map(|par| Self::par_json(namespace, &par))
+                .collect::<Vec<_>>();
+            return Ok(Self::json_response(
+                StatusCode::OK,
+                &serde_json::Value::Array(preauthenticated_requests).to_string(),
+            ));
+        }
+        let Some(id) = parts.get(3) else {
+            return Ok(Self::invalid_parameter("The PAR ID is required."));
+        };
+        let Some(par) =
+            state::load_json::<OciPreauthenticatedRequest>(storage.as_ref(), OCI_PAR_STATE, id)?
+        else {
+            return Ok(Self::error_response(
+                StatusCode::NOT_FOUND,
+                "NotAuthorizedOrNotFound",
+                "The pre-authenticated request does not exist.",
+            ));
+        };
+        match *req.method() {
+            Method::GET => Ok(Self::json_response(
+                StatusCode::OK,
+                &Self::par_json(namespace, &par).to_string(),
+            )),
+            Method::DELETE => {
+                storage
+                    .delete_provider_state(OCI_PAR_STATE, id)
+                    .map_err(|error| error.to_string())?;
+                let mut index: Vec<String> =
+                    state::load_json(storage.as_ref(), OCI_PAR_INDEX_STATE, bucket)?
+                        .unwrap_or_default();
+                index.retain(|entry| entry != id);
+                state::save_json(storage.as_ref(), OCI_PAR_INDEX_STATE, bucket, &index)?;
+                Ok(Self::response(StatusCode::NO_CONTENT).empty())
+            }
+            _ => Ok(Self::error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "MethodNotAllowed",
+                "Unsupported PAR control operation.",
+            )),
+        }
+    }
+
+    fn par_json(namespace: &str, par: &OciPreauthenticatedRequest) -> serde_json::Value {
+        let object_suffix = par.object_name.as_ref().map_or_else(String::new, |object| {
+            format!("/{}", Self::encode_object_path(object))
+        });
+        serde_json::json!({
+            "id": par.id,
+            "name": par.name,
+            "accessType": par.access_type,
+            "objectName": par.object_name,
+            "timeCreated": par.time_created.to_rfc3339(),
+            "timeExpires": par.time_expires.to_rfc3339(),
+            "accessUri": format!(
+                "/p/{}/n/{namespace}/b/{}/o{object_suffix}",
+                par.token, par.bucket
+            ),
+        })
+    }
+
+    fn encode_object_path(object: &str) -> String {
+        object
+            .split('/')
+            .map(|segment| urlencoding::encode(segment).into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn handle_par_request(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+    ) -> Result<Response<Body>, String> {
+        let path = req.path().trim_start_matches('/');
+        let mut path_parts = path.split('/');
+        if path_parts.next() != Some("p") {
+            return Ok(Self::invalid_parameter("Invalid PAR access path."));
+        }
+        let Some(token) = path_parts.next().filter(|value| !value.is_empty()) else {
+            return Ok(Self::invalid_parameter("Invalid PAR access path."));
+        };
+        let Some(par) =
+            state::load_json::<OciPreauthenticatedRequest>(storage.as_ref(), OCI_PAR_STATE, token)?
+        else {
+            return Ok(Self::error_response(
+                StatusCode::NOT_FOUND,
+                "NotAuthorizedOrNotFound",
+                "The pre-authenticated request does not exist.",
+            ));
+        };
+        if par.time_expires <= chrono::Utc::now() {
+            return Ok(Self::error_response(
+                StatusCode::UNAUTHORIZED,
+                "NotAuthenticated",
+                "The pre-authenticated request has expired.",
+            ));
+        }
+        let suffix = format!("/{}", path_parts.collect::<Vec<_>>().join("/"));
+        let multipart_prefix = format!("/n/{OCI_NAMESPACE}/b/{}/u/", par.bucket);
+        if let Some(multipart_suffix) = suffix.strip_prefix(&multipart_prefix) {
+            if !par.access_type.contains("Write") {
+                return Ok(Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "NotAuthorizedOrNotFound",
+                    "The pre-authenticated request does not allow writes.",
+                ));
+            }
+            let Some((raw_object, upload_suffix)) = multipart_suffix.split_once("/id/") else {
+                return Ok(Self::invalid_parameter(
+                    "The multipart PAR access path is invalid.",
+                ));
+            };
+            let Ok(requested_object) = Self::decode_object_path(raw_object) else {
+                return Ok(Self::invalid_parameter("The object name is invalid."));
+            };
+            let mut multipart = upload_suffix.split('/');
+            let Some(upload_id) = multipart.next().filter(|value| !value.is_empty()) else {
+                return Ok(Self::invalid_parameter(
+                    "The multipart upload ID is required.",
+                ));
+            };
+            let upload = match storage.get_multipart_upload(&par.bucket, upload_id) {
+                Ok(upload) => upload,
+                Err(crate::error::Error::NoSuchUpload | crate::error::Error::InvalidUploadId) => {
+                    return Ok(Self::multipart_upload_not_found())
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            if requested_object != upload.key
+                || par
+                    .object_name
+                    .as_deref()
+                    .is_some_and(|object| object != upload.key)
+            {
+                return Ok(Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "NotAuthorizedOrNotFound",
+                    "The multipart upload is outside the PAR object scope.",
+                ));
+            }
+            return match *req.method() {
+                Method::PUT => {
+                    let Some(part_number) = multipart
+                        .next()
+                        .or_else(|| req.query_param("uploadPartNum"))
+                    else {
+                        return Ok(Self::invalid_parameter(
+                            "The upload part number is required.",
+                        ));
+                    };
+                    let mut part_request = req.clone();
+                    part_request
+                        .query_params
+                        .insert("uploadPartNum".to_string(), part_number.to_string());
+                    Self::upload_multipart_part(storage, &part_request, &par.bucket, upload_id)
+                }
+                Method::POST => {
+                    Self::commit_multipart_upload(storage, req, &par.bucket, &upload.key, upload_id)
+                }
+                Method::DELETE => storage
+                    .abort_multipart_upload(&par.bucket, upload_id)
+                    .map(|()| Self::response(StatusCode::NO_CONTENT).empty())
+                    .map_err(|error| error.to_string()),
+                _ => Ok(Self::error_response(
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "MethodNotAllowed",
+                    "Unsupported PAR multipart operation.",
+                )),
+            };
+        }
+
+        if let Some(object) = &par.object_name {
+            let expected = format!(
+                "/n/{OCI_NAMESPACE}/b/{}/o/{}",
+                par.bucket,
+                Self::encode_object_path(object)
+            );
+            if suffix != expected {
+                return Ok(Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "NotAuthorizedOrNotFound",
+                    "The requested object is outside the PAR object scope.",
+                ));
+            }
+        }
+
+        let object = if let Some(object) = &par.object_name {
+            object.clone()
+        } else {
+            let marker = format!("/n/{}/b/{}/o/", OCI_NAMESPACE, par.bucket);
+            let Some(raw_object) = suffix.strip_prefix(&marker) else {
+                return Ok(Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "NotAuthorizedOrNotFound",
+                    "The requested object is outside the PAR scope.",
+                ));
+            };
+            Self::decode_object_path(raw_object)?
+        };
+        if req.method() == Method::PUT && req.header("opc-multipart") == Some("true") {
+            if !par.access_type.contains("Write") {
+                return Ok(Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "NotAuthorizedOrNotFound",
+                    "The pre-authenticated request does not allow writes.",
+                ));
+            }
+            let upload = storage
+                .as_ref()
+                .create_upload_session(CreateUploadSessionRequest {
+                    namespace: par.bucket.clone(),
+                    key: object.clone(),
+                    content_type: req.header("content-type").map(str::to_string),
+                    metadata: Self::metadata_from_headers(req),
+                    provider_metadata: Self::multipart_provider_metadata("Standard"),
+                })
+                .map_err(|error| error.to_string())?;
+            return Ok(Self::json_response(
+                StatusCode::OK,
+                &serde_json::json!({
+                    "namespace": OCI_NAMESPACE,
+                    "bucket": par.bucket,
+                    "object": object,
+                    "uploadId": upload.upload_id,
+                    "timeCreated": upload.initiated.to_rfc3339(),
+                    "storageTier": "Standard",
+                    "accessUri": format!(
+                        "/p/{token}/n/{OCI_NAMESPACE}/b/{}/u/{}/id/{}/",
+                        par.bucket,
+                        Self::encode_object_path(&object),
+                        upload.upload_id
+                    ),
+                })
+                .to_string(),
+            ));
+        }
+        match *req.method() {
+            Method::PUT if par.access_type.contains("Write") => {
+                Self::put_object(storage, req, &par.bucket, &object)
+            }
+            Method::GET if par.access_type.contains("Read") => {
+                Self::get_object(storage, req, &par.bucket, &object)
+            }
+            Method::HEAD if par.access_type.contains("Read") => {
+                Self::head_object(storage, req, &par.bucket, &object)
+            }
+            _ => Ok(Self::error_response(
+                StatusCode::FORBIDDEN,
+                "NotAuthorizedOrNotFound",
+                "The pre-authenticated request does not allow this operation.",
+            )),
+        }
     }
 
     fn handle_bucket_collection(
@@ -956,11 +1407,27 @@ impl OciAdapter {
                 key: object.to_string(),
                 content_type,
                 metadata,
-                provider_metadata: HashMap::from([
-                    ("storage_tier".to_string(), storage_tier.to_string()),
-                    ("storage_class".to_string(), storage_tier.to_string()),
-                ]),
+                provider_metadata: Self::multipart_provider_metadata(storage_tier),
             })
+    }
+
+    fn multipart_provider_metadata(storage_tier: &str) -> HashMap<String, String> {
+        HashMap::from([
+            ("storage_tier".to_string(), storage_tier.to_string()),
+            ("storage_class".to_string(), storage_tier.to_string()),
+            (
+                MULTIPART_MAX_OBJECT_SIZE_KEY.to_string(),
+                OCI_MAX_OBJECT_SIZE.to_string(),
+            ),
+            (
+                MULTIPART_MAX_PART_SIZE_KEY.to_string(),
+                OCI_MAX_PART_SIZE.to_string(),
+            ),
+            (
+                MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY.to_string(),
+                OCI_MIN_NON_FINAL_PART_SIZE.to_string(),
+            ),
+        ])
     }
 
     fn upload_multipart_part(
@@ -969,6 +1436,12 @@ impl OciAdapter {
         bucket: &str,
         upload_id: &str,
     ) -> Result<Response<Body>, String> {
+        if req.payload_len() > 50 * 1024 * 1024 * 1024 {
+            return Ok(Self::payload_too_large_response(50 * 1024 * 1024 * 1024));
+        }
+        if let Err(response) = Self::put_provider_metadata(req) {
+            return Ok(response);
+        }
         let Some(raw_part_number) = req.query_param("uploadPartNum") else {
             return Ok(Self::invalid_parameter(
                 "The uploadPartNum query parameter is required.",
@@ -982,12 +1455,22 @@ impl OciAdapter {
                 ))
             }
         };
-        let etag = match storage.as_ref().upload_session_part(
-            bucket,
-            upload_id,
-            part_number,
-            req.body.to_vec(),
-        ) {
+        let content_md5 = BASE64.encode(req.payload_md5());
+        let upload_result = if let Some(payload) = &req.spooled_body {
+            storage.upload_part_streamed(
+                bucket,
+                upload_id,
+                part_number,
+                &payload.path,
+                payload.len,
+                hex::encode(payload.md5),
+            )
+        } else {
+            storage
+                .as_ref()
+                .upload_session_part(bucket, upload_id, part_number, req.body.to_vec())
+        };
+        let etag = match upload_result {
             Ok(etag) => etag,
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
             Err(crate::error::Error::InvalidUploadId | crate::error::Error::NoSuchUpload) => {
@@ -1000,7 +1483,10 @@ impl OciAdapter {
             }
             Err(error) => return Err(error.to_string()),
         };
-        Ok(Self::response(StatusCode::OK).header("etag", &etag).empty())
+        Ok(Self::response(StatusCode::OK)
+            .header("etag", &etag)
+            .header("opc-content-md5", &content_md5)
+            .empty())
     }
 
     fn commit_multipart_upload(
@@ -1409,6 +1895,7 @@ impl OciAdapter {
         ))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn put_object(
         storage: &Arc<dyn Storage>,
         req: &Request,
@@ -1427,21 +1914,57 @@ impl OciAdapter {
             Ok(metadata) => metadata,
             Err(response) => return Ok(response),
         };
+        if req.payload_len() > 50 * 1024 * 1024 * 1024 {
+            return Ok(Self::payload_too_large_response(50 * 1024 * 1024 * 1024));
+        }
         let condition = match Self::put_condition(req) {
             Ok(condition) => condition,
             Err(response) => return Ok(response),
         };
-        let mut value = crate::models::Object::new_with_metadata(
-            object.to_string(),
-            req.body.to_vec(),
-            req.header("content-type")
-                .unwrap_or("application/octet-stream")
-                .to_string(),
-            Self::metadata_from_headers(req),
-        );
+        let mut value = if let Some(payload) = &req.spooled_body {
+            let mut value = crate::models::Object::new_with_metadata_and_etag(
+                object.to_string(),
+                Vec::new(),
+                req.header("content-type")
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+                Self::metadata_from_headers(req),
+                hex::encode(payload.md5),
+            );
+            value.size = payload.len;
+            value
+        } else {
+            crate::models::Object::new_with_metadata(
+                object.to_string(),
+                req.body.to_vec(),
+                req.header("content-type")
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+                Self::metadata_from_headers(req),
+            )
+        };
         value.provider_metadata = provider_metadata;
         value.storage_class = storage_tier;
-        let written = if let Some(condition) = condition {
+        let written = if let Some(payload) = &req.spooled_body {
+            let result = if let Some(condition) = condition.as_ref() {
+                storage.put_object_streamed_if(
+                    bucket,
+                    object.to_string(),
+                    value,
+                    &payload.path,
+                    condition,
+                )
+            } else {
+                storage
+                    .put_object_streamed(bucket, object.to_string(), value, &payload.path)
+                    .map(|()| true)
+            };
+            match result {
+                Ok(written) => written,
+                Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
+                Err(error) => return Err(error.to_string()),
+            }
+        } else if let Some(condition) = condition {
             match storage.put_object_if(bucket, object.to_string(), value, &condition) {
                 Ok(written) => written,
                 Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
@@ -1458,7 +1981,7 @@ impl OciAdapter {
         if !written {
             return Ok(Self::precondition_failed());
         }
-        let stored = match storage.get_object(bucket, object) {
+        let stored = match storage.get_object_metadata(bucket, object) {
             Ok(stored) => stored,
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
             Err(error) => return Err(error.to_string()),
@@ -1499,7 +2022,7 @@ impl OciAdapter {
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
             Err(error) => return Err(error.to_string()),
         }
-        let blob = match storage.as_ref().get_blob(bucket, object) {
+        let blob = match storage.get_object_metadata(bucket, object) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound) => return Ok(Self::object_not_found()),
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
@@ -1512,8 +2035,12 @@ impl OciAdapter {
         if let Some(range_header) = req.header("range") {
             return Self::object_range_response(storage, bucket, object, &blob, range_header);
         }
-        Ok(Self::object_response(StatusCode::OK, &blob)
-            .body(blob.data)
+        let payload = storage
+            .as_ref()
+            .get_blob(bucket, object)
+            .map_err(|err| err.to_string())?;
+        Ok(Self::object_response(StatusCode::OK, &payload)
+            .body(payload.data)
             .build())
     }
 
@@ -1565,7 +2092,7 @@ impl OciAdapter {
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
             Err(error) => return Err(error.to_string()),
         }
-        let blob = match storage.as_ref().get_blob(bucket, object) {
+        let blob = match storage.get_object_metadata(bucket, object) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound) => return Ok(Self::object_not_found()),
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
@@ -1628,6 +2155,7 @@ impl ProviderAdapter for OciAdapter {
 
     fn matches(&self, req: &Request) -> bool {
         req.path().starts_with("/n/")
+            || req.path().starts_with("/p/")
             || req
                 .header("authorization")
                 .is_some_and(|value| value.starts_with("Signature "))
@@ -1759,6 +2287,7 @@ mod tests {
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            vendor_credentials: crate::config::VendorCredentials::default(),
         })
     }
 
@@ -1774,6 +2303,29 @@ mod tests {
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            vendor_credentials: crate::config::VendorCredentials::default(),
+        })
+    }
+
+    fn oci_rsa_auth(public_key_path: &std::path::Path) -> Arc<AuthConfig> {
+        Arc::new(Config {
+            access_key_id: None,
+            secret_access_key: None,
+            enforce_auth: false,
+            admin_auth_disabled: false,
+            blobs_path: "./blobs".to_string(),
+            lifecycle_interval: std::time::Duration::from_hours(1),
+            api_port: 9000,
+            ui_port: 9001,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+            smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            vendor_credentials: crate::config::VendorCredentials {
+                oci_tenancy_ocid: Some("ocid1.tenancy".to_string()),
+                oci_user_ocid: Some("ocid1.user".to_string()),
+                oci_key_fingerprint: Some("fingerprint".to_string()),
+                oci_public_key_path: Some(public_key_path.display().to_string()),
+                ..Default::default()
+            },
         })
     }
 
@@ -1912,31 +2464,64 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn should_report_valid_oci_signature_shape_as_explicitly_unsupported() {
+    async fn should_verify_oci_rsa_signatures_and_reject_a_tampered_target() {
+        // Arrange
+        use rsa::pkcs1v15::SigningKey;
+        use rsa::pkcs8::{EncodePublicKey, LineEnding};
+        use rsa::signature::{SignatureEncoding, Signer};
+
         let adapter = OciAdapter::new();
         let storage = temp_storage();
-
-        let mut request = parsed_request(
+        let private_key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
+            .expect("test RSA key should generate");
+        let public_key_path =
+            std::env::temp_dir().join(format!("sqrzl-oci-public-key-{}.pem", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &public_key_path,
+            private_key
+                .to_public_key()
+                .to_public_key_pem(LineEnding::LF)
+                .expect("public key PEM should encode"),
+        )
+        .expect("public key PEM should write");
+        let date = chrono::Utc::now().to_rfc2822();
+        let signed_headers = "(request-target) host date";
+        let signing_text =
+            format!("(request-target): get /n/\nhost: objectstorage.localhost\ndate: {date}");
+        let signature = SigningKey::<RsaSha256>::new(private_key).sign(signing_text.as_bytes());
+        let authorization = format!(
+            "Signature version=\"1\",keyId=\"ocid1.tenancy/ocid1.user/fingerprint\",algorithm=\"rsa-sha256\",headers=\"{signed_headers}\",signature=\"{}\"",
+            BASE64.encode(signature.to_bytes())
+        );
+        let auth = oci_rsa_auth(&public_key_path);
+        let mut valid = parsed_request(
             "GET",
-            "http://localhost/n/sqrzl-emulator",
-            &[
-                ("date", "Mon, 01 Jan 2024 00:00:00 GMT"),
-                ("host", "objectstorage.localhost"),
-            ],
+            "http://localhost/n/",
+            &[("date", &date), ("host", "objectstorage.localhost")],
             b"",
         )
         .await;
-        request.headers.insert(
+        valid.headers.insert(
             "authorization",
-            "Signature version=\"1\",keyId=\"ocid1.tenancy/key/fingerprint\",algorithm=\"rsa-sha256\",headers=\"(request-target) host date\",signature=\"ZmFrZQ==\""
-                .parse()
-                .expect("header should parse"),
+            authorization.parse().expect("authorization should parse"),
         );
+        let mut tampered = valid.clone();
+        tampered.uri = "http://localhost/n/?changed=true"
+            .parse()
+            .expect("tampered URI should parse");
 
-        let response = adapter
-            .handle_request(&storage, &oci_auth(), &request)
-            .expect("oci auth request should complete");
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        // Act
+        let accepted = adapter
+            .handle_request(&storage, &auth, &valid)
+            .expect("valid signed request should complete");
+        let rejected = adapter
+            .handle_request(&storage, &auth, &tampered)
+            .expect("tampered request should complete");
+
+        // Assert
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_file(public_key_path);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2638,7 +3223,8 @@ mod tests {
         let storage = temp_storage();
         create_oci_multipart_bucket(&adapter, &storage).await;
         let upload_id = create_oci_multipart_upload(&adapter, &storage).await;
-        let part_one_etag = upload_oci_part(&adapter, &storage, &upload_id, 1, b"multi").await;
+        let part_one = minimum_non_final_part(b'm');
+        let part_one_etag = upload_oci_part(&adapter, &storage, &upload_id, 1, &part_one).await;
         let part_two_etag = upload_oci_part(&adapter, &storage, &upload_id, 2, b"part").await;
 
         let incomplete_manifest =
@@ -2697,13 +3283,12 @@ mod tests {
             &part_two_etag,
         )
         .await;
-        assert_eq!(
-            storage
-                .get_object("multipart-bucket", "multi.txt")
-                .expect("complete manifest should commit after rejected attempts")
-                .data,
-            b"multipart"
-        );
+        let object = storage
+            .get_object("multipart-bucket", "multi.txt")
+            .expect("complete manifest should commit after rejected attempts");
+        assert_eq!(object.data.len(), part_one.len() + b"part".len());
+        assert!(object.data.starts_with(&part_one));
+        assert!(object.data.ends_with(b"part"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2712,7 +3297,8 @@ mod tests {
         let storage = temp_storage();
         create_oci_multipart_bucket(&adapter, &storage).await;
         let upload_id = create_oci_multipart_upload(&adapter, &storage).await;
-        let part_one_etag = upload_oci_part(&adapter, &storage, &upload_id, 1, b"multi").await;
+        let part_one = minimum_non_final_part(b'm');
+        let part_one_etag = upload_oci_part(&adapter, &storage, &upload_id, 1, &part_one).await;
         let part_two_etag = upload_oci_part(&adapter, &storage, &upload_id, 2, b"part").await;
         let manifest = format!(
             "{{\"partsToCommit\":[{{\"partNum\":1,\"etag\":\"{part_one_etag}\"}},{{\"partNum\":2,\"etag\":\"{part_two_etag}\"}}]}}"
@@ -2758,13 +3344,12 @@ mod tests {
             &part_two_etag,
         )
         .await;
-        assert_eq!(
-            storage
-                .get_object("multipart-bucket", "multi.txt")
-                .expect("unconditional retry should commit the object")
-                .data,
-            b"multipart"
-        );
+        let object = storage
+            .get_object("multipart-bucket", "multi.txt")
+            .expect("unconditional retry should commit the object");
+        assert_eq!(object.data.len(), part_one.len() + b"part".len());
+        assert!(object.data.starts_with(&part_one));
+        assert!(object.data.ends_with(b"part"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2774,7 +3359,8 @@ mod tests {
 
         create_oci_multipart_bucket(&adapter, &storage).await;
         let upload_id = create_oci_multipart_upload(&adapter, &storage).await;
-        let part_one_etag = upload_oci_part(&adapter, &storage, &upload_id, 1, b"multi").await;
+        let part_one = minimum_non_final_part(b'm');
+        let part_one_etag = upload_oci_part(&adapter, &storage, &upload_id, 1, &part_one).await;
         let part_two_etag = upload_oci_part(&adapter, &storage, &upload_id, 2, b"part").await;
         commit_oci_multipart_upload(
             &adapter,
@@ -2785,6 +3371,174 @@ mod tests {
         )
         .await;
         verify_oci_multipart_metadata(&adapter, &storage).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_an_object_par_used_for_a_different_path() {
+        // Arrange
+        let adapter = OciAdapter::new();
+        let storage = temp_storage();
+        create_oci_multipart_bucket(&adapter, &storage).await;
+        let expires = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let created = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/p/",
+                    &[("content-type", "application/json")],
+                    serde_json::json!({
+                        "name": "write-safe",
+                        "accessType": "ObjectWrite",
+                        "objectName": "safe.txt",
+                        "timeExpires": expires,
+                    })
+                    .to_string()
+                    .as_bytes(),
+                )
+                .await,
+            )
+            .expect("PAR creation should complete");
+        let created: serde_json::Value =
+            serde_json::from_slice(&read_test_body(created).await).expect("PAR JSON should parse");
+        let access_uri = created["accessUri"]
+            .as_str()
+            .expect("PAR access URI should exist");
+        let wrong_uri = format!(
+            "http://localhost{}",
+            access_uri.replace("safe.txt", "other.txt")
+        );
+
+        // Act
+        let response = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request("PUT", &wrong_uri, &[], b"must not be written").await,
+            )
+            .expect("PAR request should complete");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(storage.get_object("multipart-bucket", "safe.txt").is_err());
+        assert!(storage.get_object("multipart-bucket", "other.txt").is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::too_many_lines)]
+    async fn should_upload_directly_and_in_parts_through_an_object_par() {
+        // Arrange
+        let adapter = OciAdapter::new();
+        let storage = temp_storage();
+        create_oci_multipart_bucket(&adapter, &storage).await;
+        let expires = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        let created = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    "http://localhost/n/sqrzl-emulator/b/multipart-bucket/p/",
+                    &[("content-type", "application/json")],
+                    serde_json::json!({
+                        "name": "read-write-object",
+                        "accessType": "ObjectReadWrite",
+                        "objectName": "large.bin",
+                        "timeExpires": expires,
+                    })
+                    .to_string()
+                    .as_bytes(),
+                )
+                .await,
+            )
+            .expect("PAR creation should complete");
+        let created: serde_json::Value =
+            serde_json::from_slice(&read_test_body(created).await).expect("PAR JSON should parse");
+        let access_uri = format!(
+            "http://localhost{}",
+            created["accessUri"]
+                .as_str()
+                .expect("PAR access URI should exist")
+        );
+
+        // Act
+        let direct = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request("PUT", &access_uri, &[], b"direct").await,
+            )
+            .expect("direct PAR upload should complete");
+        let read = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request("GET", &access_uri, &[], b"").await,
+            )
+            .expect("PAR read should complete");
+        let initiated = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request("PUT", &access_uri, &[("opc-multipart", "true")], b"").await,
+            )
+            .expect("PAR multipart initiation should complete");
+        let initiated: serde_json::Value = serde_json::from_slice(&read_test_body(initiated).await)
+            .expect("multipart initiation JSON should parse");
+        let multipart_uri = format!(
+            "http://localhost{}",
+            initiated["accessUri"]
+                .as_str()
+                .expect("multipart PAR URI should exist")
+        );
+        assert!(multipart_uri.contains("/n/sqrzl-emulator/b/multipart-bucket/u/large.bin/id/"));
+        let first_part = minimum_non_final_part(b'l');
+        let first = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request("PUT", &format!("{multipart_uri}1"), &[], &first_part).await,
+            )
+            .expect("first PAR part should complete");
+        let second = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request("PUT", &format!("{multipart_uri}2"), &[], b"file").await,
+            )
+            .expect("second PAR part should complete");
+        let manifest = serde_json::json!({
+            "partsToCommit": [
+                {"partNum": 1, "etag": first.headers()["etag"].to_str().unwrap()},
+                {"partNum": 2, "etag": second.headers()["etag"].to_str().unwrap()},
+            ]
+        });
+        let committed = adapter
+            .handle_request(
+                &storage,
+                &auth_disabled(),
+                &parsed_request(
+                    "POST",
+                    &multipart_uri,
+                    &[("content-type", "application/json")],
+                    manifest.to_string().as_bytes(),
+                )
+                .await,
+            )
+            .expect("PAR multipart commit should complete");
+
+        // Assert
+        assert_eq!(direct.status(), StatusCode::OK);
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(read_test_body(read).await, b"direct");
+        assert_eq!(committed.status(), StatusCode::OK);
+        let object = storage
+            .get_object("multipart-bucket", "large.bin")
+            .expect("committed PAR object should exist");
+        assert_eq!(object.data.len(), first_part.len() + b"file".len());
+        assert!(object.data.starts_with(&first_part));
+        assert!(object.data.ends_with(b"file"));
     }
 
     async fn create_oci_multipart_bucket(adapter: &OciAdapter, storage: &Arc<dyn Storage>) {
@@ -2850,12 +3604,28 @@ mod tests {
                 .await,
             )
             .expect("part upload should succeed");
+        let expected_md5 = BASE64.encode(md5::compute(body).0);
+        assert_eq!(
+            response
+                .headers()
+                .get("opc-content-md5")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_md5.as_str())
+        );
         response
             .headers()
             .get("etag")
             .and_then(|value| value.to_str().ok())
             .expect("etag should exist")
             .to_string()
+    }
+
+    fn minimum_non_final_part(byte: u8) -> Vec<u8> {
+        vec![
+            byte;
+            usize::try_from(OCI_MIN_NON_FINAL_PART_SIZE)
+                .expect("OCI minimum part size should fit in memory")
+        ]
     }
 
     async fn commit_oci_multipart_upload(

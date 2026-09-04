@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::models::{Acl, Bucket, MultipartUpload, Object};
 use crate::storage::{
     AclStore, BucketStore, LifecycleStore, MultipartStore, ObjectCondition, ObjectListingStore,
-    ObjectStore, PolicyStore, ProviderStateStore, Storage, TagStore, VersionStore,
+    ObjectStore, PolicyStore, ProviderStateStore, Storage, TagStore, UploadStore, VersionStore,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
@@ -158,6 +158,27 @@ impl ObjectStore for IndexedStorage {
             .put_object_streamed(bucket, key.clone(), object, payload_path)?;
         self.update_index_put(bucket, key);
         Ok(())
+    }
+
+    fn put_object_streamed_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &std::path::Path,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        let written = self.inner.put_object_streamed_if(
+            bucket,
+            key.clone(),
+            object,
+            payload_path,
+            condition,
+        )?;
+        if written {
+            self.update_index_put(bucket, key);
+        }
+        Ok(written)
     }
 
     fn put_object_if(
@@ -512,6 +533,54 @@ impl ProviderStateStore for IndexedStorage {
 
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()> {
         self.inner.delete_provider_state(provider, key)
+    }
+}
+
+impl UploadStore for IndexedStorage {
+    fn stage_upload_payload(
+        &self,
+        provider: &str,
+        session: &str,
+        item: &str,
+        payload_path: &std::path::Path,
+        source_offset: u64,
+        len: u64,
+    ) -> Result<()> {
+        self.inner
+            .stage_upload_payload(provider, session, item, payload_path, source_offset, len)
+    }
+
+    fn compose_upload_payloads(
+        &self,
+        provider: &str,
+        session: &str,
+        items: &[String],
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: Option<&ObjectCondition>,
+    ) -> Result<bool> {
+        let written = self.inner.compose_upload_payloads(
+            provider,
+            session,
+            items,
+            bucket,
+            key.clone(),
+            object,
+            condition,
+        )?;
+        if written {
+            self.update_index_put(bucket, key);
+        }
+        Ok(written)
+    }
+
+    fn delete_upload_session(&self, provider: &str, session: &str) -> Result<()> {
+        self.inner.delete_upload_session(provider, session)
+    }
+
+    fn retain_upload_items(&self, provider: &str, session: &str, items: &[String]) -> Result<()> {
+        self.inner.retain_upload_items(provider, session, items)
     }
 }
 

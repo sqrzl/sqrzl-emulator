@@ -194,6 +194,27 @@ pub trait ObjectStore: Send + Sync {
         let _ = std::fs::remove_file(payload_path);
         self.put_object(bucket, key, object)
     }
+
+    /// Atomically writes a spooled object when the current object matches
+    /// `condition`. The default implementation is a compatibility fallback
+    /// that materializes the payload; filesystem storage overrides it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be read or persisted.
+    fn put_object_streamed_if(
+        &self,
+        bucket: &str,
+        key: String,
+        mut object: Object,
+        payload_path: &Path,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        object.data = std::fs::read(payload_path)
+            .map_err(|e| Error::InternalError(format!("Failed to read spooled payload: {e}")))?;
+        let _ = std::fs::remove_file(payload_path);
+        self.put_object_if(bucket, key, object, condition)
+    }
 }
 
 /// Object listing semantics, including delimiter and marker pagination behavior.
@@ -477,6 +498,58 @@ pub trait ProviderStateStore: Send + Sync {
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()>;
 }
 
+/// Durable provider-native upload payloads. State documents contain only
+/// metadata; bytes live in independently replaceable files addressed by an
+/// opaque session and item key.
+pub trait UploadStore: Send + Sync {
+    /// Atomically stages all or a selected range of a spooled request body.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source range cannot be read or persisted.
+    fn stage_upload_payload(
+        &self,
+        provider: &str,
+        session: &str,
+        item: &str,
+        payload_path: &Path,
+        source_offset: u64,
+        len: u64,
+    ) -> Result<()>;
+
+    /// Streams staged items, in order, into an object. Returns `false` when
+    /// an optional object precondition no longer matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an item cannot be read, composed, or committed.
+    #[allow(clippy::too_many_arguments)]
+    fn compose_upload_payloads(
+        &self,
+        provider: &str,
+        session: &str,
+        items: &[String],
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: Option<&ObjectCondition>,
+    ) -> Result<bool>;
+
+    /// Removes staged items that are no longer referenced by provider state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when obsolete staging files cannot be removed.
+    fn retain_upload_items(&self, provider: &str, session: &str, items: &[String]) -> Result<()>;
+
+    /// Removes all staged bytes for one provider session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session staging directory cannot be removed.
+    fn delete_upload_session(&self, provider: &str, session: &str) -> Result<()>;
+}
+
 /// Storage backend aggregate - synchronous operations.
 /// HTTP layers handle async/await by calling these operations on request paths.
 ///
@@ -614,6 +687,20 @@ pub trait Storage: Send + Sync {
         object: Object,
         payload_path: &Path,
     ) -> Result<()>;
+    /// See [`ObjectStore::put_object_streamed_if`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `payload_path` cannot be read or the conditional
+    /// write fails.
+    fn put_object_streamed_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+        condition: &ObjectCondition,
+    ) -> Result<bool>;
     ///
     /// # Errors
     ///
@@ -841,6 +928,49 @@ pub trait Storage: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()>;
+
+    /// See [`UploadStore::stage_upload_payload`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source range cannot be read or persisted.
+    fn stage_upload_payload(
+        &self,
+        provider: &str,
+        session: &str,
+        item: &str,
+        payload_path: &Path,
+        source_offset: u64,
+        len: u64,
+    ) -> Result<()>;
+    /// See [`UploadStore::compose_upload_payloads`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an item cannot be read, composed, or committed.
+    #[allow(clippy::too_many_arguments)]
+    fn compose_upload_payloads(
+        &self,
+        provider: &str,
+        session: &str,
+        items: &[String],
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: Option<&ObjectCondition>,
+    ) -> Result<bool>;
+    /// See [`UploadStore::retain_upload_items`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when obsolete staging files cannot be removed.
+    fn retain_upload_items(&self, provider: &str, session: &str, items: &[String]) -> Result<()>;
+    /// See [`UploadStore::delete_upload_session`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session staging directory cannot be removed.
+    fn delete_upload_session(&self, provider: &str, session: &str) -> Result<()>;
 }
 
 impl<T> Storage for T
@@ -855,6 +985,7 @@ where
         + LifecycleStore
         + PolicyStore
         + ProviderStateStore
+        + UploadStore
         + Send
         + Sync,
 {
@@ -962,6 +1093,17 @@ where
         payload_path: &Path,
     ) -> Result<()> {
         ObjectStore::put_object_streamed(self, bucket, key, object, payload_path)
+    }
+
+    fn put_object_streamed_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        ObjectStore::put_object_streamed_if(self, bucket, key, object, payload_path, condition)
     }
 
     fn list_objects(
@@ -1167,6 +1309,49 @@ where
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()> {
         ProviderStateStore::delete_provider_state(self, provider, key)
     }
+
+    fn stage_upload_payload(
+        &self,
+        provider: &str,
+        session: &str,
+        item: &str,
+        payload_path: &Path,
+        source_offset: u64,
+        len: u64,
+    ) -> Result<()> {
+        UploadStore::stage_upload_payload(
+            self,
+            provider,
+            session,
+            item,
+            payload_path,
+            source_offset,
+            len,
+        )
+    }
+
+    fn compose_upload_payloads(
+        &self,
+        provider: &str,
+        session: &str,
+        items: &[String],
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: Option<&ObjectCondition>,
+    ) -> Result<bool> {
+        UploadStore::compose_upload_payloads(
+            self, provider, session, items, bucket, key, object, condition,
+        )
+    }
+
+    fn delete_upload_session(&self, provider: &str, session: &str) -> Result<()> {
+        UploadStore::delete_upload_session(self, provider, session)
+    }
+
+    fn retain_upload_items(&self, provider: &str, session: &str, items: &[String]) -> Result<()> {
+        UploadStore::retain_upload_items(self, provider, session, items)
+    }
 }
 
 impl BucketStore for dyn Storage + '_ {
@@ -1276,6 +1461,17 @@ impl ObjectStore for dyn Storage + '_ {
         payload_path: &Path,
     ) -> Result<()> {
         Storage::put_object_streamed(self, bucket, key, object, payload_path)
+    }
+
+    fn put_object_streamed_if(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+        condition: &ObjectCondition,
+    ) -> Result<bool> {
+        Storage::put_object_streamed_if(self, bucket, key, object, payload_path, condition)
     }
 }
 
@@ -1496,6 +1692,51 @@ impl ProviderStateStore for dyn Storage + '_ {
 
     fn delete_provider_state(&self, provider: &str, key: &str) -> Result<()> {
         Storage::delete_provider_state(self, provider, key)
+    }
+}
+
+impl UploadStore for dyn Storage + '_ {
+    fn stage_upload_payload(
+        &self,
+        provider: &str,
+        session: &str,
+        item: &str,
+        payload_path: &Path,
+        source_offset: u64,
+        len: u64,
+    ) -> Result<()> {
+        Storage::stage_upload_payload(
+            self,
+            provider,
+            session,
+            item,
+            payload_path,
+            source_offset,
+            len,
+        )
+    }
+
+    fn compose_upload_payloads(
+        &self,
+        provider: &str,
+        session: &str,
+        items: &[String],
+        bucket: &str,
+        key: String,
+        object: Object,
+        condition: Option<&ObjectCondition>,
+    ) -> Result<bool> {
+        Storage::compose_upload_payloads(
+            self, provider, session, items, bucket, key, object, condition,
+        )
+    }
+
+    fn delete_upload_session(&self, provider: &str, session: &str) -> Result<()> {
+        Storage::delete_upload_session(self, provider, session)
+    }
+
+    fn retain_upload_items(&self, provider: &str, session: &str, items: &[String]) -> Result<()> {
+        Storage::retain_upload_items(self, provider, session, items)
     }
 }
 

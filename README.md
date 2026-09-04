@@ -137,14 +137,22 @@ The table below is the complete runtime configuration surface.
 
 | Variable | Accepted values | Default | Description |
 | --- | --- | --- | --- |
-| `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | Access key and admin username. Provider and admin authentication are enabled only when both credential variables are present. |
-| `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | Signing secret and admin password. Azure Shared Key treats valid Base64 as decoded key bytes; otherwise the literal bytes are used. |
+| `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | S3 access key and admin username. Provider and admin authentication are enabled only when both generic credential variables are present. Also supplies the Azure account or GCS HMAC access ID when that provider's native override is unset. |
+| `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | S3 signing secret and admin password. Also supplies the Azure account key or GCS HMAC secret when that provider's native override is unset. |
+| `AZURE_ACCOUNT` | Azure storage account name; set with `AZURE_ACCOUNT_KEY` | Generic access key, otherwise unset | Azure Shared Key and SAS account override. These vendor-native variables intentionally have no `SQRZL_` prefix. |
+| `AZURE_ACCOUNT_KEY` | Azure storage account key; set with `AZURE_ACCOUNT` | Generic secret, otherwise unset | Azure Shared Key and SAS signing key. Valid Base64 is decoded as Azure key material; other values are used literally. |
+| `GCS_HMAC_ACCESS_ID` | GCS interoperability HMAC access ID; set with `GCS_HMAC_SECRET` | Generic access key, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signed-URL identity. |
+| `GCS_HMAC_SECRET` | GCS interoperability HMAC secret; set with `GCS_HMAC_ACCESS_ID` | Generic secret, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signing secret. |
+| `OCI_TENANCY_OCID` | OCI tenancy OCID | Unset | First component of the accepted OCI request-signing key ID. Configure all four OCI variables together. |
+| `OCI_USER_OCID` | OCI user OCID | Unset | Second component of the accepted OCI request-signing key ID. |
+| `OCI_KEY_FINGERPRINT` | OCI API signing-key fingerprint | Unset | Final component of the accepted OCI request-signing key ID. |
+| `OCI_PUBLIC_KEY_PATH` | Readable PKCS#1 or PKCS#8 RSA public-key PEM path | Unset | Public key used to verify OCI RSA-SHA256 request signatures. |
 | `SQRZL_ADMIN_AUTH_DISABLED` | `1`, `true`, `yes`, or `on` (case-insensitive) enable it; every other value is false | `false` | Keeps the UI and `/admin/v1` in open mode while provider API authentication remains enabled. |
 | `SQRZL_BLOBS_PATH` | Writable container path | `/app/blobs` in Docker; `./blobs` natively | Storage format v2 root. Mount a volume here for persistence. |
 | `SQRZL_LIFECYCLE_HOURS` | Positive integer hours | `1` | Interval between lifecycle-rule passes. Invalid or zero values use the default. |
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
 | `SQRZL_UI_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9001` | Admin UI listener inside the container. Normally keep this at `9001`. |
-| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum HTTP request body or SMTP `DATA` payload. S3 object PUT and UploadPart bodies stream to disk while enforcing this cap; other HTTP bodies remain buffered. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
+| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum bytes in one HTTP request body or SMTP `DATA` payload. S3 PUT/UploadPart, Azure Put Blob/Put Block, GCS data uploads/resumable chunks, and OCI PutObject/UploadPart stream to disk while enforcing this per-request cap. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
 | `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names use the Amazon S3 general-purpose rules: 3–63 lowercase letters, digits, periods, or hyphens; an alphanumeric first and last character; no adjacent periods, IP-address form, or AWS-reserved affix. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
 | `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
@@ -192,10 +200,10 @@ All provider APIs use the storage listener, normally
 | Provider | Endpoint/client setting | Local notes |
 | --- | --- | --- |
 | S3-compatible | Endpoint URL `http://localhost:9000` | Use region `us-east-1`, SigV4, and path-style addressing. |
-| Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. For the simplest smoke setup, use no credential and leave Sqrzl auth disabled. |
-| GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. When enabled, bearer tokens equal to either configured Sqrzl credential are accepted for local qualification. |
+| Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. Shared Key and service SAS use `AZURE_ACCOUNT` and `AZURE_ACCOUNT_KEY` when configured. |
+| GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. HMAC signing uses `GCS_HMAC_ACCESS_ID` and `GCS_HMAC_SECRET`; the local JSON SDK qualification also accepts the configured secret as a bearer token. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
-| OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/sqrzl-emulator/b/<bucket>/...`; namespace discovery returns `sqrzl-emulator`, and other namespaces return OCI `NotAuthorizedOrNotFound`. Use auth-disabled mode: OCI RSA-SHA256 verification is explicitly unsupported and non-provider signature approximations are rejected. |
+| OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/sqrzl-emulator/b/<bucket>/...`; namespace discovery returns `sqrzl-emulator`. Authenticated requests use the four `OCI_*` identity/public-key variables and OCI RSA-SHA256 request signing. |
 | SMTP | SMTP server `localhost:2525` | Plaintext local capture with strict envelope paths and null reverse-path support; SMTP AUTH and STARTTLS are intentionally unsupported. |
 | SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
 | Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4; Raw, Template, and attachments are rejected. |
@@ -204,6 +212,42 @@ All provider APIs use the storage listener, normally
 | Amazon SNS | Endpoint URL `http://localhost:9000` | Supports direct `PhoneNumber` SMS `Publish` only. |
 | AWS SMS Voice v2 | Endpoint URL `http://localhost:9000` | Supports `SendTextMessage` and `SendMediaMessage`. |
 | ACS SMS | Connection-string endpoint `http://localhost:9000` | Supports one-to-many SMS and admin-driven Event Grid callbacks. |
+
+## Large object uploads
+
+Sqrzl follows each storage vendor's native large-upload protocol. Request bytes
+are spooled and hashed incrementally, parts survive adapter restart, and final
+objects are composed on disk without loading the complete object into memory.
+The default `SQRZL_MAX_REQUEST_BYTES` remains a per-request safety limit, so
+choose a part or chunk size at or below 128 MiB or raise that setting for larger
+individual requests.
+
+| Provider | Native pattern | Delegated upload | Emulated service boundaries |
+| --- | --- | --- | --- |
+| Amazon S3 | CreateMultipartUpload, UploadPart, CompleteMultipartUpload, or AbortMultipartUpload | SigV4-presigned UploadPart URLs | 10,000 parts; 5 MiB minimum except the final part; 5 GiB maximum per part; about 48.8 TiB effective object maximum |
+| Azure Blob Storage | Put Block followed by Put Block List | One blob SAS can stage and commit blocks | 100,000 uncommitted blocks; 50,000 committed blocks; 4,000 MiB per block; about 190.7 TiB block-blob maximum; 5,000 MiB direct Put Blob maximum |
+| Google Cloud Storage | JSON or XML resumable session with 256 KiB-aligned non-final chunks and status probes | GOOG4 HMAC-signed initiation returns the resumable session URI | 5 TiB object maximum; seven-day resumable-session lifetime |
+| OCI Object Storage | CreateMultipartUpload, UploadPart, CommitMultipartUpload, or AbortMultipartUpload | Object PAR direct PUT or native PAR multipart initiation with `opc-multipart: true` | 10,000 parts; 10 MiB minimum except the final part; 50 GiB maximum per part; 10 TiB object maximum; 50 GiB direct PutObject maximum |
+
+Azure MD5/CRC64, GCS CRC32C, OCI MD5/SHA-256/SHA-384/CRC32C/CRC64, and S3
+request checksum paths are calculated while streaming where their accepted API
+surface requires them. Aborted, rejected, expired, overwritten, and completed
+sessions reclaim their staged files. This is a local emulator contract, not a
+claim that a single Sqrzl instance has enough disk for every theoretical vendor
+maximum.
+
+The official-SDK harness includes an opt-in 8 GiB-per-provider qualification.
+It creates a sparse source file, uploads with 64 MiB parts/chunks, verifies the
+stored size, and deletes the object:
+
+```bash
+SQRZL_RUN_LARGE_UPLOAD_QUALIFICATION=1 \
+SQRZL_SDK_PROVIDERS=s3,azure,gcs,oci \
+python -m pytest sdk-tests/test_large_upload_qualification.py
+```
+
+Set `SQRZL_LARGE_UPLOAD_BYTES` to a smaller byte count for a quick harness
+smoke. Keep it above 64 MiB to exercise multipart behavior on every provider.
 
 For lease and compare-and-swap qualification, the GCS JSON endpoint supports
 `ifGenerationMatch` (including create-only value `0`) on uploads and conditional
@@ -410,7 +454,7 @@ Common problems:
 | Container exits with “Legacy nonempty storage” | The mounted root predates format v2 or contains unrelated files. Archive it, point `SQRZL_BLOBS_PATH` at an empty mount, or reset a disposable volume. |
 | Data disappears after restart | Mount a named volume or bind mount at `/app/blobs`; container-local writable layers are disposable. |
 | Host port is already in use | Change the host side of the Compose mapping, such as `"19000:9000"`. |
-| Upload receives `413` | Increase `SQRZL_MAX_REQUEST_BYTES` to a positive byte count and recreate the container. S3 multipart uploads can also use more, smaller parts while remaining within the 10,000-part service limit. |
+| Upload receives `413` | Increase `SQRZL_MAX_REQUEST_BYTES` to a positive byte count and recreate the container, or use the provider's native multipart/block/resumable pattern with smaller individual requests. |
 | Startup bucket is rejected | Use the Amazon S3 general-purpose bucket-name rules summarized in the environment table. |
 
 ## Development and contract references

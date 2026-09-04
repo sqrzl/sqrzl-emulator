@@ -15,6 +15,9 @@ use sqrzl_emulator::{Config, Error};
 async fn main() -> Result<()> {
     // Load configuration from environment variables
     let config = Config::from_env();
+    config
+        .validate_vendor_credentials()
+        .map_err(Error::InvalidRequest)?;
     let log_format = Config::log_format_from_env();
 
     // Initialize structured logging

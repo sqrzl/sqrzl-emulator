@@ -88,6 +88,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
         .get("uploadId")
         .and_then(|value| value.as_str())
         .expect("upload id should exist");
+    let first_part = vec![b'm'; 10 * 1024 * 1024];
 
     let upload_part_one = Request::builder()
         .method("PUT")
@@ -95,7 +96,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
             "{}/n/sqrzl-emulator/b/multipart-bucket/u/multi.txt?uploadId={upload_id}&uploadPartNum=1",
             server.base_url
         ))
-        .body(Body::from("multi"))
+        .body(Body::from(first_part.clone()))
         .expect("multipart part one request should build");
     let upload_part_one_response = server.request(upload_part_one).await;
     assert_eq!(upload_part_one_response.status(), StatusCode::OK);
@@ -147,5 +148,7 @@ async fn should_commit_multipart_object_given_live_server_when_finalizing_oci_up
         .expect("multipart object get request should build");
     let get_object_response = server.request(get_object).await;
     assert_eq!(get_object_response.status(), StatusCode::OK);
-    assert_eq!(text_body(get_object_response).await, "multipart");
+    let mut expected = first_part;
+    expected.extend_from_slice(b"part");
+    assert_eq!(text_body(get_object_response).await.as_bytes(), expected);
 }

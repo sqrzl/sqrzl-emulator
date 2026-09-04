@@ -10,9 +10,13 @@ gcs_storage = pytest.importorskip("google.cloud.storage")
 
 
 def _client(sqrzl_server):
+    credentials = google_auth.AnonymousCredentials()
+    if sqrzl_server.enforce_auth:
+        google_oauth2 = pytest.importorskip("google.oauth2.credentials")
+        credentials = google_oauth2.Credentials(token=sqrzl_server.gcs_hmac_secret)
     return gcs_storage.Client(
         project="sqrzl",
-        credentials=google_auth.AnonymousCredentials(),
+        credentials=credentials,
         client_options={"api_endpoint": sqrzl_server.api_url},
     )
 
@@ -49,7 +53,7 @@ def test_gcs_resumable_upload_workflow(sqrzl_server):
     bucket = client.bucket(bucket_name)
     bucket.create()
     blob = bucket.blob(blob_name)
-    payload = b"resumable gcs sdk payload"
+    payload = b"g" * (9 * 1024 * 1024 + 17)
     blob.chunk_size = 256 * 1024
     blob.upload_from_file(
         io.BytesIO(payload),

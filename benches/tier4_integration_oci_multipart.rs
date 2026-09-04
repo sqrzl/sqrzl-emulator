@@ -252,7 +252,7 @@ fn multipart_commit(ctx: &mut StressContext) {
     let object = "multi.txt";
     let init_url = format!("{}/n/{}/b/{}/u", server.base_url, TENANT, bucket);
     let multipart_url = format!("{}/n/{}/b/{}/u/{}", server.base_url, TENANT, bucket, object);
-    let part_one = Bytes::from(vec![b'a'; 4096]);
+    let part_one = Bytes::from(vec![b'a'; 10 * 1024 * 1024]);
     let part_two = Bytes::from(vec![b'b'; 4096]);
 
     ctx.parameter("payload_size_bytes", part_one.len() + part_two.len());

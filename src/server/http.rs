@@ -31,6 +31,9 @@ pub struct SpooledPayload {
     pub len: u64,
     pub md5: [u8; 16],
     pub sha256_hex: String,
+    pub sha384: [u8; 48],
+    pub crc32c: u32,
+    pub crc64_nvme: u64,
     _cleanup: std::sync::Arc<SpooledPayloadCleanup>,
 }
 
@@ -51,6 +54,9 @@ impl SpooledPayload {
         len: u64,
         md5: [u8; 16],
         sha256_hex: String,
+        sha384: [u8; 48],
+        crc32c: u32,
+        crc64_nvme: u64,
     ) -> Self {
         Self {
             _cleanup: std::sync::Arc::new(SpooledPayloadCleanup { path: path.clone() }),
@@ -58,6 +64,9 @@ impl SpooledPayload {
             len,
             md5,
             sha256_hex,
+            sha384,
+            crc32c,
+            crc64_nvme,
         }
     }
 }
@@ -228,6 +237,73 @@ impl Request {
 
     pub fn has_query_param(&self, name: &str) -> bool {
         self.query_params.contains_key(name)
+    }
+
+    /// Number of bytes in the request payload, regardless of whether it was
+    /// buffered or spooled to disk.
+    #[must_use]
+    pub fn payload_len(&self) -> u64 {
+        self.spooled_body
+            .as_ref()
+            .map_or(self.body.len() as u64, |payload| payload.len)
+    }
+
+    /// Whether the request payload is empty.
+    #[must_use]
+    pub fn payload_is_empty(&self) -> bool {
+        self.payload_len() == 0
+    }
+
+    /// MD5 digest of the request payload without materializing a spooled body.
+    #[must_use]
+    pub fn payload_md5(&self) -> [u8; 16] {
+        self.spooled_body
+            .as_ref()
+            .map_or_else(|| md5::compute(&self.body).0, |payload| payload.md5)
+    }
+
+    /// SHA-384 digest of the request payload.
+    #[must_use]
+    pub fn payload_sha384(&self) -> [u8; 48] {
+        use sha2::Digest as _;
+        self.spooled_body.as_ref().map_or_else(
+            || sha2::Sha384::digest(&self.body).into(),
+            |payload| payload.sha384,
+        )
+    }
+
+    /// SHA-256 digest of the request payload.
+    #[must_use]
+    pub fn payload_sha256(&self) -> [u8; 32] {
+        use sha2::Digest as _;
+        self.spooled_body.as_ref().map_or_else(
+            || sha2::Sha256::digest(&self.body).into(),
+            |payload| {
+                let decoded = hex::decode(&payload.sha256_hex).unwrap_or_default();
+                decoded.try_into().unwrap_or([0_u8; 32])
+            },
+        )
+    }
+
+    /// CRC32C digest of the request payload.
+    #[must_use]
+    pub fn payload_crc32c(&self) -> u32 {
+        self.spooled_body
+            .as_ref()
+            .map_or_else(|| crc32c::crc32c(&self.body), |payload| payload.crc32c)
+    }
+
+    /// Azure transactional CRC64-NVME digest of the request payload.
+    #[must_use]
+    pub fn payload_crc64_nvme(&self) -> u64 {
+        self.spooled_body.as_ref().map_or_else(
+            || {
+                let mut digest = crc64fast_nvme::Digest::new();
+                digest.write(&self.body);
+                digest.sum64()
+            },
+            |payload| payload.crc64_nvme,
+        )
     }
 }
 

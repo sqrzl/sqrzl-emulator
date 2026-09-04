@@ -56,11 +56,11 @@ jobs:
       - name: SDK functional tests
         run: python -m pytest
 
-      - name: Authenticated S3 and Azure SDK tests
+      - name: Authenticated provider SDK tests
         env:
           SQRZL_SDK_ENFORCE_AUTH: "1"
-          SQRZL_SDK_PROVIDERS: s3,azure
-        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py
+          SQRZL_SDK_PROVIDERS: s3,azure,gcs,oci
+        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_oci_sdk.py
 
   frontend:
     runs-on: ubuntu-latest
