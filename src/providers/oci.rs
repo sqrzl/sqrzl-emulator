@@ -181,7 +181,7 @@ impl OciAdapter {
     }
 
     fn foreign_protection_active(storage: &Arc<dyn Storage>, bucket: &str) -> bool {
-        storage.get_bucket(bucket).ok().is_some_and(|bucket| {
+        storage.get_bucket(bucket).is_ok_and(|bucket| {
             bucket
                 .metadata
                 .get(S3_VERSIONING_STATUS_KEY)

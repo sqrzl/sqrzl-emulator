@@ -58,7 +58,8 @@ pub struct Config {
     pub api_port: u16,
     /// Port for the UI server
     pub ui_port: u16,
-    /// Maximum accepted HTTP request body size before streaming support is added
+    /// Maximum accepted HTTP request body size; eligible S3 uploads are streamed
+    /// to disk while this limit is enforced.
     pub max_request_bytes: usize,
     /// Port for the SMTP mail-capture server
     pub smtp_port: u16,
@@ -119,7 +120,7 @@ impl Config {
     /// - `SQRZL_SECRET_ACCESS_KEY`: AWS secret access key (optional)
     /// - `SQRZL_BLOBS_PATH`: Path to storage directory (default: "./blobs")
     /// - `SQRZL_LIFECYCLE_HOURS`: Hours between lifecycle rule executions (default: 1)
-    /// - `SQRZL_MAX_REQUEST_BYTES`: Maximum request body bytes accepted before streaming is supported (default: 128 MiB)
+    /// - `SQRZL_MAX_REQUEST_BYTES`: Maximum request body bytes accepted; eligible S3 uploads stream to disk (default: 128 MiB)
     /// - `SQRZL_ADMIN_AUTH_DISABLED`: Disable `/admin/v1` session auth even when provider auth is enabled
     /// - `SQRZL_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
     /// - `SQRZL_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)

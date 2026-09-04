@@ -1,21 +1,29 @@
 use crate::error::{Error, Result};
 use crate::models::{policy::Acl, Bucket, MultipartUpload, Object};
 use crate::storage::{
-    AclStore, BucketStore, DirectoryEntryKind, LifecycleStore, LockFreeIndex, MultipartStore,
-    ObjectCondition, ObjectListingStore, ObjectStore, PolicyStore, ProviderStateStore, TagStore,
-    VersionStore,
+    AclStore, BucketStore, DirectoryEntry, DirectoryEntryKind, LifecycleStore, LockFreeIndex,
+    MultipartStore, ObjectCondition, ObjectListingStore, ObjectStore, PolicyStore,
+    ProviderStateStore, TagStore, VersionStore, MULTIPART_MAX_OBJECT_SIZE_KEY,
+    MULTIPART_MAX_PART_SIZE_KEY, MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY, MULTIPART_TAGS_KEY,
+    S3_MAXIMUM_OBJECT_SIZE, S3_MAXIMUM_PART_SIZE, S3_MINIMUM_NON_FINAL_PART_SIZE,
 };
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use uuid::Uuid;
 
 mod io;
 
-const MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY: &str = "__sqrzl_multipart_min_non_final_part_size";
-const S3_MINIMUM_NON_FINAL_PART_SIZE: u64 = 5 * 1024 * 1024;
+/// Where a write's payload bytes come from: already resident in
+/// `Object.data`, or already spooled to a file on disk (so the write can
+/// move it into place instead of copying it through memory).
+#[derive(Clone, Copy)]
+enum ObjectPayload<'a> {
+    InMemory,
+    Spooled(&'a Path),
+}
 
 pub struct FilesystemStorage {
     base_path: PathBuf,
@@ -188,7 +196,21 @@ impl FilesystemStorage {
         }
     }
 
-    fn put_object_locked(&self, bucket: &str, key: &str, mut object: Object) -> Result<()> {
+    fn put_object_locked(&self, bucket: &str, key: &str, object: Object) -> Result<()> {
+        self.put_object_locked_with_payload(bucket, key, object, ObjectPayload::InMemory)
+    }
+
+    /// Shared by [`Self::put_object_locked`] and the streaming write path:
+    /// handles versioning bookkeeping identically regardless of whether the
+    /// new payload bytes live in `object.data` or in a file already
+    /// spooled to disk.
+    fn put_object_locked_with_payload(
+        &self,
+        bucket: &str,
+        key: &str,
+        mut object: Object,
+        payload: ObjectPayload<'_>,
+    ) -> Result<()> {
         if !self.bucket_dir(bucket).exists() {
             return Err(Error::BucketNotFound);
         }
@@ -230,7 +252,12 @@ impl FilesystemStorage {
         } else {
             object.version_id = None;
         }
-        self.write_object_files(bucket, &object_id, &object)?;
+        match payload {
+            ObjectPayload::InMemory => self.write_object_files(bucket, &object_id, &object)?,
+            ObjectPayload::Spooled(payload_path) => {
+                self.write_object_files_from_path(bucket, &object_id, &object, payload_path)?;
+            }
+        }
         self.index.insert(bucket, key);
         Ok(())
     }
@@ -398,6 +425,25 @@ impl ObjectStore for FilesystemStorage {
         self.put_object_locked(bucket, &key, object)
     }
 
+    fn put_object_streamed(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+    ) -> Result<()> {
+        let object_lock = self.object_lock(bucket, &key)?;
+        let _guard = object_lock
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock object for write".to_string()))?;
+        self.put_object_locked_with_payload(
+            bucket,
+            &key,
+            object,
+            ObjectPayload::Spooled(payload_path),
+        )
+    }
+
     fn put_object_if(
         &self,
         bucket: &str,
@@ -465,6 +511,14 @@ impl ObjectStore for FilesystemStorage {
         object.data = fs::read(&object_data_path)
             .map_err(|e| Error::InternalError(format!("Failed to read object: {e}")))?;
         Ok(object)
+    }
+
+    fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<Object> {
+        let object_id = Self::compute_object_id(bucket, key);
+        if !self.object_data_path(bucket, &object_id).exists() {
+            return Err(Error::KeyNotFound);
+        }
+        Self::read_object_metadata(&self.object_metadata_path(bucket, &object_id))
     }
 
     fn get_object_range(
@@ -828,6 +882,120 @@ impl TagStore for FilesystemStorage {
     }
 }
 
+impl FilesystemStorage {
+    fn scan_delimited_entries(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        delimiter: &str,
+        marker: Option<&str>,
+        desired_entry_count: usize,
+    ) -> Vec<DirectoryEntry> {
+        let scan_batch_size = desired_entry_count.clamp(1, 1_024);
+        let mut scan_marker = marker.map(str::to_string);
+        let mut entries = Vec::with_capacity(desired_entry_count.min(1_024));
+
+        loop {
+            let keys = self.index.list_prefix_marker(
+                bucket,
+                Some(prefix),
+                scan_marker.as_deref(),
+                Some(scan_batch_size),
+            );
+            if keys.is_empty() {
+                break;
+            }
+            let reached_end = keys.len() < scan_batch_size;
+
+            for key in keys {
+                scan_marker = Some(key.clone());
+                let remainder = &key[prefix.len()..];
+                let entry = remainder.find(delimiter).map_or_else(
+                    || DirectoryEntry {
+                        path: key.clone(),
+                        kind: DirectoryEntryKind::Object,
+                    },
+                    |index| DirectoryEntry {
+                        path: key[..prefix.len() + index + delimiter.len()].to_string(),
+                        kind: DirectoryEntryKind::CommonPrefix,
+                    },
+                );
+                if marker.is_some_and(|value| entry.path.as_str() <= value)
+                    || entries
+                        .last()
+                        .is_some_and(|previous: &DirectoryEntry| previous.path == entry.path)
+                {
+                    continue;
+                }
+                if entry.kind == DirectoryEntryKind::Object {
+                    let object_id = Self::compute_object_id(bucket, &entry.path);
+                    if !self.object_metadata_path(bucket, &object_id).exists() {
+                        continue;
+                    }
+                }
+                entries.push(entry);
+                if entries.len() >= desired_entry_count {
+                    break;
+                }
+            }
+
+            if entries.len() >= desired_entry_count || reached_end {
+                break;
+            }
+        }
+        entries
+    }
+
+    fn list_objects_with_delimiter(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        delimiter: &str,
+        marker: Option<&str>,
+        max_keys: usize,
+    ) -> crate::models::ListObjectsResult {
+        let entry_limit = max_keys.saturating_add(1);
+        let entries = if delimiter == "/" && (prefix.is_empty() || prefix.ends_with('/')) {
+            self.index
+                .list_child_entries(bucket, prefix, marker, Some(entry_limit))
+        } else {
+            self.scan_delimited_entries(bucket, prefix, delimiter, marker, entry_limit)
+        };
+        let is_truncated = entries.len() > max_keys;
+        let page_entries = entries.iter().take(max_keys).collect::<Vec<_>>();
+        let next_marker = if is_truncated {
+            if max_keys == 0 {
+                entries.first().map(|entry| entry.path.clone())
+            } else {
+                page_entries.last().map(|entry| entry.path.clone())
+            }
+        } else {
+            None
+        };
+
+        let mut common_prefixes = Vec::new();
+        let mut objects = Vec::with_capacity(page_entries.len());
+        for entry in page_entries {
+            match entry.kind {
+                DirectoryEntryKind::CommonPrefix => common_prefixes.push(entry.path.clone()),
+                DirectoryEntryKind::Object => {
+                    let object_id = Self::compute_object_id(bucket, &entry.path);
+                    let metadata_path = self.object_metadata_path(bucket, &object_id);
+                    if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
+                        objects.push(obj);
+                    }
+                }
+            }
+        }
+        crate::models::ListObjectsResult {
+            common_prefixes,
+            objects,
+            is_truncated,
+            next_marker,
+        }
+    }
+}
+
 impl ObjectListingStore for FilesystemStorage {
     fn list_objects(
         &self,
@@ -844,51 +1012,19 @@ impl ObjectListingStore for FilesystemStorage {
 
         let max_keys = max_keys.unwrap_or(1000);
 
-        if delimiter.is_some_and(|value| !value.is_empty()) {
-            let entries = self.index.list_child_entries(
+        if let Some(delimiter) = delimiter.filter(|value| !value.is_empty()) {
+            return Ok(self.list_objects_with_delimiter(
                 bucket,
                 prefix.unwrap_or(""),
+                delimiter,
                 marker,
-                Some(max_keys + 1),
-            );
-            let is_truncated = entries.len() > max_keys;
-            let page_entries = entries.iter().take(max_keys).collect::<Vec<_>>();
-            let next_marker = if is_truncated {
-                if max_keys == 0 {
-                    entries.first().map(|entry| entry.path.clone())
-                } else {
-                    page_entries.last().map(|entry| entry.path.clone())
-                }
-            } else {
-                None
-            };
-
-            let mut common_prefixes = Vec::new();
-            let mut objects = Vec::with_capacity(page_entries.len());
-            for entry in page_entries {
-                match entry.kind {
-                    DirectoryEntryKind::CommonPrefix => common_prefixes.push(entry.path.clone()),
-                    DirectoryEntryKind::Object => {
-                        let object_id = Self::compute_object_id(bucket, &entry.path);
-                        let metadata_path = self.object_metadata_path(bucket, &object_id);
-                        if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
-                            objects.push(obj);
-                        }
-                    }
-                }
-            }
-
-            return Ok(crate::models::ListObjectsResult {
-                common_prefixes,
-                objects,
-                is_truncated,
-                next_marker,
-            });
+                max_keys,
+            ));
         }
 
-        let keys = self
-            .index
-            .list_prefix_marker(bucket, prefix, marker, Some(max_keys + 1));
+        let keys =
+            self.index
+                .list_prefix_marker(bucket, prefix, marker, Some(max_keys.saturating_add(1)));
 
         let page_keys = keys.iter().take(max_keys).collect::<Vec<_>>();
         let mut objects = Vec::with_capacity(page_keys.len());
@@ -927,10 +1063,20 @@ impl MultipartStore for FilesystemStorage {
             key,
             None,
             HashMap::new(),
-            HashMap::from([(
-                MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY.to_string(),
-                S3_MINIMUM_NON_FINAL_PART_SIZE.to_string(),
-            )]),
+            HashMap::from([
+                (
+                    MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY.to_string(),
+                    S3_MINIMUM_NON_FINAL_PART_SIZE.to_string(),
+                ),
+                (
+                    MULTIPART_MAX_PART_SIZE_KEY.to_string(),
+                    S3_MAXIMUM_PART_SIZE.to_string(),
+                ),
+                (
+                    MULTIPART_MAX_OBJECT_SIZE_KEY.to_string(),
+                    S3_MAXIMUM_OBJECT_SIZE.to_string(),
+                ),
+            ]),
         )
     }
 
@@ -974,48 +1120,56 @@ impl MultipartStore for FilesystemStorage {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
         }
-
-        // Validate part number
         if !(1..=10000).contains(&part_number) {
             return Err(Error::InvalidPartNumber);
         }
+        let upload = self.get_multipart_upload(bucket, upload_id)?;
+        if upload
+            .provider_metadata
+            .get(MULTIPART_MAX_PART_SIZE_KEY)
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|maximum| data.len() as u64 > maximum)
+        {
+            return Err(Error::EntityTooLarge);
+        }
 
-        self.ensure_upload_exists(bucket, upload_id)?;
-
-        // Compute ETag
         let etag = md5_hash(&data);
         let size = data.len() as u64;
-        let upload_path = self.upload_record_path(bucket, upload_id);
-
-        // Write part data
         let part_path = self.part_path(bucket, upload_id, part_number);
         Self::atomic_write(&part_path, &data)?;
 
-        let mut cache = self
-            .uploads_cache
-            .lock()
-            .map_err(|_| Error::InternalError("Failed to lock uploads cache".to_string()))?;
-        let uploads = cache
-            .get_mut(bucket)
-            .ok_or_else(|| Error::InternalError("Missing uploads cache entry".to_string()))?;
-        let upload = uploads.get_mut(upload_id).ok_or(Error::NoSuchUpload)?;
-        let part = crate::models::Part {
-            part_number,
-            etag: etag.clone(),
-            size,
-            last_modified: chrono::Utc::now(),
-        };
-        match upload
-            .parts
-            .binary_search_by_key(&part_number, |existing| existing.part_number)
-        {
-            Ok(index) => upload.parts[index] = part,
-            Err(index) => upload.parts.insert(index, part),
-        }
-        upload.part_data.insert(part_number, data);
-        Self::write_upload_record_at_path(&upload_path, upload)?;
+        self.record_uploaded_part(bucket, upload_id, part_number, etag, size)
+    }
 
-        Ok(etag)
+    fn upload_part_streamed(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        payload_path: &Path,
+        len: u64,
+        etag: String,
+    ) -> Result<String> {
+        if !self.bucket_exists(bucket)? {
+            return Err(Error::BucketNotFound);
+        }
+        if !(1..=10000).contains(&part_number) {
+            return Err(Error::InvalidPartNumber);
+        }
+        let upload = self.get_multipart_upload(bucket, upload_id)?;
+        if upload
+            .provider_metadata
+            .get(MULTIPART_MAX_PART_SIZE_KEY)
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|maximum| len > maximum)
+        {
+            return Err(Error::EntityTooLarge);
+        }
+
+        let part_path = self.part_path(bucket, upload_id, part_number);
+        Self::atomic_move(payload_path, &part_path)?;
+
+        self.record_uploaded_part(bucket, upload_id, part_number, etag, len)
     }
 
     fn list_multipart_uploads(&self, bucket: &str) -> Result<Vec<MultipartUpload>> {
@@ -1048,6 +1202,22 @@ impl MultipartStore for FilesystemStorage {
     }
 
     fn complete_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<String> {
+        let upload = self.get_multipart_upload(bucket, upload_id)?;
+        let parts = upload
+            .parts
+            .iter()
+            .map(|part| (part.part_number, part.etag.clone()))
+            .collect::<Vec<_>>();
+        self.complete_multipart_upload_with_parts(bucket, upload_id, &parts)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn complete_multipart_upload_with_parts(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        manifest: &[(u32, String)],
+    ) -> Result<String> {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
         }
@@ -1068,24 +1238,26 @@ impl MultipartStore for FilesystemStorage {
             content_type,
             metadata,
             provider_metadata,
-            parts,
-            part_data,
+            parts: uploaded_parts,
             ..
         } = upload;
 
-        if parts.is_empty() {
+        if manifest.is_empty() {
             return Err(Error::InvalidPartOrder);
         }
-
-        // S3 accepts any uploaded part numbers from 1 through 10,000 as long
-        // as the completion manifest orders the selected parts strictly
-        // ascending; it does not require a sequence starting at part 1.
-        if parts
-            .windows(2)
-            .any(|pair| pair[0].part_number >= pair[1].part_number)
-        {
+        if manifest.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
             return Err(Error::InvalidPartOrder);
         }
+        let parts = manifest
+            .iter()
+            .map(|(part_number, etag)| {
+                uploaded_parts
+                    .iter()
+                    .find(|part| part.part_number == *part_number && part.etag == *etag)
+                    .cloned()
+                    .ok_or(Error::IncompleteMultipartUpload)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let minimum_non_final_part_size = provider_metadata
             .get(MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY)
             .and_then(|value| value.parse::<u64>().ok())
@@ -1098,23 +1270,15 @@ impl MultipartStore for FilesystemStorage {
             return Err(Error::EntityTooSmall);
         }
 
-        // Read all parts and concatenate
-        let total_size = parts.iter().try_fold(0usize, |acc, part| {
-            let part_size = usize::try_from(part.size).map_err(|_| {
-                Error::InternalError("Multipart object is too large for this platform".to_string())
-            })?;
-            Ok(acc.saturating_add(part_size))
+        let total_size = parts.iter().try_fold(0u64, |acc, part| {
+            acc.checked_add(part.size).ok_or(Error::EntityTooLarge)
         })?;
-        let mut object_data = Vec::with_capacity(total_size);
-        for part in &parts {
-            if let Some(part_data) = part_data.get(&part.part_number) {
-                object_data.extend_from_slice(part_data);
-            } else {
-                let part_path = self.part_path(bucket, upload_id, part.part_number);
-                let part_data = fs::read(&part_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to read part: {e}")))?;
-                object_data.extend_from_slice(&part_data);
-            }
+        if provider_metadata
+            .get(MULTIPART_MAX_OBJECT_SIZE_KEY)
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|maximum| total_size > maximum)
+        {
+            return Err(Error::EntityTooLarge);
         }
 
         // Compute final ETag: MD5(concat(part_etags)) + "-" + part_count
@@ -1127,18 +1291,76 @@ impl MultipartStore for FilesystemStorage {
         }
         let final_etag = format!("{:x}-{}", etag_hash.finalize(), parts.len());
 
+        // Assemble the completed object by streaming each part file
+        // straight into a scratch file, never holding more than one part's
+        // buffered copy in memory at a time — a multi-gigabyte object built
+        // from many parts must not be concatenated into a single in-memory
+        // buffer first.
+        let spool_path = self.spool_scratch_path(bucket);
+        if let Some(parent) = spool_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| Error::InternalError(format!("Failed to create spool dir: {e}")))?;
+        }
+        let assemble_result = (|| -> Result<()> {
+            let mut dest = fs::File::create(&spool_path)
+                .map_err(|e| Error::InternalError(format!("Failed to create spool file: {e}")))?;
+            for part in &parts {
+                let part_path = self.part_path(bucket, upload_id, part.part_number);
+                let mut src = fs::File::open(&part_path)
+                    .map_err(|e| Error::InternalError(format!("Failed to open part: {e}")))?;
+                std::io::copy(&mut src, &mut dest)
+                    .map_err(|e| Error::InternalError(format!("Failed to append part: {e}")))?;
+            }
+            dest.sync_all()
+                .map_err(|e| Error::InternalError(format!("Failed to sync spool file: {e}")))?;
+            Ok(())
+        })();
+        if assemble_result.is_err() {
+            let _ = fs::remove_file(&spool_path);
+            if let Some(parent) = spool_path.parent() {
+                let _ = fs::remove_dir(parent);
+            }
+        }
+        assemble_result?;
+
         // Save completed object
         let mut obj = Object::new_with_metadata_and_etag(
             key.clone(),
-            object_data,
+            Vec::new(),
             content_type.unwrap_or_else(|| "application/octet-stream".to_string()),
             metadata,
             final_etag.clone(),
         );
+        obj.size = total_size;
+        for (name, value) in &provider_metadata {
+            if !matches!(
+                name.as_str(),
+                MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY
+                    | MULTIPART_MAX_PART_SIZE_KEY
+                    | MULTIPART_MAX_OBJECT_SIZE_KEY
+                    | MULTIPART_TAGS_KEY
+                    | "storage_class"
+            ) {
+                obj.provider_metadata.insert(name.clone(), value.clone());
+            }
+        }
         if let Some(storage_class) = provider_metadata.get("storage_class") {
             obj.storage_class.clone_from(storage_class);
         }
-        self.put_object(bucket, key, obj)?;
+        if let Some(tags) = provider_metadata
+            .get(MULTIPART_TAGS_KEY)
+            .and_then(|value| serde_json::from_str::<HashMap<String, String>>(value).ok())
+        {
+            obj.tags = tags;
+        }
+        let put_result = self.put_object_streamed(bucket, key, obj, &spool_path);
+        if spool_path.exists() {
+            let _ = fs::remove_file(&spool_path);
+        }
+        if let Some(parent) = spool_path.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+        put_result?;
         {
             let mut cache = self
                 .uploads_cache
@@ -1603,6 +1825,83 @@ mod tests {
     }
 
     #[test]
+    fn should_preserve_common_prefixes_across_generic_delimiter_shapes() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "generic-delimiter";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        for key in ["docs/a.txt", "docs-b.txt"] {
+            storage
+                .put_object(
+                    bucket,
+                    key.to_string(),
+                    Object::new(key.to_string(), b"payload".to_vec(), "text/plain".into()),
+                )
+                .unwrap();
+        }
+
+        // Act
+        let slash = storage
+            .list_objects(bucket, Some("doc"), Some("/"), None, Some(10))
+            .unwrap();
+        let dash = storage
+            .list_objects(bucket, Some("docs"), Some("-"), None, Some(10))
+            .unwrap();
+
+        // Assert
+        assert_eq!(slash.common_prefixes, vec!["docs/".to_string()]);
+        assert_eq!(dash.common_prefixes, vec!["docs-".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_resume_generic_delimiter_listing_after_common_prefix_marker() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "generic-delimiter-page";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        for key in ["docs/a.txt", "docs/b.txt", "document.txt"] {
+            storage
+                .put_object(
+                    bucket,
+                    key.to_string(),
+                    Object::new(key.to_string(), b"payload".to_vec(), "text/plain".into()),
+                )
+                .unwrap();
+        }
+
+        // Act
+        let first = storage
+            .list_objects(bucket, Some("doc"), Some("/"), None, Some(1))
+            .unwrap();
+        let second = storage
+            .list_objects(
+                bucket,
+                Some("doc"),
+                Some("/"),
+                first.next_marker.as_deref(),
+                Some(1),
+            )
+            .unwrap();
+
+        // Assert
+        assert_eq!(first.common_prefixes, vec!["docs/".to_string()]);
+        assert!(first.objects.is_empty());
+        assert!(first.is_truncated);
+        assert_eq!(first.next_marker.as_deref(), Some("docs/"));
+        assert!(second.common_prefixes.is_empty());
+        assert_eq!(second.objects.len(), 1);
+        assert_eq!(second.objects[0].key, "document.txt");
+        assert!(!second.is_truncated);
+        assert!(second.next_marker.is_none());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn should_page_flat_object_listing_without_skipping_marker_boundary() {
         // Arrange
         let base = temp_path();
@@ -1686,6 +1985,58 @@ mod tests {
     }
 
     #[test]
+    fn should_assemble_multipart_object_from_disk_without_leftover_spool_files() {
+        // Arrange: several parts, each large enough that concatenating them
+        // in memory (the old behavior) would be a meaningfully sized
+        // allocation — completion must instead stream part files straight
+        // to the final blob.
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "multipart-stream-assemble-bucket";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        let upload = storage
+            .create_multipart_upload(bucket, "combined.bin".to_string())
+            .unwrap();
+
+        let part_payloads: Vec<Vec<u8>> = vec![
+            vec![1u8; 6 * 1024 * 1024],
+            vec![2u8; 6 * 1024 * 1024],
+            vec![3u8; 2 * 1024 * 1024],
+        ];
+        for (index, payload) in part_payloads.iter().enumerate() {
+            storage
+                .upload_part(
+                    bucket,
+                    &upload.upload_id,
+                    u32::try_from(index).expect("part index should fit in u32") + 1,
+                    payload.clone(),
+                )
+                .unwrap();
+        }
+
+        // Act
+        let etag = storage
+            .complete_multipart_upload(bucket, &upload.upload_id)
+            .unwrap();
+
+        // Assert: assembled content is the exact concatenation of the parts.
+        let stored = storage.get_object(bucket, "combined.bin").unwrap();
+        let expected: Vec<u8> = part_payloads.into_iter().flatten().collect();
+        assert_eq!(stored.data, expected);
+        assert_eq!(stored.size, expected.len() as u64);
+        assert!(etag.ends_with("-3"));
+
+        // No scratch directory should be left behind after completion, and it
+        // must not make an otherwise empty bucket undeletable.
+        let spool_dir = base.join(bucket).join(".spool");
+        assert!(!spool_dir.exists());
+        storage.delete_object(bucket, "combined.bin").unwrap();
+        storage.delete_bucket(bucket).unwrap();
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn should_compute_s3_multipart_etag_from_raw_part_md5_digests() {
         // Arrange
         let base = temp_path();
@@ -1711,6 +2062,79 @@ mod tests {
             etag
         );
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_complete_only_parts_selected_by_s3_manifest() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "multipart-selected-parts-bucket";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        let upload = storage
+            .create_multipart_upload(bucket, "selected.bin".to_string())
+            .unwrap();
+        let first = vec![b'a'; 5 * 1024 * 1024];
+        let omitted = b"not-selected".to_vec();
+        let final_part = b"selected-final".to_vec();
+        let first_etag = storage
+            .upload_part(bucket, &upload.upload_id, 1, first.clone())
+            .unwrap();
+        storage
+            .upload_part(bucket, &upload.upload_id, 2, omitted)
+            .unwrap();
+        let final_etag = storage
+            .upload_part(bucket, &upload.upload_id, 3, final_part.clone())
+            .unwrap();
+        let manifest = vec![(1, first_etag), (3, final_etag)];
+
+        // Act
+        storage
+            .complete_multipart_upload_with_parts(bucket, &upload.upload_id, &manifest)
+            .unwrap();
+
+        // Assert
+        let stored = storage.get_object(bucket, "selected.bin").unwrap();
+        let expected = [first, final_part].concat();
+        assert_eq!(stored.data, expected);
+        assert!(matches!(
+            storage.get_multipart_upload(bucket, &upload.upload_id),
+            Err(Error::NoSuchUpload)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_reject_streamed_s3_part_larger_than_five_gibibytes_before_moving_file() {
+        // Arrange
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket = "multipart-max-part-bucket";
+        storage.create_bucket(bucket.to_string()).unwrap();
+        let upload = storage
+            .create_multipart_upload(bucket, "large.bin".to_string())
+            .unwrap();
+        let payload_path = base.join("declared-oversized-part.tmp");
+        fs::write(&payload_path, b"small fixture").unwrap();
+
+        // Act
+        let result = storage.upload_part_streamed(
+            bucket,
+            &upload.upload_id,
+            1,
+            &payload_path,
+            S3_MAXIMUM_PART_SIZE + 1,
+            "etag".to_string(),
+        );
+
+        // Assert
+        assert!(matches!(result, Err(Error::EntityTooLarge)));
+        assert!(payload_path.exists());
+        assert!(storage
+            .list_parts(bucket, &upload.upload_id)
+            .unwrap()
+            .is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 

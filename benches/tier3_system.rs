@@ -59,6 +59,7 @@ fn direct_request(method: Method, uri: &str, body: &[u8]) -> RequestExt {
         body: Bytes::copy_from_slice(body),
         path_params: HashMap::new(),
         query_params,
+        spooled_body: None,
     }
 }
 

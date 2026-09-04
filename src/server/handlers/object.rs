@@ -156,7 +156,7 @@ pub async fn object_get(
     if req.has_query_param("uploadId") {
         let upload_id = req.query_param("uploadId").unwrap_or("");
         return Ok(object_parts_response(
-            &storage, bucket, key, upload_id, &req_id,
+            &storage, bucket, key, upload_id, req, &req_id,
         ));
     }
 
@@ -304,26 +304,78 @@ fn object_parts_response(
     bucket: &str,
     key: &str,
     upload_id: &str,
+    req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
-    match tokio::task::block_in_place(|| {
-        object_service::list_parts(storage.as_ref(), bucket, upload_id)
+    let mut upload = match tokio::task::block_in_place(|| {
+        object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
     }) {
-        Ok(parts) => {
-            let xml = xml_utils::list_parts_xml(bucket, key, upload_id, &parts);
-            ResponseBuilder::new(StatusCode::OK)
-                .content_type("application/xml; charset=utf-8")
-                .header("x-amz-request-id", req_id)
-                .body(xml.into_bytes())
-                .build()
-        }
-        Err(e) => xml_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "InternalError",
-            &e.to_string(),
-            req_id,
-        ),
+        Ok(upload) => upload,
+        Err(error) => return storage_error_response(&error, req_id),
+    };
+    if upload.key != key {
+        return upload_key_mismatch_response(req_id);
     }
+    let storage_class = upload
+        .provider_metadata
+        .get("storage_class")
+        .map_or("STANDARD", String::as_str);
+
+    let part_number_marker = match req.query_param("part-number-marker") {
+        Some(value) => match value.parse::<u32>() {
+            Ok(value) => value,
+            Err(_) => {
+                return xml_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidArgument",
+                    "part-number-marker must be a non-negative integer.",
+                    req_id,
+                );
+            }
+        },
+        None => 0,
+    };
+    let max_parts = match req.query_param("max-parts") {
+        Some(value) => match value.parse::<u32>() {
+            Ok(value) => usize::try_from(value.min(1_000)).unwrap_or(1_000),
+            Err(_) => {
+                return xml_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidArgument",
+                    "max-parts must be a non-negative integer.",
+                    req_id,
+                );
+            }
+        },
+        None => 1_000,
+    };
+
+    upload.parts.sort_unstable_by_key(|part| part.part_number);
+    let mut matching = upload
+        .parts
+        .into_iter()
+        .filter(|part| part.part_number > part_number_marker);
+    let parts = matching.by_ref().take(max_parts).collect::<Vec<_>>();
+    let is_truncated = matching.next().is_some();
+    let next_part_number_marker = is_truncated
+        .then(|| parts.last().map(|part| part.part_number))
+        .flatten();
+    let xml = xml_utils::list_parts_xml(&xml_utils::ListPartsXml {
+        bucket,
+        key,
+        upload_id,
+        storage_class,
+        part_number_marker,
+        next_part_number_marker,
+        max_parts,
+        is_truncated,
+        parts: &parts,
+    });
+    ResponseBuilder::new(StatusCode::OK)
+        .content_type("application/xml; charset=utf-8")
+        .header("x-amz-request-id", req_id)
+        .body(xml.into_bytes())
+        .build()
 }
 
 fn object_range_response(
@@ -500,15 +552,17 @@ pub async fn object_put(
     }
 
     if req.has_query_param("uploadId") && req.query_param("partNumber").is_some() {
-        if req.header("x-amz-copy-source").is_some() {
-            return Ok(xml_error_response(
-                StatusCode::NOT_IMPLEMENTED,
-                "NotImplemented",
-                "UploadPartCopy is not implemented by this emulator.",
+        if let Some(copy_source) = req.header("x-amz-copy-source") {
+            return Ok(upload_part_copy(
+                &storage,
+                bucket,
+                key,
+                copy_source,
+                req,
                 &req_id,
             ));
         }
-        return Ok(upload_multipart_part(&storage, bucket, req, &req_id));
+        return Ok(upload_multipart_part(&storage, bucket, key, req, &req_id));
     }
 
     if let Some(copy_source) = req.header("x-amz-copy-source") {
@@ -663,7 +717,11 @@ fn validate_content_md5(
             req_id,
         ));
     }
-    if decoded.as_slice() != md5::compute(&req.body).0 {
+    let actual = req
+        .spooled_body
+        .as_ref()
+        .map_or_else(|| md5::compute(&req.body).0, |spooled| spooled.md5);
+    if decoded.as_slice() != actual {
         return Some(xml_error_response(
             StatusCode::BAD_REQUEST,
             "BadDigest",
@@ -753,6 +811,7 @@ fn put_object_acl(
 fn upload_multipart_part(
     storage: &Arc<dyn Storage>,
     bucket: &str,
+    key: &str,
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
@@ -761,15 +820,33 @@ fn upload_multipart_part(
         .query_param("partNumber")
         .and_then(|part| part.parse::<u32>().ok())
         .unwrap_or(0);
+    let upload = match tokio::task::block_in_place(|| {
+        object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
+    }) {
+        Ok(upload) => upload,
+        Err(error) => return storage_error_response(&error, req_id),
+    };
+    if upload.key != key {
+        return upload_key_mismatch_response(req_id);
+    }
 
-    match tokio::task::block_in_place(|| {
-        object_service::upload_part(
+    match tokio::task::block_in_place(|| match &req.spooled_body {
+        Some(spooled) => object_service::upload_part_streamed(
+            storage.as_ref(),
+            bucket,
+            upload_id,
+            part_number,
+            &spooled.path,
+            spooled.len,
+            hex::encode(spooled.md5),
+        ),
+        None => object_service::upload_part(
             storage.as_ref(),
             bucket,
             upload_id,
             part_number,
             req.body.to_vec(),
-        )
+        ),
     }) {
         Ok(etag) => {
             let builder = ResponseBuilder::new(StatusCode::OK)
@@ -782,6 +859,118 @@ fn upload_multipart_part(
     }
 }
 
+fn upload_part_copy(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    copy_source: &str,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Response<Body> {
+    let upload_id = req.query_param("uploadId").unwrap_or("");
+    let part_number = req
+        .query_param("partNumber")
+        .and_then(|part| part.parse::<u32>().ok())
+        .unwrap_or(0);
+    let upload = match tokio::task::block_in_place(|| {
+        object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
+    }) {
+        Ok(upload) => upload,
+        Err(error) => return storage_error_response(&error, req_id),
+    };
+    if upload.key != key {
+        return upload_key_mismatch_response(req_id);
+    }
+
+    let (source_bucket, source_key, source_version_id) =
+        match parse_copy_source_header(copy_source, req_id) {
+            Ok(source) => source,
+            Err(response) => return *response,
+        };
+    if s3_foreign_history_conflict(storage.as_ref(), &source_bucket) {
+        return s3_foreign_history_conflict_response(req_id);
+    }
+    let source = match tokio::task::block_in_place(|| match source_version_id.as_deref() {
+        Some(version_id) => object_service::get_object_version(
+            storage.as_ref(),
+            &source_bucket,
+            &source_key,
+            version_id,
+        ),
+        None => object_service::get_object(storage.as_ref(), &source_bucket, &source_key),
+    }) {
+        Ok(source) => source,
+        Err(crate::error::Error::KeyNotFound | crate::error::Error::NoSuchVersion) => {
+            return xml_error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchKey",
+                "Copy source not found",
+                req_id,
+            );
+        }
+        Err(error) => return storage_error_response(&error, req_id),
+    };
+    if is_s3_delete_marker(&source) {
+        return xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "The source of a copy request may not refer to a delete marker.",
+            req_id,
+        );
+    }
+    if let Some(response) = check_copy_conditionals(req, &source, req_id) {
+        return response;
+    }
+
+    let data = match req.header("x-amz-copy-source-range") {
+        Some(value) => {
+            let Some((start, end)) = parse_range(value) else {
+                return xml_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidArgument",
+                    "Invalid x-amz-copy-source-range value.",
+                    req_id,
+                );
+            };
+            let source_len = source.data.len() as u64;
+            let end = end.unwrap_or_else(|| source_len.saturating_sub(1));
+            if start >= source_len || end < start {
+                return xml_error_response(
+                    StatusCode::RANGE_NOT_SATISFIABLE,
+                    "InvalidRange",
+                    "The requested range is not satisfiable.",
+                    req_id,
+                );
+            }
+            let end = end.min(source_len - 1);
+            let start = usize::try_from(start).expect("validated source offset should fit usize");
+            let end = usize::try_from(end).expect("validated source offset should fit usize");
+            source.data[start..=end].to_vec()
+        }
+        None => source.data.clone(),
+    };
+    match tokio::task::block_in_place(|| {
+        object_service::upload_part(storage.as_ref(), bucket, upload_id, part_number, data)
+    }) {
+        Ok(etag) => {
+            let xml = format!(
+                "{}\n<CopyPartResult><LastModified>{}</LastModified><ETag>{}</ETag></CopyPartResult>",
+                xml_utils::xml_declaration(),
+                chrono::Utc::now().to_rfc3339(),
+                quoted_etag(&etag)
+            );
+            let builder = ResponseBuilder::new(StatusCode::OK)
+                .content_type("application/xml; charset=utf-8")
+                .header("x-amz-request-id", req_id)
+                .header("x-amz-id-2", &header_utils::generate_request_id());
+            cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder)
+                .body(xml.into_bytes())
+                .build()
+        }
+        Err(error) => storage_error_response(&error, req_id),
+    }
+}
+
 fn copy_object(
     storage: &Arc<dyn Storage>,
     bucket: &str,
@@ -790,35 +979,11 @@ fn copy_object(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
-    let copy_source = copy_source.trim_start_matches('/');
-    let Some((source_bucket, source_key_and_query)) = copy_source.split_once('/') else {
-        return xml_error_response(
-            StatusCode::BAD_REQUEST,
-            "InvalidArgument",
-            "Invalid copy source format",
-            req_id,
-        );
-    };
-    let (source_key, source_version_id) = source_key_and_query.split_once('?').map_or(
-        (source_key_and_query, None),
-        |(key, query)| {
-            let version_id = query.split('&').find_map(|parameter| {
-                let (name, value) = parameter.split_once('=')?;
-                (name == "versionId").then_some(value)
-            });
-            (key, version_id)
-        },
-    );
-    let decode = |value: &str| crate::utils::request::decode_uri_path(value).map_err(|_| ());
-    let Ok(source_bucket) = decode(source_bucket) else {
-        return invalid_copy_source_encoding_response(req_id);
-    };
-    let Ok(source_key) = decode(source_key) else {
-        return invalid_copy_source_encoding_response(req_id);
-    };
-    let Ok(source_version_id) = source_version_id.map(decode).transpose() else {
-        return invalid_copy_source_encoding_response(req_id);
-    };
+    let (source_bucket, source_key, source_version_id) =
+        match parse_copy_source_header(copy_source, req_id) {
+            Ok(source) => source,
+            Err(response) => return *response,
+        };
 
     if s3_foreign_history_conflict(storage.as_ref(), &source_bucket) {
         return s3_foreign_history_conflict_response(req_id);
@@ -844,6 +1009,45 @@ fn copy_object(
         }
         Err(err) => internal_error_response(&err, req_id),
     }
+}
+
+type ParsedCopySource = (String, String, Option<String>);
+
+#[allow(clippy::result_large_err)]
+fn parse_copy_source_header(
+    copy_source: &str,
+    req_id: &str,
+) -> Result<ParsedCopySource, Box<Response<Body>>> {
+    let copy_source = copy_source.trim_start_matches('/');
+    let Some((source_bucket, source_key_and_query)) = copy_source.split_once('/') else {
+        return Err(Box::new(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidArgument",
+            "Invalid copy source format",
+            req_id,
+        )));
+    };
+    let (source_key, source_version_id) = source_key_and_query.split_once('?').map_or(
+        (source_key_and_query, None),
+        |(key, query)| {
+            let version_id = query.split('&').find_map(|parameter| {
+                let (name, value) = parameter.split_once('=')?;
+                (name == "versionId").then_some(value)
+            });
+            (key, version_id)
+        },
+    );
+    let decode = |value: &str| crate::utils::request::decode_uri_path(value).map_err(|_| ());
+    let Ok(source_bucket) = decode(source_bucket) else {
+        return Err(Box::new(invalid_copy_source_encoding_response(req_id)));
+    };
+    let Ok(source_key) = decode(source_key) else {
+        return Err(Box::new(invalid_copy_source_encoding_response(req_id)));
+    };
+    let Ok(source_version_id) = source_version_id.map(decode).transpose() else {
+        return Err(Box::new(invalid_copy_source_encoding_response(req_id)));
+    };
+    Ok((source_bucket, source_key, source_version_id))
 }
 
 fn invalid_copy_source_encoding_response(req_id: &str) -> Response<Body> {
@@ -1032,10 +1236,11 @@ fn copy_object_response(
     etag: &str,
     last_modified: chrono::DateTime<chrono::Utc>,
 ) -> Response<Body> {
-    let stored_version_id =
-        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
-            .ok()
-            .and_then(|obj| obj.version_id);
+    let stored_version_id = tokio::task::block_in_place(|| {
+        object_service::get_object_metadata(storage.as_ref(), bucket, key)
+    })
+    .ok()
+    .and_then(|obj| obj.version_id);
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -1080,12 +1285,27 @@ fn put_object_body(
         .header("content-type")
         .unwrap_or("application/octet-stream");
     let metadata = header_utils::extract_metadata_from_http_headers(req);
-    let mut obj = crate::models::Object::new_with_metadata(
-        key.to_string(),
-        req.body.to_vec(),
-        content_type.to_string(),
-        metadata,
-    );
+    let mut obj = match &req.spooled_body {
+        // The body already lives on disk at `spooled.path`; keep `data`
+        // empty here rather than reading it back into memory, and carry
+        // the precomputed digest as the object's ETag.
+        Some(spooled) => crate::models::Object::new_with_metadata_and_etag(
+            key.to_string(),
+            Vec::new(),
+            content_type.to_string(),
+            metadata,
+            hex::encode(spooled.md5),
+        ),
+        None => crate::models::Object::new_with_metadata(
+            key.to_string(),
+            req.body.to_vec(),
+            content_type.to_string(),
+            metadata,
+        ),
+    };
+    if let Some(spooled) = &req.spooled_body {
+        obj.size = spooled.len;
+    }
     if let Some(existing) = existing {
         obj.provider_metadata
             .clone_from(&existing.provider_metadata);
@@ -1156,11 +1376,41 @@ fn store_put_object(
     let obj_key = obj.key.clone();
     let etag = obj.etag.clone();
     let condition = mutation_condition(req);
-    match tokio::task::block_in_place(|| match condition {
-        Some(condition) => storage
+    let spooled_path = req
+        .spooled_body
+        .as_ref()
+        .map(|spooled| spooled.path.clone());
+    match tokio::task::block_in_place(|| match (condition, spooled_path) {
+        // A conditional write still needs the payload bytes resident in
+        // `obj.data` (there is no conditional variant of the streaming
+        // write path) — read the spooled file back in for this less common
+        // combination rather than adding another storage-trait method for
+        // it. An unconditional write, the common case for a large upload,
+        // never pays this cost.
+        (Some(condition), Some(payload_path)) => {
+            let mut obj = obj;
+            match std::fs::read(&payload_path) {
+                Ok(data) => {
+                    let _ = std::fs::remove_file(&payload_path);
+                    obj.data = data;
+                    storage
+                        .put_object_if(bucket, obj_key, obj, &condition)
+                        .map(Some)
+                }
+                Err(error) => Err(crate::error::Error::InternalError(format!(
+                    "Failed to read spooled payload: {error}"
+                ))),
+            }
+        }
+        (Some(condition), None) => storage
             .put_object_if(bucket, obj_key, obj, &condition)
             .map(Some),
-        None => object_service::put_object(storage.as_ref(), bucket, obj_key, obj).map(|()| None),
+        (None, Some(payload_path)) => storage
+            .put_object_streamed(bucket, obj_key, obj, &payload_path)
+            .map(|()| None),
+        (None, None) => {
+            object_service::put_object(storage.as_ref(), bucket, obj_key, obj).map(|()| None)
+        }
     }) {
         Ok(Some(false)) => helpers::precondition_failed_response(req_id),
         Ok(Some(true) | None) => put_object_response(storage, bucket, key, req, req_id, &etag),
@@ -1176,10 +1426,11 @@ fn put_object_response(
     req_id: &str,
     etag: &str,
 ) -> Response<Body> {
-    let stored_version_id =
-        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
-            .ok()
-            .and_then(|obj| obj.version_id);
+    let stored_version_id = tokio::task::block_in_place(|| {
+        object_service::get_object_metadata(storage.as_ref(), bucket, key)
+    })
+    .ok()
+    .and_then(|obj| obj.version_id);
     let builder = add_version_header(
         ResponseBuilder::new(StatusCode::OK)
             .header("Content-Length", "0")
@@ -1250,6 +1501,82 @@ mod tests {
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
         })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_build_write_responses_from_metadata_without_reading_object_payload() {
+        // Arrange
+        let base = std::env::temp_dir().join(format!(
+            "sqrzl-response-metadata-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&base).unwrap();
+        let concrete = FilesystemStorage::new(&base);
+        concrete.create_bucket("bucket".to_string()).unwrap();
+        concrete.enable_versioning("bucket").unwrap();
+        concrete
+            .put_object(
+                "bucket",
+                "large.bin".to_string(),
+                Object::new(
+                    "large.bin".to_string(),
+                    b"payload".to_vec(),
+                    "application/octet-stream".to_string(),
+                ),
+            )
+            .unwrap();
+        let version_id = concrete
+            .get_object("bucket", "large.bin")
+            .unwrap()
+            .version_id
+            .expect("versioned object should have an id");
+        let bucket_dir = fs::read_dir(&base)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.is_dir() && path.join(".bucket.name").exists())
+            .expect("bucket directory should exist");
+        let object_dir = fs::read_dir(bucket_dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.join("object.meta.json").exists())
+            .expect("object directory should exist");
+        let blob_path = object_dir.join("object.blob");
+        fs::remove_file(&blob_path).unwrap();
+        fs::create_dir(&blob_path).unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(concrete);
+        let request = parsed_request(&[]).await;
+
+        // Act
+        let put = put_object_response(
+            &storage,
+            "bucket",
+            "large.bin",
+            &request,
+            "req-metadata-put",
+            "etag",
+        );
+        let complete = complete_multipart_upload_response(
+            &storage,
+            "bucket",
+            "large.bin",
+            &request,
+            "req-metadata-complete",
+            "etag-1",
+        );
+
+        // Assert
+        for response in [put, complete] {
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-amz-version-id")
+                    .and_then(|value| value.to_str().ok()),
+                Some(version_id.as_str())
+            );
+        }
+        let _ = fs::remove_dir_all(&base);
     }
 
     async fn parsed_request(headers: &[(&str, &str)]) -> RequestExt {
@@ -2285,17 +2612,13 @@ fn complete_multipart_upload_request(
             req_id,
         );
     }
-    if manifest.len() != upload.parts.len() {
-        return xml_error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "NotImplemented",
-            "Completing a selected subset of uploaded parts is not supported.",
-            req_id,
-        );
-    }
-
     match tokio::task::block_in_place(|| {
-        object_service::complete_multipart_upload(storage.as_ref(), bucket, upload_id)
+        object_service::complete_multipart_upload_with_parts(
+            storage.as_ref(),
+            bucket,
+            upload_id,
+            &manifest,
+        )
     }) {
         Ok(etag) => complete_multipart_upload_response(storage, bucket, key, req, req_id, &etag),
         Err(err) => storage_error_response(&err, req_id),
@@ -2311,10 +2634,11 @@ fn complete_multipart_upload_response(
     etag: &str,
 ) -> Response<Body> {
     let xml = xml_utils::complete_multipart_upload_xml(bucket, key, etag);
-    let stored_version_id =
-        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
-            .ok()
-            .and_then(|obj| obj.version_id);
+    let stored_version_id = tokio::task::block_in_place(|| {
+        object_service::get_object_metadata(storage.as_ref(), bucket, key)
+    })
+    .ok()
+    .and_then(|obj| obj.version_id);
     let builder = add_version_header(
         ResponseBuilder::new(StatusCode::OK)
             .content_type("application/xml; charset=utf-8")
@@ -2343,19 +2667,49 @@ fn initiate_multipart_upload_request(
         );
     }
 
+    let tags = match parse_optional_tagging_header(req, req_id) {
+        Ok(tags) => tags,
+        Err(message) => {
+            return xml_error_response(StatusCode::BAD_REQUEST, "InvalidTag", &message, req_id);
+        }
+    };
+    let content_type = req.header("content-type").map(str::to_string);
+    let metadata = header_utils::extract_metadata_from_http_headers(req);
+    let mut template = crate::models::Object::new_with_metadata(
+        key.to_string(),
+        Vec::new(),
+        content_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
+        metadata.clone(),
+    );
+    if let Err(response) = apply_s3_request_contracts(req, &mut template, req_id) {
+        return response;
+    }
+    if let Some(storage_class) = req.header("x-amz-storage-class") {
+        template
+            .provider_metadata
+            .insert("storage_class".to_string(), storage_class.to_string());
+    }
+    if let Some(tags) = tags {
+        let encoded = serde_json::to_string(&tags).unwrap_or_else(|_| "{}".to_string());
+        template
+            .provider_metadata
+            .insert(crate::storage::MULTIPART_TAGS_KEY.to_string(), encoded);
+    }
+
     match tokio::task::block_in_place(|| {
-        object_service::create_multipart_upload(storage.as_ref(), bucket, key.to_string())
+        object_service::create_s3_multipart_upload_with_metadata(
+            storage.as_ref(),
+            bucket,
+            key.to_string(),
+            content_type,
+            metadata,
+            template.provider_metadata,
+        )
     }) {
         Ok(upload) => {
-            let xml = format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
-<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-    <Bucket>{bucket}</Bucket>
-    <Key>{}</Key>
-    <UploadId>{}</UploadId>
-</InitiateMultipartUploadResult>"#,
-                upload.key, upload.upload_id
-            );
+            let xml = xml_utils::initiate_multipart_xml(bucket, &upload.key, &upload.upload_id);
             let builder = ResponseBuilder::new(StatusCode::OK)
                 .content_type("application/xml; charset=utf-8")
                 .header("x-amz-request-id", req_id)
@@ -4406,7 +4760,7 @@ mod s3_contract_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn should_reject_upload_part_copy_without_storing_an_empty_part() {
+    async fn should_store_source_bytes_for_upload_part_copy() {
         // Arrange
         let storage = temp_storage();
         storage.create_bucket("bucket".to_string()).unwrap();
@@ -4446,21 +4800,22 @@ mod s3_contract_tests {
             "req-upload-part-copy".to_string(),
         )
         .await
-        .expect("unsupported UploadPartCopy should respond");
+        .expect("UploadPartCopy should respond");
 
         // Assert
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::OK);
         let body = response
             .into_body()
             .collect()
             .await
-            .expect("unsupported UploadPartCopy response should read")
+            .expect("UploadPartCopy response should read")
             .to_bytes();
-        assert!(String::from_utf8_lossy(&body).contains("NotImplemented"));
-        assert!(storage
+        assert!(String::from_utf8_lossy(&body).contains("CopyPartResult"));
+        let parts = storage
             .list_parts("bucket", &upload.upload_id)
-            .expect("upload session should remain readable")
-            .is_empty());
+            .expect("upload session should remain readable");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].size, b"source bytes".len() as u64);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -150,6 +150,39 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn should_sort_sigv4_canonical_headers_by_header_name() {
+        // Arrange
+        let req = parsed_request(
+            "http://localhost/bucket/destination?uploadId=upload&partNumber=1",
+            &[
+                ("Host", "localhost"),
+                ("x-amz-copy-source-range", "bytes=0-10"),
+                ("x-amz-copy-source", "bucket/source"),
+                ("x-amz-content-sha256", "UNSIGNED-PAYLOAD"),
+            ],
+        )
+        .await;
+
+        // Act
+        let canonical = build_canonical_request(
+            &req,
+            &[
+                "x-amz-copy-source-range".to_string(),
+                "host".to_string(),
+                "x-amz-copy-source".to_string(),
+                "x-amz-content-sha256".to_string(),
+            ],
+        );
+
+        // Assert
+        assert!(canonical.contains(
+            "host:localhost\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-copy-source:bucket/source\nx-amz-copy-source-range:bytes=0-10"
+        ));
+        assert!(canonical
+            .contains("host;x-amz-content-sha256;x-amz-copy-source;x-amz-copy-source-range"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn should_authorize_authenticated_requests_via_explicit_acl_group_grants() {
         let storage = temp_storage();
         storage.create_bucket("bucket".to_string()).unwrap();
@@ -203,11 +236,17 @@ mod tests {
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
         };
 
-        let allowed_req = parsed_request(
-            "http://localhost/bucket/notes.txt?X-Amz-Credential=integration-tester%2F20240101%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=test-signature",
-            &[],
-        )
-        .await;
+        let presigned_url = crate::auth::PresignedUrl::generate_get_url(
+            "bucket",
+            "notes.txt",
+            300,
+            "http://localhost",
+            &crate::auth::PresignedUrlConfig {
+                access_key: "integration-tester".to_string(),
+                secret_key: "secret".to_string(),
+            },
+        );
+        let allowed_req = parsed_request(&presigned_url, &[("host", "localhost")]).await;
         let denied_req = parsed_request("http://localhost/bucket/notes.txt", &[]).await;
 
         let allowed = check_authorization(
@@ -269,9 +308,6 @@ pub(crate) fn verify_presigned_url(
         query_params,
     ) {
         Ok(presigned) => {
-            // Get the host from request headers
-            let host = req.header("host").unwrap_or("localhost:9000").to_string();
-
             // Get secret key for validation
             let Some(secret_key) = auth_config.secret_key() else {
                 warn!("Presigned URL validation requested but no secret key configured");
@@ -287,7 +323,7 @@ pub(crate) fn verify_presigned_url(
             };
 
             // Validate the presigned URL
-            if let Err(e) = presigned.validate(&host, &presigned_config) {
+            if let Err(e) = presigned.validate_request(req, &presigned_config) {
                 warn!("Presigned URL validation failed: {}", e);
                 return Err(xml_error_response(
                     StatusCode::FORBIDDEN,

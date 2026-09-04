@@ -127,6 +127,24 @@ impl AdapterRegistry {
         Err("No provider adapter matched the request".to_string())
     }
 
+    /// Name of the adapter that [`Self::handle`] would dispatch this
+    /// request to, decided from the method/URI/headers alone (before any
+    /// body is read) — the same precedence [`Self::render_payload_too_large`]
+    /// and [`Self::render_incomplete_body`] use. `None` when no adapter's
+    /// [`ProviderAdapter::matches_request_head`] recognizes it (some
+    /// adapters only implement the body-aware [`ProviderAdapter::matches`]).
+    pub(crate) fn resolve_by_head(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        headers: &HeaderMap,
+    ) -> Option<&'static str> {
+        self.adapters
+            .iter()
+            .find(|adapter| adapter.matches_request_head(method, uri, headers))
+            .map(|adapter| adapter.name())
+    }
+
     pub fn render_payload_too_large(
         &self,
         method: &Method,
@@ -160,9 +178,13 @@ impl AdapterRegistry {
 }
 
 pub(crate) fn content_length_mismatch(req: &Request) -> bool {
+    let actual_len = req
+        .spooled_body
+        .as_ref()
+        .map_or_else(|| req.body.len() as u64, |spooled| spooled.len);
     req.header("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .is_some_and(|declared| declared != req.body.len())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|declared| declared != actual_len)
 }
 
 #[cfg(test)]

@@ -517,41 +517,103 @@ pub fn initiate_multipart_xml(bucket: &str, key: &str, upload_id: &str) -> Strin
     )
 }
 
-/// List multipart uploads response
+/// Values rendered by an S3 `ListMultipartUploads` response.
+pub struct ListMultipartUploadsXml<'a> {
+    pub uploads: &'a [MultipartUpload],
+    pub common_prefixes: &'a [String],
+    pub bucket: &'a str,
+    pub key_marker: Option<&'a str>,
+    pub upload_id_marker: Option<&'a str>,
+    pub next_key_marker: Option<&'a str>,
+    pub next_upload_id_marker: Option<&'a str>,
+    pub prefix: &'a str,
+    pub delimiter: Option<&'a str>,
+    pub encoding_type: Option<&'a str>,
+    pub max_uploads: usize,
+    pub is_truncated: bool,
+}
+
+/// List multipart uploads response.
 #[must_use]
-pub fn list_multipart_uploads_xml(uploads: &[MultipartUpload], bucket: &str) -> String {
+pub fn list_multipart_uploads_xml(result: &ListMultipartUploadsXml<'_>) -> String {
     let mut xml = format!(
         r#"{}
 <ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Bucket>{}</Bucket>
-  <Uploads>"#,
+  <KeyMarker>{}</KeyMarker>
+  <UploadIdMarker>{}</UploadIdMarker>
+  <Prefix>{}</Prefix>"#,
         xml_declaration(),
-        escape_xml(bucket)
+        escape_xml(result.bucket),
+        render_v2_value(result.key_marker.unwrap_or(""), result.encoding_type),
+        escape_xml(result.upload_id_marker.unwrap_or("")),
+        render_v2_value(result.prefix, result.encoding_type)
     );
 
-    for upload in uploads {
+    if let Some(next_key_marker) = result.next_key_marker {
+        let _ = write!(
+            xml,
+            "\n  <NextKeyMarker>{}</NextKeyMarker>",
+            render_v2_value(next_key_marker, result.encoding_type)
+        );
+    }
+    if let Some(next_upload_id_marker) = result.next_upload_id_marker {
+        let _ = write!(
+            xml,
+            "\n  <NextUploadIdMarker>{}</NextUploadIdMarker>",
+            escape_xml(next_upload_id_marker)
+        );
+    }
+    if let Some(delimiter) = result.delimiter {
+        let _ = write!(
+            xml,
+            "\n  <Delimiter>{}</Delimiter>",
+            render_v2_value(delimiter, result.encoding_type)
+        );
+    }
+    if matches!(result.encoding_type, Some(value) if value.eq_ignore_ascii_case("url")) {
+        xml.push_str("\n  <EncodingType>url</EncodingType>");
+    }
+    let _ = write!(
+        xml,
+        "\n  <MaxUploads>{}</MaxUploads>\n  <IsTruncated>{}</IsTruncated>",
+        result.max_uploads,
+        if result.is_truncated { "true" } else { "false" }
+    );
+
+    for upload in result.uploads {
         let initiated = upload.initiated.to_rfc3339();
+        let storage_class = upload
+            .provider_metadata
+            .get("storage_class")
+            .map_or("STANDARD", String::as_str);
         let _ = write!(
             xml,
             r"
-    <Upload>
-      <Key>{}</Key>
-      <UploadId>{}</UploadId>
-      <Initiated>{}</Initiated>
-      <StorageClass>STANDARD</StorageClass>
-    </Upload>",
-            escape_xml(&upload.key),
+  <Upload>
+    <Key>{}</Key>
+    <UploadId>{}</UploadId>
+    <Initiator><ID>sqrzl-emulator</ID><DisplayName>Sqrzl Emulator</DisplayName></Initiator>
+    <Owner><ID>sqrzl-emulator</ID><DisplayName>Sqrzl Emulator</DisplayName></Owner>
+    <Initiated>{}</Initiated>
+    <StorageClass>{}</StorageClass>
+  </Upload>",
+            render_v2_value(&upload.key, result.encoding_type),
             escape_xml(&upload.upload_id),
-            initiated
+            initiated,
+            escape_xml(storage_class)
         );
     }
 
-    xml.push_str(
-        r"
-  </Uploads>
-  <IsTruncated>false</IsTruncated>
-</ListMultipartUploadsResult>",
-    );
+    for prefix in result.common_prefixes {
+        let _ = write!(
+            xml,
+            "\n  <CommonPrefixes><Prefix>{}</Prefix></CommonPrefixes>",
+            render_v2_value(prefix, result.encoding_type)
+        );
+    }
+
+    xml.push_str("\n</ListMultipartUploadsResult>");
 
     xml
 }
@@ -682,33 +744,64 @@ const AUTHENTICATED_USERS_READ_GRANT: &str = r#"
             <Permission>READ</Permission>
         </Grant>"#;
 
-/// List parts response
+/// Values rendered by an S3 `ListParts` response.
+pub struct ListPartsXml<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub upload_id: &'a str,
+    pub storage_class: &'a str,
+    pub part_number_marker: u32,
+    pub next_part_number_marker: Option<u32>,
+    pub max_parts: usize,
+    pub is_truncated: bool,
+    pub parts: &'a [Part],
+}
+
+/// List parts response.
 #[must_use]
-pub fn list_parts_xml(bucket: &str, key: &str, upload_id: &str, parts: &[Part]) -> String {
+pub fn list_parts_xml(result: &ListPartsXml<'_>) -> String {
     let mut xml = format!(
         r#"{}
 <ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Bucket>{}</Bucket>
   <Key>{}</Key>
   <UploadId>{}</UploadId>
-  <Parts>"#,
+  <Initiator><ID>sqrzl-emulator</ID><DisplayName>Sqrzl Emulator</DisplayName></Initiator>
+  <Owner><ID>sqrzl-emulator</ID><DisplayName>Sqrzl Emulator</DisplayName></Owner>
+  <StorageClass>{}</StorageClass>
+  <PartNumberMarker>{}</PartNumberMarker>"#,
         xml_declaration(),
-        escape_xml(bucket),
-        escape_xml(key),
-        escape_xml(upload_id)
+        escape_xml(result.bucket),
+        escape_xml(result.key),
+        escape_xml(result.upload_id),
+        escape_xml(result.storage_class),
+        result.part_number_marker
     );
 
-    for part in parts {
+    if let Some(next_marker) = result.next_part_number_marker {
+        let _ = write!(
+            xml,
+            "\n  <NextPartNumberMarker>{next_marker}</NextPartNumberMarker>"
+        );
+    }
+    let _ = write!(
+        xml,
+        "\n  <MaxParts>{}</MaxParts>\n  <IsTruncated>{}</IsTruncated>",
+        result.max_parts,
+        if result.is_truncated { "true" } else { "false" }
+    );
+
+    for part in result.parts {
         let modified = part.last_modified.to_rfc3339();
         let _ = write!(
             xml,
             r#"
-    <Part>
-      <PartNumber>{}</PartNumber>
-      <LastModified>{}</LastModified>
-      <ETag>"{}"</ETag>
-      <Size>{}</Size>
-    </Part>"#,
+  <Part>
+    <PartNumber>{}</PartNumber>
+    <LastModified>{}</LastModified>
+    <ETag>"{}"</ETag>
+    <Size>{}</Size>
+  </Part>"#,
             part.part_number,
             modified,
             escape_xml(&part.etag),
@@ -716,12 +809,7 @@ pub fn list_parts_xml(bucket: &str, key: &str, upload_id: &str, parts: &[Part]) 
         );
     }
 
-    xml.push_str(
-        r"
-  </Parts>
-  <IsTruncated>false</IsTruncated>
-</ListPartsResult>",
-    );
+    xml.push_str("\n</ListPartsResult>");
 
     xml
 }
@@ -875,6 +963,48 @@ fn escape_xml(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::policy::{Grantee, Permission};
+
+    #[test]
+    fn should_render_initiated_storage_class_in_multipart_listings() {
+        // Arrange
+        let upload = MultipartUpload::new(
+            "large.bin".to_string(),
+            None,
+            HashMap::new(),
+            HashMap::from([("storage_class".to_string(), "STANDARD_IA".to_string())]),
+        );
+
+        // Act
+        let uploads_xml = list_multipart_uploads_xml(&ListMultipartUploadsXml {
+            uploads: std::slice::from_ref(&upload),
+            common_prefixes: &[],
+            bucket: "bucket",
+            key_marker: None,
+            upload_id_marker: None,
+            next_key_marker: None,
+            next_upload_id_marker: None,
+            prefix: "",
+            delimiter: None,
+            encoding_type: None,
+            max_uploads: 1_000,
+            is_truncated: false,
+        });
+        let parts_xml = list_parts_xml(&ListPartsXml {
+            bucket: "bucket",
+            key: &upload.key,
+            upload_id: &upload.upload_id,
+            storage_class: "STANDARD_IA",
+            part_number_marker: 0,
+            next_part_number_marker: None,
+            max_parts: 1_000,
+            is_truncated: false,
+            parts: &[],
+        });
+
+        // Assert
+        assert!(uploads_xml.contains("<StorageClass>STANDARD_IA</StorageClass>"));
+        assert!(parts_xml.contains("<StorageClass>STANDARD_IA</StorageClass>"));
+    }
 
     fn fixed_bucket(name: &str, created_at: &str) -> Bucket {
         Bucket {

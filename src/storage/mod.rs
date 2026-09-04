@@ -1,6 +1,7 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::{Bucket, ListObjectsResult, MultipartUpload, Object};
 use std::collections::HashMap;
+use std::path::Path;
 
 pub mod filesystem;
 pub mod indexed;
@@ -9,6 +10,15 @@ pub mod lockfree_index;
 pub use filesystem::FilesystemStorage;
 pub use indexed::IndexedStorage;
 pub use lockfree_index::{DirectoryEntry, DirectoryEntryKind, LockFreeIndex};
+
+pub(crate) const MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY: &str =
+    "__sqrzl_multipart_min_non_final_part_size";
+pub(crate) const MULTIPART_MAX_PART_SIZE_KEY: &str = "__sqrzl_multipart_max_part_size";
+pub(crate) const MULTIPART_MAX_OBJECT_SIZE_KEY: &str = "__sqrzl_multipart_max_object_size";
+pub(crate) const MULTIPART_TAGS_KEY: &str = "__sqrzl_multipart_tags";
+pub(crate) const S3_MINIMUM_NON_FINAL_PART_SIZE: u64 = 5 * 1024 * 1024;
+pub(crate) const S3_MAXIMUM_PART_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+pub(crate) const S3_MAXIMUM_OBJECT_SIZE: u64 = S3_MAXIMUM_PART_SIZE * 10_000;
 
 /// A predicate evaluated while holding the per-object mutation lock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +112,18 @@ pub trait ObjectStore: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object>;
+    /// Reads an object's persisted attributes without loading its payload bytes.
+    ///
+    /// The default implementation preserves compatibility for backends without
+    /// a metadata-specific read path, but may materialize the payload. Backends
+    /// that store payload and metadata separately should override it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
+    fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<Object> {
+        self.get_object(bucket, key)
+    }
     ///
     /// # Errors
     ///
@@ -144,6 +166,34 @@ pub trait ObjectStore: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool>;
+    /// Persists `object` with its payload read from `payload_path` (a file
+    /// already fully written to disk) rather than from `object.data`, so a
+    /// backend that supports it can move the file into place instead of
+    /// buffering the whole payload in memory. `object.size` and
+    /// `object.etag` must already reflect the file's contents; `object.data`
+    /// is ignored.
+    ///
+    /// The default implementation is a correctness fallback only — it reads
+    /// `payload_path` fully into memory and delegates to [`Self::put_object`],
+    /// so it does not itself avoid buffering. Backends that can move or
+    /// stream the file directly (e.g. [`crate::storage::FilesystemStorage`])
+    /// should override this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `payload_path` cannot be read or the write fails.
+    fn put_object_streamed(
+        &self,
+        bucket: &str,
+        key: String,
+        mut object: Object,
+        payload_path: &Path,
+    ) -> Result<()> {
+        object.data = std::fs::read(payload_path)
+            .map_err(|e| Error::InternalError(format!("Failed to read spooled payload: {e}")))?;
+        let _ = std::fs::remove_file(payload_path);
+        self.put_object(bucket, key, object)
+    }
 }
 
 /// Object listing semantics, including delimiter and marker pagination behavior.
@@ -212,11 +262,63 @@ pub trait MultipartStore: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn complete_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<String>;
+    /// Completes a multipart upload using only the ordered parts in the S3
+    /// completion manifest. Parts uploaded but omitted from `parts` are
+    /// discarded after the completed object is committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a selected part is missing, its `ETag` changed, or
+    /// the completed object violates provider size constraints.
+    fn complete_multipart_upload_with_parts(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+    ) -> Result<String> {
+        let upload = self.get_multipart_upload(bucket, upload_id)?;
+        let all_parts = upload
+            .parts
+            .iter()
+            .map(|part| (part.part_number, part.etag.clone()))
+            .collect::<Vec<_>>();
+        if parts != all_parts {
+            return Err(Error::IncompleteMultipartUpload);
+        }
+        self.complete_multipart_upload(bucket, upload_id)
+    }
     ///
     /// # Errors
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()>;
+    /// Stores a part with its bytes read from `payload_path` (a file already
+    /// fully written to disk) rather than passed in memory as `Vec<u8>`.
+    /// `len` and `etag` must already reflect the file's contents.
+    ///
+    /// The default implementation is a correctness fallback only — it reads
+    /// `payload_path` fully into memory and delegates to [`Self::upload_part`]
+    /// (recomputing the `ETag` from those bytes), so it does not itself avoid
+    /// buffering. Backends that can move or stream the file directly (e.g.
+    /// [`crate::storage::FilesystemStorage`]) should override this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `payload_path` cannot be read or the write fails.
+    fn upload_part_streamed(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        payload_path: &Path,
+        _len: u64,
+        _etag: String,
+    ) -> Result<String> {
+        let data = std::fs::read(payload_path)
+            .map_err(|e| Error::InternalError(format!("Failed to read spooled payload: {e}")))?;
+        let _ = std::fs::remove_file(payload_path);
+        self.upload_part(bucket, upload_id, part_number, data)
+    }
 }
 
 /// Bucket versioning and object-version operations.
@@ -451,6 +553,14 @@ pub trait Storage: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object>;
+    /// Reads object attributes without requiring payload bytes when supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying emulator operation fails.
+    fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<Object> {
+        self.get_object(bucket, key)
+    }
     ///
     /// # Errors
     ///
@@ -492,6 +602,18 @@ pub trait Storage: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool>;
+    /// See [`ObjectStore::put_object_streamed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `payload_path` cannot be read or the write fails.
+    fn put_object_streamed(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+    ) -> Result<()>;
     ///
     /// # Errors
     ///
@@ -553,11 +675,36 @@ pub trait Storage: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn complete_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<String>;
+    /// See [`MultipartStore::complete_multipart_upload_with_parts`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the multipart completion manifest is invalid.
+    fn complete_multipart_upload_with_parts(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+    ) -> Result<String>;
     ///
     /// # Errors
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()>;
+    /// See [`MultipartStore::upload_part_streamed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `payload_path` cannot be read or the write fails.
+    fn upload_part_streamed(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        payload_path: &Path,
+        len: u64,
+        etag: String,
+    ) -> Result<String>;
 
     ///
     /// # Errors
@@ -767,6 +914,10 @@ where
         ObjectStore::get_object(self, bucket, key)
     }
 
+    fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<Object> {
+        ObjectStore::get_object_metadata(self, bucket, key)
+    }
+
     fn get_object_range(
         &self,
         bucket: &str,
@@ -801,6 +952,16 @@ where
 
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool> {
         ObjectStore::object_exists(self, bucket, key)
+    }
+
+    fn put_object_streamed(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+    ) -> Result<()> {
+        ObjectStore::put_object_streamed(self, bucket, key, object, payload_path)
     }
 
     fn list_objects(
@@ -862,8 +1023,37 @@ where
         MultipartStore::complete_multipart_upload(self, bucket, upload_id)
     }
 
+    fn complete_multipart_upload_with_parts(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+    ) -> Result<String> {
+        MultipartStore::complete_multipart_upload_with_parts(self, bucket, upload_id, parts)
+    }
+
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {
         MultipartStore::abort_multipart_upload(self, bucket, upload_id)
+    }
+
+    fn upload_part_streamed(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        payload_path: &Path,
+        len: u64,
+        etag: String,
+    ) -> Result<String> {
+        MultipartStore::upload_part_streamed(
+            self,
+            bucket,
+            upload_id,
+            part_number,
+            payload_path,
+            len,
+            etag,
+        )
     }
 
     fn enable_versioning(&self, bucket: &str) -> Result<()> {
@@ -1038,6 +1228,10 @@ impl ObjectStore for dyn Storage + '_ {
         Storage::get_object(self, bucket, key)
     }
 
+    fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<Object> {
+        Storage::get_object_metadata(self, bucket, key)
+    }
+
     fn get_object_range(
         &self,
         bucket: &str,
@@ -1072,6 +1266,16 @@ impl ObjectStore for dyn Storage + '_ {
 
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool> {
         Storage::object_exists(self, bucket, key)
+    }
+
+    fn put_object_streamed(
+        &self,
+        bucket: &str,
+        key: String,
+        object: Object,
+        payload_path: &Path,
+    ) -> Result<()> {
+        Storage::put_object_streamed(self, bucket, key, object, payload_path)
     }
 }
 
@@ -1137,8 +1341,37 @@ impl MultipartStore for dyn Storage + '_ {
         Storage::complete_multipart_upload(self, bucket, upload_id)
     }
 
+    fn complete_multipart_upload_with_parts(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+    ) -> Result<String> {
+        Storage::complete_multipart_upload_with_parts(self, bucket, upload_id, parts)
+    }
+
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {
         Storage::abort_multipart_upload(self, bucket, upload_id)
+    }
+
+    fn upload_part_streamed(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        part_number: u32,
+        payload_path: &Path,
+        len: u64,
+        etag: String,
+    ) -> Result<String> {
+        Storage::upload_part_streamed(
+            self,
+            bucket,
+            upload_id,
+            part_number,
+            payload_path,
+            len,
+            etag,
+        )
     }
 }
 

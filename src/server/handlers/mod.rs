@@ -54,8 +54,7 @@ fn bucket_has_foreign_data_protection(bucket: &crate::models::Bucket) -> bool {
 fn foreign_data_protection_mode_active(storage: &dyn Storage, bucket: &str) -> bool {
     storage
         .get_bucket(bucket)
-        .ok()
-        .is_some_and(|bucket| bucket_has_foreign_data_protection(&bucket))
+        .is_ok_and(|bucket| bucket_has_foreign_data_protection(&bucket))
 }
 
 fn s3_foreign_history_conflict(storage: &dyn Storage, bucket: &str) -> bool {

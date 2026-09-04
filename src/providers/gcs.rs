@@ -6316,7 +6316,7 @@ impl GcsAdapter {
     }
 
     fn foreign_data_protection_active(storage: &Arc<dyn Storage>, bucket: &str) -> bool {
-        storage.get_bucket(bucket).ok().is_some_and(|bucket| {
+        storage.get_bucket(bucket).is_ok_and(|bucket| {
             let s3_mode = bucket
                 .metadata
                 .get(S3_VERSIONING_STATUS_KEY)
@@ -6505,8 +6505,7 @@ impl GcsAdapter {
     fn existing_object_is_retained(storage: &Arc<dyn Storage>, bucket: &str, key: &str) -> bool {
         storage
             .get_object(bucket, key)
-            .ok()
-            .is_some_and(|object| Self::object_is_retained(storage, bucket, &object))
+            .is_ok_and(|object| Self::object_is_retained(storage, bucket, &object))
     }
 
     fn retention_policy_not_met_response() -> Response<Body> {

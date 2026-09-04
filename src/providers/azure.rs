@@ -232,8 +232,7 @@ impl AzureBlobAdapter {
             return false;
         }
         let blob_request = Self::parse_resource(req)
-            .ok()
-            .is_some_and(|resource| resource.container.is_some() && resource.blob.is_some());
+            .is_ok_and(|resource| resource.container.is_some() && resource.blob.is_some());
         if !blob_request || req.header("x-ms-copy-source").is_some() {
             return false;
         }
@@ -413,13 +412,13 @@ impl AzureBlobAdapter {
     }
 
     fn azure_history_visible(storage: &Arc<dyn Storage>, container: &str) -> bool {
-        storage.get_bucket(container).ok().is_some_and(|bucket| {
+        storage.get_bucket(container).is_ok_and(|bucket| {
             Self::azure_history_mode(&bucket) && !Self::foreign_history_mode(&bucket)
         })
     }
 
     fn azure_history_conflict(storage: &Arc<dyn Storage>, container: &str) -> bool {
-        storage.get_bucket(container).ok().is_some_and(|bucket| {
+        storage.get_bucket(container).is_ok_and(|bucket| {
             Self::foreign_history_mode(&bucket)
                 || bucket.versioning_enabled && !Self::azure_history_mode(&bucket)
         })

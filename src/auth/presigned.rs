@@ -21,6 +21,7 @@ pub struct PresignedUrl {
     pub expires_in: i64,
     pub signature: String,
     pub credential: String,
+    query_params: HashMap<String, String>,
 }
 
 impl PresignedUrl {
@@ -63,7 +64,7 @@ impl PresignedUrl {
         let credential = format!("{}/{}", config.access_key, credential_scope);
 
         // Canonical URI (path component)
-        let canonical_uri = format!("/{bucket}/{key}");
+        let canonical_uri = canonical_uri(&format!("/{bucket}/{key}"));
 
         // Canonical query string (must be sorted)
         let expires_str = expires_in_seconds.to_string();
@@ -84,7 +85,8 @@ impl PresignedUrl {
         // Canonical headers
         let host = base_url
             .trim_start_matches("http://")
-            .trim_start_matches("https://");
+            .trim_start_matches("https://")
+            .trim_end_matches('/');
         let canonical_headers = format!("host:{host}\n");
         let signed_headers = "host";
 
@@ -104,7 +106,7 @@ impl PresignedUrl {
 
         format!(
             "{}/{}?{}&X-Amz-Signature={}",
-            base_url,
+            base_url.trim_end_matches('/'),
             canonical_uri.trim_start_matches('/'),
             canonical_query_string,
             signature
@@ -154,6 +156,7 @@ impl PresignedUrl {
             expires_in,
             signature: signature.clone(),
             credential: credential.clone(),
+            query_params: params.clone(),
         })
     }
 
@@ -163,53 +166,104 @@ impl PresignedUrl {
     ///
     /// Returns an error when the underlying emulator operation fails.
     pub fn validate(&self, host: &str, config: &PresignedUrlConfig) -> Result<(), String> {
-        // Check expiration
+        let path = format!("/{}/{}", self.bucket, self.key);
+        let headers = HashMap::from([("host".to_string(), host.to_string())]);
+        self.validate_components(&self.method, &path, &headers, config)
+    }
+
+    /// Validate this presign against the request that carried it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signature fields, request headers, scope, or
+    /// expiration do not match.
+    pub fn validate_request(
+        &self,
+        request: &dyn crate::auth::HttpRequestLike,
+        config: &PresignedUrlConfig,
+    ) -> Result<(), String> {
+        let headers = request
+            .headers()
+            .into_iter()
+            .map(|(name, value)| (name.to_ascii_lowercase(), value))
+            .collect::<HashMap<_, _>>();
+        self.validate_components(request.method(), request.path(), &headers, config)
+    }
+
+    fn validate_components(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &HashMap<String, String>,
+        config: &PresignedUrlConfig,
+    ) -> Result<(), String> {
+        if self.query_params.get("X-Amz-Algorithm").map(String::as_str) != Some("AWS4-HMAC-SHA256")
+        {
+            return Err("Unsupported or missing X-Amz-Algorithm".to_string());
+        }
+        if !(1..=604_800).contains(&self.expires_in) {
+            return Err("X-Amz-Expires must be between 1 and 604800 seconds".to_string());
+        }
+
         let expires_at = self.date + Duration::seconds(self.expires_in);
         if Utc::now() > expires_at {
             return Err("Presigned URL has expired".to_string());
         }
 
-        // Compute expected signature using SigV4
+        let scope = parse_credential_scope(&self.credential)?;
+        if scope.access_key != config.access_key {
+            return Err("Presigned URL access key does not match".to_string());
+        }
         let date_stamp = self.date.format("%Y%m%d").to_string();
+        if scope.date != date_stamp
+            || scope.service != SERVICE
+            || scope.terminator != "aws4_request"
+        {
+            return Err("Invalid credential scope".to_string());
+        }
         let amz_date = self.date.format("%Y%m%dT%H%M%SZ").to_string();
-        let credential_scope = format!("{date_stamp}/{REGION}/{SERVICE}/aws4_request");
-
-        // Canonical URI
-        let canonical_uri = format!("/{}/{}", self.bucket, self.key);
-
-        // Canonical query string (without signature)
-        let expires_str = self.expires_in.to_string();
-        let mut query_params = [
-            ("X-Amz-Algorithm", "AWS4-HMAC-SHA256"),
-            ("X-Amz-Credential", &self.credential),
-            ("X-Amz-Date", &amz_date),
-            ("X-Amz-Expires", &expires_str),
-            ("X-Amz-SignedHeaders", "host"),
-        ];
-        query_params.sort_by_key(|k| k.0);
-        let canonical_query_string: String = query_params
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, uri_encode(v)))
-            .collect::<Vec<_>>()
-            .join("&");
-
-        // Canonical headers
-        let canonical_headers = format!("host:{host}\n");
-        let signed_headers = "host";
-
-        // Canonical request
-        let canonical_request = format!(
-            "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
-            self.method, canonical_uri, canonical_query_string, canonical_headers, signed_headers
+        let credential_scope = format!(
+            "{}/{}/{}/{}",
+            scope.date, scope.region, scope.service, scope.terminator
         );
 
-        // String to sign
+        let canonical_uri = canonical_uri(path);
+        let canonical_query_string = canonical_query_string(&self.query_params);
+
+        let signed_headers = self
+            .query_params
+            .get("X-Amz-SignedHeaders")
+            .ok_or("Missing X-Amz-SignedHeaders")?;
+        let signed_header_names = signed_headers
+            .split(';')
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>();
+        if !signed_header_names.iter().any(|name| name == "host") {
+            return Err("X-Amz-SignedHeaders must include host".to_string());
+        }
+        let mut canonical_headers = String::new();
+        for name in &signed_header_names {
+            let value = headers
+                .get(name)
+                .ok_or_else(|| format!("Missing signed header: {name}"))?;
+            canonical_headers.push_str(name);
+            canonical_headers.push(':');
+            canonical_headers.push_str(&normalize_header_value(value));
+            canonical_headers.push('\n');
+        }
+        let signed_headers = signed_header_names.join(";");
+
+        let canonical_request = format!(
+            "{method}\n{canonical_uri}\n{canonical_query_string}\n{canonical_headers}\n{signed_headers}\nUNSIGNED-PAYLOAD"
+        );
+
         let canonical_request_hash = sha256_hex(canonical_request.as_bytes());
         let string_to_sign =
             format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{canonical_request_hash}");
 
-        // Signing key and signature
-        let signing_key = get_signature_key(&config.secret_key, &date_stamp, REGION, SERVICE);
+        let signing_key =
+            get_signature_key(&config.secret_key, scope.date, scope.region, scope.service);
         let expected_sig = hmac_sha256_hex(&signing_key, string_to_sign.as_bytes());
 
         if self.signature != expected_sig {
@@ -218,6 +272,58 @@ impl PresignedUrl {
 
         Ok(())
     }
+}
+
+struct CredentialScope<'a> {
+    access_key: &'a str,
+    date: &'a str,
+    region: &'a str,
+    service: &'a str,
+    terminator: &'a str,
+}
+
+fn parse_credential_scope(credential: &str) -> Result<CredentialScope<'_>, String> {
+    let segments = credential.split('/').collect::<Vec<_>>();
+    if segments.len() != 5 || segments.iter().any(|segment| segment.is_empty()) {
+        return Err("Invalid X-Amz-Credential".to_string());
+    }
+    Ok(CredentialScope {
+        access_key: segments[0],
+        date: segments[1],
+        region: segments[2],
+        service: segments[3],
+        terminator: segments[4],
+    })
+}
+
+fn normalize_header_value(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn canonical_uri(path: &str) -> String {
+    let path = if path.is_empty() { "/" } else { path };
+    path.split('/')
+        .map(|segment| {
+            let decoded = urlencoding::decode(segment)
+                .map_or_else(|_| segment.to_string(), std::borrow::Cow::into_owned);
+            uri_encode(&decoded)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn canonical_query_string(params: &HashMap<String, String>) -> String {
+    let mut params = params
+        .iter()
+        .filter(|(name, _)| name.as_str() != "X-Amz-Signature")
+        .map(|(name, value)| (uri_encode(name), uri_encode(value)))
+        .collect::<Vec<_>>();
+    params.sort();
+    params
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 // AWS SigV4 cryptographic helpers
@@ -253,13 +359,14 @@ fn get_signature_key(secret: &str, date_stamp: &str, region: &str, service: &str
 }
 
 fn uri_encode(s: &str) -> String {
-    // URL encode per RFC 3986
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
-                c.to_string()
+    s.as_bytes()
+        .iter()
+        .map(|byte| {
+            let ch = *byte as char;
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~') {
+                ch.to_string()
             } else {
-                format!("%{:02X}", c as u8)
+                format!("%{byte:02X}")
             }
         })
         .collect()
@@ -304,7 +411,7 @@ mod tests {
         // Act
         let url = PresignedUrl::generate_put_url(
             "test-bucket",
-            "upload.txt",
+            "upload file.txt",
             1800,
             "http://localhost:9000",
             &config,
@@ -312,7 +419,7 @@ mod tests {
 
         // Assert
         assert!(url.contains("test-bucket"));
-        assert!(url.contains("upload.txt"));
+        assert!(url.contains("upload%20file.txt"));
         assert!(url.contains("X-Amz-Expires=1800"));
     }
 

@@ -15,6 +15,7 @@ use tracing::error;
 
 mod handlers;
 mod http;
+mod streaming;
 
 pub(crate) use handlers::handle_request as handle_s3_request;
 pub use http::{Request as RequestExt, RequestParseError, ResponseBuilder, RouteMatch, Router};
@@ -111,6 +112,14 @@ impl Server {
     ///
     /// Returns an error when the underlying emulator operation fails.
     pub async fn start(self) -> crate::error::Result<()> {
+        let spool_dir = std::path::Path::new(&self.auth_config.blobs_path).join(".spool");
+        streaming::cleanup_stale_spool_files(&spool_dir)
+            .await
+            .map_err(|error| {
+                crate::error::Error::InternalError(format!(
+                    "Failed to clean stale request spool files: {error}"
+                ))
+            })?;
         let state = RequestState {
             storage: self.storage,
             auth_config: self.auth_config,
@@ -160,12 +169,19 @@ where
     B: hyper::body::Body<Data = bytes::Bytes> + Send + Unpin + 'static,
     B::Error: std::fmt::Display,
 {
-    let response = match http::Request::from_hyper_with_max_body(
-        req,
-        Some(state.auth_config.max_request_bytes),
-    )
-    .await
-    {
+    let max_request_bytes = state.auth_config.max_request_bytes;
+    let (parts, body) = req.into_parts();
+    let parsed = if streaming::is_streamable_object_put(&parts, &state.adapters) {
+        let spool_dir = std::path::Path::new(&state.auth_config.blobs_path).join(".spool");
+        streaming::spool_request(parts, body, max_request_bytes, &spool_dir).await
+    } else {
+        http::Request::from_hyper_with_max_body(
+            hyper::Request::from_parts(parts, body),
+            Some(max_request_bytes),
+        )
+        .await
+    };
+    let response = match parsed {
         Ok(parsed_req) => route_parsed_request(state, parsed_req).await,
         Err(error) => request_parse_error_response(&state, error),
     };
@@ -308,6 +324,55 @@ mod adapter_routing_tests {
         })
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_remove_interrupted_request_spools_at_startup() {
+        // Arrange
+        let root =
+            std::env::temp_dir().join(format!("sqrzl-startup-spool-test-{}", uuid::Uuid::new_v4()));
+        let spool_dir = root.join(".spool");
+        fs::create_dir_all(&spool_dir).unwrap();
+        let stale = spool_dir.join(".spool-interrupted.tmp");
+        let unrelated = spool_dir.join("keep.me");
+        fs::write(&stale, b"partial payload").unwrap();
+        fs::write(&unrelated, b"not owned by request spooling").unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&root));
+        let mail = Arc::new(
+            crate::mail::FilesystemMailStore::open(&root).expect("mail store should open"),
+        );
+        let config = Arc::new(Config {
+            access_key_id: None,
+            secret_access_key: None,
+            enforce_auth: false,
+            admin_auth_disabled: false,
+            blobs_path: root.to_string_lossy().into_owned(),
+            lifecycle_interval: std::time::Duration::from_hours(1),
+            api_port: 0,
+            ui_port: 0,
+            max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+            smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+        });
+        let server = Server::new(storage, mail, config, 0);
+
+        // Act
+        let task = tokio::spawn(server.start());
+        let cleanup = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while stale.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        task.abort();
+        let _ = task.await;
+
+        // Assert
+        assert!(cleanup.is_ok(), "stale request spool should be removed");
+        assert!(
+            unrelated.exists(),
+            "unrelated spool entries should be retained"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     async fn call(storage: Arc<dyn Storage>, req: HyperRequest<Body>) -> Response<Body> {
         call_with_auth(storage, auth_disabled(), req).await
     }
@@ -338,6 +403,37 @@ mod adapter_routing_tests {
         )
         .await
         .expect("request should complete")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_store_large_object_put_via_spooled_streaming() {
+        // Note: this deliberately does not assert on `./blobs/.spool`
+        // (every test in this module shares that relative path, and tests
+        // run concurrently) — cleanup of the scratch file is covered in
+        // isolation by `streaming::tests`, which each use their own temp
+        // directory.
+        let storage = temp_storage();
+        storage.create_bucket("big".to_string()).unwrap();
+
+        // Large enough that buffering it fully would be a meaningfully
+        // sized allocation; the point of this test is that it is instead
+        // streamed straight to disk and the request body is never fully
+        // materialized.
+        let payload = vec![7u8; 8 * 1024 * 1024];
+        let request = HyperRequest::builder()
+            .method("PUT")
+            .uri("http://localhost/big/large-object.bin")
+            .header("content-length", payload.len().to_string())
+            .body(Body::from(payload.clone()))
+            .expect("large put request should build");
+
+        let response = call(storage.clone(), request).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let stored = storage.get_object("big", "large-object.bin").unwrap();
+        assert_eq!(stored.data, payload);
+        assert_eq!(stored.size, payload.len() as u64);
+        assert_eq!(stored.etag, format!("{:x}", md5::compute(&payload)));
     }
 
     #[tokio::test(flavor = "multi_thread")]

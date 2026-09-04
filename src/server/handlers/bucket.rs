@@ -1225,6 +1225,67 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn should_paginate_list_objects_v2_past_default_thousand_key_page_size() {
+        // Arrange: more than the default 1000-key page size under the prefix.
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+
+        let total_objects = 1_200;
+        for index in 0..total_objects {
+            let key = format!("key-{index:05}.txt");
+            storage
+                .put_object(
+                    "bucket",
+                    key.clone(),
+                    Object::new(key, b"x".to_vec(), "text/plain".to_string()),
+                )
+                .unwrap();
+        }
+
+        let first_req = parsed_request("http://localhost/bucket?list-type=2").await;
+
+        // Act
+        let first_resp = bucket_get_or_list_objects(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            &first_req,
+            "req-140".to_string(),
+        )
+        .await
+        .expect("first listing should complete");
+
+        // Assert: first page reports truncation instead of silently capping at 1000.
+        assert_eq!(first_resp.status(), StatusCode::OK);
+        let first_body = response_text(first_resp).await;
+        assert!(first_body.contains("<KeyCount>1000</KeyCount>"));
+        assert!(first_body.contains("<IsTruncated>true</IsTruncated>"));
+        let continuation_token = xml_tag(&first_body, "NextContinuationToken")
+            .expect("truncated result should include a continuation token");
+
+        let second_req = parsed_request(&format!(
+            "http://localhost/bucket?list-type=2&continuation-token={}",
+            urlencoding::encode(&continuation_token)
+        ))
+        .await;
+        let second_resp = bucket_get_or_list_objects(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            &second_req,
+            "req-141".to_string(),
+        )
+        .await
+        .expect("second listing should complete");
+
+        assert_eq!(second_resp.status(), StatusCode::OK);
+        let second_body = response_text(second_resp).await;
+        assert!(second_body.contains("<KeyCount>200</KeyCount>"));
+        assert!(second_body.contains("<IsTruncated>false</IsTruncated>"));
+        assert!(second_body.contains("key-01199.txt"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn should_reject_unissued_list_objects_v2_continuation_token() {
         // Arrange
         let storage = temp_storage();

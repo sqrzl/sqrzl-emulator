@@ -28,6 +28,14 @@ pub trait HttpRequestLike {
     fn path(&self) -> &str;
     fn body(&self) -> &[u8];
     fn headers(&self) -> Vec<(String, String)>;
+    /// A precomputed SHA-256 hex digest of the body, when one is available
+    /// without re-reading it — e.g. when the body was streamed straight to
+    /// disk rather than buffered, so [`Self::body`] is empty and cannot be
+    /// used to compute the payload hash. `None` means callers may fall back
+    /// to hashing [`Self::body`] directly.
+    fn content_sha256_hint(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Authentication information extracted from a request.

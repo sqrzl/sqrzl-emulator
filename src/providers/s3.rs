@@ -95,7 +95,16 @@ impl ProviderAdapter for S3Adapter {
             ]
             .into_iter()
             .any(|name| req.has_query_param(name));
-        if object_put && req.body.is_empty() && req.header("content-length").is_none() {
+        // A streamed body always leaves `req.body` empty (its bytes are on
+        // disk at `spooled_body` instead), so "empty" here must consult the
+        // spooled length rather than `req.body` directly, or a
+        // chunked-transfer PUT with no Content-Length header would be
+        // misreported as missing its body.
+        let body_is_empty = req
+            .spooled_body
+            .as_ref()
+            .map_or_else(|| req.body.is_empty(), |spooled| spooled.len == 0);
+        if object_put && body_is_empty && req.header("content-length").is_none() {
             let req_id = crate::utils::headers::generate_request_id();
             let host_id = crate::utils::headers::generate_request_id();
             let body = crate::utils::xml::error_xml_with_host_id(
