@@ -6380,7 +6380,16 @@ impl GcsAdapter {
             .body(data)
             .build());
         }
-        Ok(Self::invalid_range_response())
+        match storage.get_object_metadata(bucket, object) {
+            Ok(_) => Ok(Self::invalid_range_response()),
+            Err(crate::error::Error::KeyNotFound) => Ok(Self::error_response(
+                StatusCode::NOT_FOUND,
+                "NoSuchKey",
+                "The specified key does not exist.",
+            )),
+            Err(crate::error::Error::BucketNotFound) => Ok(Self::xml_bucket_not_found(bucket)),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     fn invalid_range_response() -> Response<Body> {

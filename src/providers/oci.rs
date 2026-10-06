@@ -2033,7 +2033,7 @@ impl OciAdapter {
             let (blob, data) = match storage.get_object_range(bucket, object, start, end) {
                 Ok(payload) => payload,
                 Err(crate::error::Error::InvalidRequest(_)) => {
-                    return Ok(Self::invalid_range_response())
+                    return Self::object_range_error_response(storage, req, bucket, object)
                 }
                 Err(crate::error::Error::KeyNotFound) => return Ok(Self::object_not_found()),
                 Err(error) => return Err(error.to_string()),
@@ -2052,7 +2052,27 @@ impl OciAdapter {
                 .body(data)
                 .build());
         }
-        Ok(Self::invalid_range_response())
+        Self::object_range_error_response(storage, req, bucket, object)
+    }
+
+    fn object_range_error_response(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        bucket: &str,
+        object: &str,
+    ) -> Result<Response<Body>, String> {
+        // Error responses have no payload; use a metadata-only snapshot to
+        // preserve resource and condition precedence without loading the blob.
+        let blob = match storage.get_object_metadata(bucket, object) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => return Ok(Self::object_not_found()),
+            Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
+            Err(error) => return Err(error.to_string()),
+        };
+        match Self::read_condition(req, &blob) {
+            Ok(Some(response)) | Err(response) => Ok(response),
+            Ok(None) => Ok(Self::invalid_range_response()),
+        }
     }
 
     fn invalid_range_response() -> Response<Body> {

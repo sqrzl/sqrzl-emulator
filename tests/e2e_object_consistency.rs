@@ -8,6 +8,78 @@ use std::sync::Arc;
 
 const PAYLOADS: [&str; 3] = ["{\"v\":1}\n", "{\"v\":100}\n", "{}\n"];
 
+#[tokio::test(flavor = "multi_thread")]
+async fn should_evaluate_oci_read_conditions_before_rejecting_ranges() {
+    // Arrange
+    use common::interop::{auth_disabled, call, request, temp_storage};
+    let storage = temp_storage();
+    storage.create_bucket("range-errors".to_string()).unwrap();
+    let object = sqrzl_emulator::models::Object::new(
+        "lease".to_string(),
+        PAYLOADS[0].as_bytes().to_vec(),
+        "application/json".to_string(),
+    );
+    let etag = object.etag.clone();
+    storage
+        .put_object("range-errors", "lease".to_string(), object)
+        .unwrap();
+
+    // Act
+    // Assert
+    for range in ["bytes=99-", "bytes=7-2"] {
+        for (condition, value, expected) in [
+            ("if-match", "\"different\"", StatusCode::PRECONDITION_FAILED),
+            ("if-none-match", etag.as_str(), StatusCode::NOT_MODIFIED),
+            ("if-match", "*", StatusCode::RANGE_NOT_SATISFIABLE),
+        ] {
+            let response = call(
+                storage.clone(),
+                auth_disabled(),
+                request(
+                    "GET",
+                    "http://localhost/n/sqrzl-emulator/b/range-errors/o/lease",
+                    &[("range", range), (condition, value)],
+                    b"",
+                ),
+            )
+            .await;
+            assert_eq!(response.status(), expected, "{condition} {range}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_preserve_missing_object_errors_for_malformed_ranges() {
+    // Arrange
+    use common::interop::{auth_disabled, call, request, temp_storage};
+    let storage = temp_storage();
+    storage.create_bucket("range-errors".to_string()).unwrap();
+    let surfaces: [(&str, &[(&str, &str)]); 2] = [
+        (
+            "http://localhost/range-errors/missing",
+            &[("host", "storage.googleapis.com")],
+        ),
+        (
+            "http://localhost/n/sqrzl-emulator/b/range-errors/o/missing",
+            &[],
+        ),
+    ];
+
+    // Act
+    // Assert
+    for (uri, headers) in surfaces {
+        let mut headers = headers.to_vec();
+        headers.extend([("range", "bytes=7-2"), ("content-length", "0")]);
+        let response = call(
+            storage.clone(),
+            auth_disabled(),
+            request("GET", uri, &headers, b""),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
 async fn put(server: &LiveServer, body: &'static str) {
     let response = server
         .request(
