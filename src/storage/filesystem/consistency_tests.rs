@@ -4,6 +4,81 @@ use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(5);
 
+async fn verify_request_read_path(
+    path: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+    range: bool,
+    expected: http::StatusCode,
+    forbidden_phase: TestPhase,
+) -> bytes::Bytes {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
+    let full_reads = Arc::new(AtomicUsize::new(0));
+    let observed_reads = full_reads.clone();
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if phase == forbidden_phase {
+            observed_reads.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+    let (status, _, bytes) = wire_get(storage, path, headers, range).await;
+    assert_eq!(status, expected);
+    assert_eq!(
+        full_reads.load(Ordering::SeqCst),
+        0,
+        "request entered an unnecessary payload read path"
+    );
+    fs::remove_dir_all(base).unwrap();
+    bytes
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_keep_gcs_json_range_reads_bounded_to_the_requested_bytes() {
+    // Arrange
+    let path = "/storage/v1/b/coherent/o/lease?alt=media&ifGenerationMatch=1";
+
+    // Act
+    // Assert
+    let bytes = verify_request_read_path(
+        path,
+        &[("range", "bytes=0-2")],
+        false,
+        http::StatusCode::PARTIAL_CONTENT,
+        TestPhase::FullPayload,
+    )
+    .await;
+    assert_eq!(bytes.as_ref(), b"{\"v");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_reject_read_conditions_without_materializing_payloads() {
+    // Arrange
+    let surfaces: [(&str, &[(&str, &str)]); 2] = [
+        (
+            "/storage/v1/b/coherent/o/lease?alt=media&ifGenerationNotMatch=1",
+            &[],
+        ),
+        (
+            "/n/sqrzl-emulator/b/coherent/o/lease",
+            &[("if-none-match", "\"6811fbc0e37e7eb14fdf61ff13ca76de\"")],
+        ),
+    ];
+
+    // Act
+    // Assert
+    for (path, headers) in surfaces {
+        for range in [false, true] {
+            verify_request_read_path(
+                path,
+                headers,
+                range,
+                http::StatusCode::NOT_MODIFIED,
+                TestPhase::ReadPayloadMetadata,
+            )
+            .await;
+        }
+    }
+}
+
 async fn wire_get(
     storage: Arc<FilesystemStorage>,
     path: &'static str,
@@ -98,7 +173,7 @@ async fn should_keep_held_http_reads_on_the_generation_used_for_response_conditi
     // Assert
     for (path, headers) in surfaces {
         for range in [false, true] {
-            let (base, storage, entered, resume) = paused_storage(TestPhase::ReadMetadata);
+            let (base, storage, entered, resume) = paused_storage(TestPhase::ReadPayloadMetadata);
             let reader = tokio::spawn(wire_get(storage.clone(), path, headers, range));
             tokio::task::spawn_blocking(move || entered.recv_timeout(WAIT).unwrap())
                 .await
@@ -199,7 +274,7 @@ fn replace(storage: &FilesystemStorage, base: &Path, replacement: Object, stream
 }
 
 fn verify_held_read(replacement: &[u8], streamed: bool, range: bool) {
-    let (base, storage, entered, resume) = paused_storage(TestPhase::ReadMetadata);
+    let (base, storage, entered, resume) = paused_storage(TestPhase::ReadPayloadMetadata);
     let reader_storage = storage.clone();
     let reader = std::thread::spawn(move || {
         if range {
