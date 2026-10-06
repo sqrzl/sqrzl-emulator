@@ -22,6 +22,8 @@ mod io;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TestPhase {
     ReadMetadata,
+    ReadPayloadMetadata,
+    FullPayload,
     BodyPublished,
 }
 
@@ -643,7 +645,9 @@ impl FilesystemStorage {
         let metadata_path = self.object_metadata_path(bucket, &object_id);
         let mut object = Self::read_object_metadata(&metadata_path)?;
         #[cfg(test)]
-        self.test_phase(TestPhase::ReadMetadata);
+        self.test_phase(TestPhase::ReadPayloadMetadata);
+        #[cfg(test)]
+        self.test_phase(TestPhase::FullPayload);
         object.data = fs::read(&object_data_path)
             .map_err(|e| Error::InternalError(format!("Failed to read object: {e}")))?;
         Ok(object)
@@ -678,7 +682,7 @@ impl FilesystemStorage {
 
         let object = Self::read_object_metadata(&metadata_path)?;
         #[cfg(test)]
-        self.test_phase(TestPhase::ReadMetadata);
+        self.test_phase(TestPhase::ReadPayloadMetadata);
 
         // Validate range
         if start >= object.size {

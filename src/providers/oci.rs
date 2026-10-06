@@ -2004,6 +2004,16 @@ impl OciAdapter {
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
             Err(error) => return Err(error.to_string()),
         }
+        let metadata = match storage.get_object_metadata(bucket, object) {
+            Ok(blob) => blob,
+            Err(crate::error::Error::KeyNotFound) => return Ok(Self::object_not_found()),
+            Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
+            Err(err) => return Err(err.to_string()),
+        };
+        match Self::read_condition(req, &metadata) {
+            Ok(Some(response)) | Err(response) => return Ok(response),
+            Ok(None) => {}
+        }
         if let Some(range_header) = req.header("range") {
             return Self::object_range_response(storage, req, bucket, object, range_header);
         }
