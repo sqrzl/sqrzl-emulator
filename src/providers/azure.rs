@@ -1,6 +1,6 @@
 use super::{state, ProviderAdapter};
 use crate::auth::{AuthConfig, HttpRequestLike};
-use crate::blob::{BlobBackend, BlobRange, BlobRecord};
+use crate::blob::{BlobBackend, BlobRecord};
 use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
 use crate::storage::ObjectCondition;
@@ -3657,15 +3657,13 @@ impl AzureBlobAdapter {
             Err(err) => return Err(err.to_string()),
         };
         if let Some(range_header) = Self::requested_range(req) {
-            return Self::get_blob_range(
+            return Ok(Self::get_blob_range(
                 storage,
                 container,
                 blob_key,
-                snapshot,
-                req.query_param("versionid"),
                 &blob,
                 range_header,
-            );
+            ));
         }
         let body_len = Self::response_body_len(blob.size)?;
         let expose_version_id = Self::azure_history_visible(storage, container);
@@ -3688,49 +3686,29 @@ impl AzureBlobAdapter {
         storage: &Arc<dyn Storage>,
         container: &str,
         blob_key: &str,
-        snapshot: Option<&str>,
-        version_id: Option<&str>,
         blob: &crate::models::Object,
         range_header: &str,
-    ) -> Result<Response<Body>, String> {
+    ) -> Response<Body> {
         if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-            let payload = if snapshot.is_some() || version_id.is_some() {
-                let data = blob.data[start..=end].to_vec();
-                crate::blob::BlobPayload {
-                    blob: blob.clone(),
-                    data,
-                }
-            } else {
-                storage
-                    .as_ref()
-                    .get_blob_range(
-                        container,
-                        blob_key,
-                        BlobRange {
-                            start: start as u64,
-                            end: end as u64,
-                        },
-                    )
-                    .map_err(|err| err.to_string())?
-            };
-            return Ok(Self::blob_response(
+            let data = blob.data[start..=end].to_vec();
+            return Self::blob_response(
                 StatusCode::PARTIAL_CONTENT,
-                &payload.blob,
-                payload.data.len(),
+                blob,
+                data.len(),
                 Some(format!("bytes {start}-{end}/{}", blob.size)),
                 Self::azure_history_visible(storage, container)
                     .then(|| Self::is_current_version(storage, container, blob_key, blob))
                     .flatten(),
                 Self::azure_history_visible(storage, container),
             )
-            .body(payload.data)
-            .build());
+            .body(data)
+            .build();
         }
-        Ok(Self::error_response(
+        Self::error_response(
             StatusCode::RANGE_NOT_SATISFIABLE,
             "InvalidRange",
             "The requested range is not satisfiable.",
-        ))
+        )
     }
 
     fn head_blob(
@@ -7351,7 +7329,7 @@ mod tests {
             );
             let body = read_test_body(response).await;
             if method == "HEAD" {
-                assert!(body.is_empty());
+                assert_eq!(body.len(), 0);
             } else {
                 assert!(String::from_utf8(body)
                     .unwrap()

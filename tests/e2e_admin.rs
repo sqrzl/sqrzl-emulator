@@ -451,7 +451,7 @@ async fn verify_admin_version_pagination(server: &LiveServer) {
     assert_eq!(list_versions_response.status(), StatusCode::OK);
     let versions: ListVersionsResponse = json_body(list_versions_response).await;
     assert_eq!(versions.items.len(), 1);
-    assert!(!versions.items[0].version_id.is_empty());
+    assert_ne!(versions.items[0].version_id, "");
     assert!(versions.next.is_some());
 
     let list_all_versions_response = server

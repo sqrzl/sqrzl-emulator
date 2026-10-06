@@ -166,7 +166,7 @@ async fn should_return_blob_not_found_given_missing_lease_blob_when_requesting_b
         Some(AZURE_VERSION)
     );
     assert!(response.headers().get("x-ms-request-id").is_some());
-    assert!(body_bytes(response).await.is_empty());
+    assert_eq!(body_bytes(response).await.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1098,11 +1098,14 @@ async fn should_require_content_length_for_azure_put_blob_without_mutating() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::CREATED);
-    assert!(storage
-        .get_object("content-length", "empty")
-        .expect("explicit zero-length blob should be stored")
-        .data
-        .is_empty());
+    assert_eq!(
+        storage
+            .get_object("content-length", "empty")
+            .expect("explicit zero-length blob should be stored")
+            .data
+            .len(),
+        0
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1259,11 +1262,14 @@ async fn should_require_content_length_for_azure_block_append_and_page_mutations
             .data,
         b"preserved"
     );
-    assert!(storage
-        .get_object("framed-operations", "append")
-        .expect("append blob should remain")
-        .data
-        .is_empty());
+    assert_eq!(
+        storage
+            .get_object("framed-operations", "append")
+            .expect("append blob should remain")
+            .data
+            .len(),
+        0
+    );
     assert!(storage
         .get_object("framed-operations", "page")
         .expect("page blob should remain")

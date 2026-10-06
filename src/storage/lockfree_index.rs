@@ -398,8 +398,9 @@ mod tests {
         assert_eq!(docs[0].path, "docs/readme.txt");
 
         assert!(index.remove("bucket", "docs/readme.txt"));
-        assert!(index
-            .list_child_entries("bucket", "", None, Some(10))
-            .is_empty());
+        assert_eq!(
+            index.list_child_entries("bucket", "", None, Some(10)).len(),
+            0
+        );
     }
 }

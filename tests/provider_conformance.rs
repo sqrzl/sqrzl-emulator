@@ -694,10 +694,10 @@ async fn should_require_explicit_zero_length_for_s3_object_put() {
     assert_eq!(explicit.status(), StatusCode::OK);
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(get.headers()["content-length"], "0");
-    assert!(body_text(get).await.is_empty());
+    assert_eq!(body_text(get).await, "");
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "0");
-    assert!(body_text(head).await.is_empty());
+    assert_eq!(body_text(head).await, "");
     assert_eq!(delete.status(), StatusCode::NO_CONTENT);
     assert_eq!(missing_object.status(), StatusCode::NOT_FOUND);
 }
@@ -787,7 +787,7 @@ async fn should_require_provider_specific_content_length_for_azure_and_gcs_uploa
         .await
         .contains("MissingContentLengthHeader"));
     assert_eq!(gcs_json.status(), StatusCode::LENGTH_REQUIRED);
-    assert!(body_text(gcs_json).await.is_empty());
+    assert_eq!(body_text(gcs_json).await, "");
     assert_eq!(gcs_xml.status(), StatusCode::LENGTH_REQUIRED);
     assert!(gcs_xml.headers()["content-type"]
         .to_str()
@@ -842,7 +842,7 @@ async fn should_allow_chunked_gcs_uploads_without_content_length() {
     for bucket in ["chunked-gcs-json", "chunked-gcs-xml"] {
         let object = storage.get_object(bucket, "object").unwrap();
         assert_eq!(object.size, 0);
-        assert!(object.data.is_empty());
+        assert_eq!(object.data.len(), 0);
     }
 }
 
@@ -930,10 +930,10 @@ async fn should_preserve_azure_empty_mutation_statuses() {
     assert!(put.headers()["etag"].to_str().unwrap().starts_with('"'));
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(get.headers()["content-length"], "0");
-    assert!(body_text(get).await.is_empty());
+    assert_eq!(body_text(get).await, "");
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "0");
-    assert!(body_text(head).await.is_empty());
+    assert_eq!(body_text(head).await, "");
     assert_eq!(delete.status(), StatusCode::ACCEPTED);
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
@@ -997,10 +997,10 @@ async fn should_preserve_gcs_xml_empty_mutation_statuses() {
     assert!(put.headers()["etag"].to_str().unwrap().starts_with('"'));
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(get.headers()["content-length"], "0");
-    assert!(body_text(get).await.is_empty());
+    assert_eq!(body_text(get).await, "");
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "0");
-    assert!(body_text(head).await.is_empty());
+    assert_eq!(body_text(head).await, "");
     assert_eq!(delete.status(), StatusCode::NO_CONTENT);
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
@@ -1441,7 +1441,7 @@ async fn should_preserve_gcs_json_empty_mutation_statuses() {
     assert_eq!(metadata["size"], "0");
     assert_eq!(media_get.status(), StatusCode::OK);
     assert_eq!(media_get.headers()["content-length"], "0");
-    assert!(body_text(media_get).await.is_empty());
+    assert_eq!(body_text(media_get).await, "");
     assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert!(head.headers()["content-type"]
         .to_str()
@@ -1787,13 +1787,13 @@ async fn should_preserve_oci_empty_mutation_statuses() {
     assert_eq!(put.status(), StatusCode::OK);
     assert!(put.headers().contains_key("etag"));
     assert_eq!(put.headers()["opc-content-md5"], "1B2M2Y8AsgTpgAmY7PhCfg==");
-    assert!(body_text(put).await.is_empty());
+    assert_eq!(body_text(put).await, "");
     assert_eq!(get.status(), StatusCode::OK);
     assert_eq!(get.headers()["content-length"], "0");
-    assert!(body_text(get).await.is_empty());
+    assert_eq!(body_text(get).await, "");
     assert_eq!(head.status(), StatusCode::OK);
     assert_eq!(head.headers()["content-length"], "0");
-    assert!(body_text(head).await.is_empty());
+    assert_eq!(body_text(head).await, "");
     assert_eq!(delete.status(), StatusCode::NO_CONTENT);
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
@@ -2158,7 +2158,7 @@ async fn should_not_apply_failed_gcs_generation_not_match_upload() {
 
     // Assert
     assert_eq!(rejected.status(), StatusCode::NOT_MODIFIED);
-    assert!(body_text(rejected).await.is_empty());
+    assert_eq!(body_text(rejected).await, "");
     assert_eq!(
         storage.get_object("not-match-gcs", "object").unwrap().data,
         b"first"
@@ -3548,7 +3548,7 @@ async fn should_expose_each_transient_status_before_commit_on_every_storage_fron
                 && (expected == StatusCode::BAD_GATEWAY || expected == StatusCode::GATEWAY_TIMEOUT)
             {
                 assert!(!response.headers().contains_key("content-type"));
-                assert!(body_text(response).await.is_empty());
+                assert_eq!(body_text(response).await, "");
             } else {
                 assert!(response.headers()["content-type"]
                     .to_str()

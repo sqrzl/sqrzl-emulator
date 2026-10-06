@@ -1,6 +1,23 @@
 use crate::auth::HttpRequestLike;
 use std::str::FromStr;
 
+/// Parses the supported single byte range without consulting object metadata.
+/// The storage reader clamps the end against the generation it actually reads.
+#[must_use]
+pub fn parse_byte_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = if end.is_empty() {
+        None
+    } else {
+        Some(end.parse().ok()?)
+    };
+    if end.is_some_and(|end| end < start) {
+        return None;
+    }
+    Some((start, end))
+}
+
 /// Decodes an HTTP URI path value exactly once and rejects malformed escapes.
 ///
 /// The `urlencoding` crate deliberately leaves incomplete percent escapes

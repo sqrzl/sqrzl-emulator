@@ -174,7 +174,7 @@ async fn should_capture_sendgrid_send_and_fan_out_recipients() {
     assert_eq!(response.status(), hyper::StatusCode::ACCEPTED);
     assert!(response.headers().contains_key("x-message-id"));
     let response_body = body_text(response).await;
-    assert!(response_body.trim().is_empty());
+    assert_eq!(response_body.trim(), "");
 
     let alice = mail
         .list_messages("alice@example.com", ListMessagesParams::default())

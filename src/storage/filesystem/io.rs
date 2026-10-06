@@ -122,6 +122,8 @@ impl FilesystemStorage {
             index,
             uploads_cache: Mutex::new(HashMap::new()),
             object_locks: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            test_hook: Mutex::new(None),
         }
     }
 
@@ -436,6 +438,8 @@ impl FilesystemStorage {
 
         let object_data_path = self.object_data_path(bucket, object_id);
         Self::atomic_write(&object_data_path, &object.data)?;
+        #[cfg(test)]
+        self.test_phase(super::TestPhase::BodyPublished);
 
         let metadata_path = self.object_metadata_path(bucket, object_id);
         let metadata_json = serde_json::to_string(object)
@@ -601,6 +605,8 @@ impl FilesystemStorage {
 
         let object_data_path = self.object_data_path(bucket, object_id);
         Self::atomic_move(payload_path, &object_data_path)?;
+        #[cfg(test)]
+        self.test_phase(super::TestPhase::BodyPublished);
 
         let metadata_path = self.object_metadata_path(bucket, object_id);
         let metadata_json = serde_json::to_string(object)

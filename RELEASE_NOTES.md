@@ -1,5 +1,12 @@
 # Release notes
 
+## Concurrent object reads
+
+Within one emulator instance, object GET, HEAD, range, and version reads now
+synchronize with writes and deletes. Successful payload responses keep their
+bytes, size, ETag, range headers, and read conditions on one object generation,
+including streamed replacements.
+
 ## Storage format v2
 
 This release intentionally changes the on-disk blob layout. Bucket directory

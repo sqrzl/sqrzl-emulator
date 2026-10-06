@@ -14,7 +14,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use uuid::Uuid;
 
+#[cfg(test)]
+mod consistency_tests;
 mod io;
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TestPhase {
+    ReadMetadata,
+    BodyPublished,
+}
+
+#[cfg(test)]
+type TestHook = Arc<dyn Fn(TestPhase) + Send + Sync>;
 
 /// Where a write's payload bytes come from: already resident in
 /// `Object.data`, or already spooled to a file on disk (so the write can
@@ -30,6 +42,8 @@ pub struct FilesystemStorage {
     index: Arc<LockFreeIndex>,
     uploads_cache: Mutex<HashMap<String, HashMap<String, MultipartUpload>>>,
     object_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    #[cfg(test)]
+    test_hook: Mutex<Option<TestHook>>,
 }
 
 impl BucketStore for FilesystemStorage {
@@ -141,6 +155,14 @@ impl BucketStore for FilesystemStorage {
 }
 
 impl FilesystemStorage {
+    #[cfg(test)]
+    fn test_phase(&self, phase: TestPhase) {
+        let hook = self.test_hook.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(phase);
+        }
+    }
+
     fn validate_version_id(version_id: &str) -> Result<()> {
         let mut components = std::path::Path::new(version_id).components();
         let is_single_normal_component =
@@ -169,7 +191,7 @@ impl FilesystemStorage {
             }
             return Ok(true);
         }
-        match (condition, self.get_object_metadata(bucket, key)) {
+        match (condition, self.read_object_metadata_locked(bucket, key)) {
             (
                 ObjectCondition::Missing | ObjectCondition::MissingOrEtagNotIn(_),
                 Err(Error::KeyNotFound),
@@ -218,7 +240,7 @@ impl FilesystemStorage {
         let versioning_enabled = self.versioning_enabled(bucket);
         let versioning_suspended = self.versioning_suspended(bucket);
         if versioning_enabled || versioning_suspended {
-            match self.get_object(bucket, key) {
+            match self.read_object_locked(bucket, key) {
                 Ok(current_object) => {
                     let snapshot_version_id = current_object
                         .version_id
@@ -271,7 +293,7 @@ impl FilesystemStorage {
             if !self.bucket_exists(bucket)? {
                 return Err(Error::BucketNotFound);
             }
-            match self.get_object(bucket, key) {
+            match self.read_object_locked(bucket, key) {
                 Ok(current_object) => {
                     let current_version_id = current_object
                         .version_id
@@ -328,7 +350,7 @@ impl FilesystemStorage {
                 let _ = fs::remove_dir_all(&object_id_dir);
             }
         } else {
-            self.get_object(bucket, key)?;
+            self.read_object_metadata_locked(bucket, key)?;
             fs::remove_dir_all(&object_id_dir)
                 .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
         }
@@ -343,7 +365,7 @@ impl FilesystemStorage {
         }
 
         let latest = self
-            .list_object_versions_for_key(bucket, key)?
+            .list_object_versions_for_key_locked(bucket, key)?
             .into_iter()
             .max_by(|left, right| {
                 left.last_modified
@@ -366,7 +388,7 @@ impl FilesystemStorage {
         let version_id = latest.version_id.ok_or_else(|| {
             Error::InternalError("Historical object version is missing a version id".to_string())
         })?;
-        let restored = self.get_object_version(bucket, key, &version_id)?;
+        let restored = self.read_object_version_locked(bucket, key, &version_id)?;
         self.write_object_files(bucket, object_id, &restored)?;
         fs::remove_dir_all(self.version_dir(bucket, object_id, &version_id))
             .map_err(|e| Error::InternalError(format!("Failed to promote object version: {e}")))?;
@@ -523,26 +545,19 @@ impl ObjectStore for FilesystemStorage {
     }
 
     fn get_object(&self, bucket: &str, key: &str) -> Result<Object> {
-        let object_id = Self::compute_object_id(bucket, key);
-        let object_data_path = self.object_data_path(bucket, &object_id);
-
-        if !object_data_path.exists() {
-            return Err(Error::KeyNotFound);
-        }
-
-        let metadata_path = self.object_metadata_path(bucket, &object_id);
-        let mut object = Self::read_object_metadata(&metadata_path)?;
-        object.data = fs::read(&object_data_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read object: {e}")))?;
-        Ok(object)
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock object for read".to_string()))?;
+        self.read_object_locked(bucket, key)
     }
 
     fn get_object_metadata(&self, bucket: &str, key: &str) -> Result<Object> {
-        let object_id = Self::compute_object_id(bucket, key);
-        if !self.object_data_path(bucket, &object_id).exists() {
-            return Err(Error::KeyNotFound);
-        }
-        Self::read_object_metadata(&self.object_metadata_path(bucket, &object_id))
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for metadata read".to_string())
+        })?;
+        self.read_object_metadata_locked(bucket, key)
     }
 
     fn get_object_range(
@@ -552,46 +567,11 @@ impl ObjectStore for FilesystemStorage {
         start: u64,
         end: Option<u64>,
     ) -> Result<(Object, Vec<u8>)> {
-        let object_id = Self::compute_object_id(bucket, key);
-        let object_data_path = self.object_data_path(bucket, &object_id);
-
-        if !object_data_path.exists() {
-            return Err(Error::KeyNotFound);
-        }
-
-        let metadata_path = self.object_metadata_path(bucket, &object_id);
-
-        let object = Self::read_object_metadata(&metadata_path)?;
-
-        // Validate range
-        if start >= object.size {
-            return Err(Error::InternalError(
-                "Range start beyond file size".to_string(),
-            ));
-        }
-
-        let actual_end = end.map_or(object.size - 1, |e| e.min(object.size - 1));
-        if actual_end < start {
-            return Err(Error::InternalError(
-                "Invalid range: end < start".to_string(),
-            ));
-        }
-
-        let length = usize::try_from(actual_end - start + 1)
-            .map_err(|_| Error::InternalError("Requested range is too large".to_string()))?;
-
-        // Read range from file
-        let mut file = fs::File::open(&object_data_path)
-            .map_err(|e| Error::InternalError(format!("Failed to open object file: {e}")))?;
-
-        file.seek(SeekFrom::Start(start))
-            .map_err(|e| Error::InternalError(format!("Failed to seek: {e}")))?;
-
-        let mut buffer = vec![0u8; length];
-        file.read_exact(&mut buffer)
-            .map_err(|e| Error::InternalError(format!("Failed to read range: {e}")))?;
-
-        Ok((object, buffer))
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for range read".to_string())
+        })?;
+        self.read_object_range_locked(bucket, key, start, end)
     }
 
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
@@ -646,6 +626,89 @@ impl ObjectStore for FilesystemStorage {
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool> {
         // Fast path: check lock-free index first
         Ok(self.index.contains(bucket, key))
+    }
+}
+
+impl FilesystemStorage {
+    // Callers must hold the object's mutex. Mutations use these helpers rather
+    // than the public readers so the non-reentrant mutex is acquired only once.
+    fn read_object_locked(&self, bucket: &str, key: &str) -> Result<Object> {
+        let object_id = Self::compute_object_id(bucket, key);
+        let object_data_path = self.object_data_path(bucket, &object_id);
+
+        if !object_data_path.exists() {
+            return Err(Error::KeyNotFound);
+        }
+
+        let metadata_path = self.object_metadata_path(bucket, &object_id);
+        let mut object = Self::read_object_metadata(&metadata_path)?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::ReadMetadata);
+        object.data = fs::read(&object_data_path)
+            .map_err(|e| Error::InternalError(format!("Failed to read object: {e}")))?;
+        Ok(object)
+    }
+
+    fn read_object_metadata_locked(&self, bucket: &str, key: &str) -> Result<Object> {
+        let object_id = Self::compute_object_id(bucket, key);
+        if !self.object_data_path(bucket, &object_id).exists() {
+            return Err(Error::KeyNotFound);
+        }
+        let object = Self::read_object_metadata(&self.object_metadata_path(bucket, &object_id))?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::ReadMetadata);
+        Ok(object)
+    }
+
+    fn read_object_range_locked(
+        &self,
+        bucket: &str,
+        key: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Object, Vec<u8>)> {
+        let object_id = Self::compute_object_id(bucket, key);
+        let object_data_path = self.object_data_path(bucket, &object_id);
+
+        if !object_data_path.exists() {
+            return Err(Error::KeyNotFound);
+        }
+
+        let metadata_path = self.object_metadata_path(bucket, &object_id);
+
+        let object = Self::read_object_metadata(&metadata_path)?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::ReadMetadata);
+
+        // Validate range
+        if start >= object.size {
+            return Err(Error::InvalidRequest(
+                "Range start beyond file size".to_string(),
+            ));
+        }
+
+        let actual_end = end.map_or(object.size - 1, |e| e.min(object.size - 1));
+        if actual_end < start {
+            return Err(Error::InvalidRequest(
+                "Invalid range: end < start".to_string(),
+            ));
+        }
+
+        let length = usize::try_from(actual_end - start + 1)
+            .map_err(|_| Error::InternalError("Requested range is too large".to_string()))?;
+
+        // Read range from file
+        let mut file = fs::File::open(&object_data_path)
+            .map_err(|e| Error::InternalError(format!("Failed to open object file: {e}")))?;
+
+        file.seek(SeekFrom::Start(start))
+            .map_err(|e| Error::InternalError(format!("Failed to seek: {e}")))?;
+
+        let mut buffer = vec![0u8; length];
+        file.read_exact(&mut buffer)
+            .map_err(|e| Error::InternalError(format!("Failed to read range: {e}")))?;
+
+        Ok((object, buffer))
     }
 }
 
@@ -1590,6 +1653,88 @@ impl MultipartStore for FilesystemStorage {
     }
 }
 
+impl FilesystemStorage {
+    fn read_object_version_locked(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<Object> {
+        if !self.bucket_exists(bucket)? {
+            return Err(Error::BucketNotFound);
+        }
+        Self::validate_version_id(version_id)?;
+
+        let object_id = Self::compute_object_id(bucket, key);
+        let version_data_path = self.version_data_path(bucket, &object_id, version_id);
+        if !version_data_path.exists() {
+            let current_object = self
+                .read_object_locked(bucket, key)
+                .map_err(|err| match err {
+                    Error::KeyNotFound => Error::NoSuchVersion,
+                    other => other,
+                })?;
+
+            if current_object.version_id.as_deref() == Some(version_id) {
+                return Ok(current_object);
+            }
+
+            return Err(Error::NoSuchVersion);
+        }
+
+        let metadata_path = self.version_metadata_path(bucket, &object_id, version_id);
+        let mut object = Self::read_object_metadata(&metadata_path)?;
+        object.data = fs::read(&version_data_path)
+            .map_err(|e| Error::InternalError(format!("Failed to read version: {e}")))?;
+
+        object.version_id = Some(version_id.to_string());
+
+        Ok(object)
+    }
+}
+
+impl FilesystemStorage {
+    fn list_object_versions_for_key_locked(&self, bucket: &str, key: &str) -> Result<Vec<Object>> {
+        if !self.bucket_exists(bucket)? {
+            return Err(Error::BucketNotFound);
+        }
+
+        let object_id = Self::compute_object_id(bucket, key);
+        let object_id_dir = self.object_id_dir(bucket, &object_id);
+        if !object_id_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut versions = Vec::new();
+        let metadata_path = self.object_metadata_path(bucket, &object_id);
+        if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
+            if obj.key == key && obj.version_id.is_some() {
+                versions.push(obj);
+            }
+        }
+
+        let versions_dir = self.versions_dir(bucket, &object_id);
+        if let Ok(version_entries) = fs::read_dir(&versions_dir) {
+            for version_entry in version_entries.flatten() {
+                let version_path = version_entry.path();
+                if !version_path.is_dir() {
+                    continue;
+                }
+
+                let metadata_path = version_path.join("object.meta.json");
+                if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
+                    if obj.key == key {
+                        versions.push(obj);
+                    }
+                }
+            }
+        }
+
+        versions.sort_unstable_by(|a, b| a.version_id.cmp(&b.version_id));
+        Ok(versions)
+    }
+}
+
 impl VersionStore for FilesystemStorage {
     fn enable_versioning(&self, bucket: &str) -> Result<()> {
         if !self.bucket_exists(bucket)? {
@@ -1623,34 +1768,11 @@ impl VersionStore for FilesystemStorage {
         key: &str,
         version_id: &str,
     ) -> Result<crate::models::Object> {
-        if !self.bucket_exists(bucket)? {
-            return Err(Error::BucketNotFound);
-        }
-        Self::validate_version_id(version_id)?;
-
-        let object_id = Self::compute_object_id(bucket, key);
-        let version_data_path = self.version_data_path(bucket, &object_id, version_id);
-        if !version_data_path.exists() {
-            let current_object = self.get_object(bucket, key).map_err(|err| match err {
-                Error::KeyNotFound => Error::NoSuchVersion,
-                other => other,
-            })?;
-
-            if current_object.version_id.as_deref() == Some(version_id) {
-                return Ok(current_object);
-            }
-
-            return Err(Error::NoSuchVersion);
-        }
-
-        let metadata_path = self.version_metadata_path(bucket, &object_id, version_id);
-        let mut object = Self::read_object_metadata(&metadata_path)?;
-        object.data = fs::read(&version_data_path)
-            .map_err(|e| Error::InternalError(format!("Failed to read version: {e}")))?;
-
-        object.version_id = Some(version_id.to_string());
-
-        Ok(object)
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for version read".to_string())
+        })?;
+        self.read_object_version_locked(bucket, key, version_id)
     }
 
     fn list_object_versions(
@@ -1729,45 +1851,12 @@ impl VersionStore for FilesystemStorage {
         bucket: &str,
         key: &str,
     ) -> Result<Vec<crate::models::Object>> {
-        if !self.bucket_exists(bucket)? {
-            return Err(Error::BucketNotFound);
-        }
-
-        let object_id = Self::compute_object_id(bucket, key);
-        let object_id_dir = self.object_id_dir(bucket, &object_id);
-        if !object_id_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut versions = Vec::new();
-        let metadata_path = self.object_metadata_path(bucket, &object_id);
-        if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
-            if obj.key == key && obj.version_id.is_some() {
-                versions.push(obj);
-            }
-        }
-
-        let versions_dir = self.versions_dir(bucket, &object_id);
-        if let Ok(version_entries) = fs::read_dir(&versions_dir) {
-            for version_entry in version_entries.flatten() {
-                let version_path = version_entry.path();
-                if !version_path.is_dir() {
-                    continue;
-                }
-
-                let metadata_path = version_path.join("object.meta.json");
-                if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
-                    if obj.key == key {
-                        versions.push(obj);
-                    }
-                }
-            }
-        }
-
-        versions.sort_unstable_by(|a, b| a.version_id.cmp(&b.version_id));
-        Ok(versions)
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for version listing".to_string())
+        })?;
+        self.list_object_versions_for_key_locked(bucket, key)
     }
-
     fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
         let object_lock = self.object_lock(bucket, key)?;
         let _guard = object_lock.lock().map_err(|_| {
@@ -1781,10 +1870,12 @@ impl VersionStore for FilesystemStorage {
         let object_id = Self::compute_object_id(bucket, key);
         let version_data_path = self.version_data_path(bucket, &object_id, version_id);
         if !version_data_path.exists() {
-            let current_object = self.get_object(bucket, key).map_err(|err| match err {
-                Error::KeyNotFound => Error::NoSuchVersion,
-                other => other,
-            })?;
+            let current_object = self
+                .read_object_locked(bucket, key)
+                .map_err(|err| match err {
+                    Error::KeyNotFound => Error::NoSuchVersion,
+                    other => other,
+                })?;
 
             if current_object.version_id.as_deref() != Some(version_id) {
                 return Err(Error::NoSuchVersion);
@@ -2084,7 +2175,7 @@ mod tests {
         assert!(first.objects.is_empty());
         assert!(first.is_truncated);
         assert_eq!(first.next_marker.as_deref(), Some("docs/"));
-        assert!(second.common_prefixes.is_empty());
+        assert_eq!(second.common_prefixes.len(), 0);
         assert_eq!(second.objects.len(), 1);
         assert_eq!(second.objects[0].key, "document.txt");
         assert!(!second.is_truncated);
@@ -2167,10 +2258,10 @@ mod tests {
             .unwrap();
 
         // Assert
-        assert!(docs_after_nested_delete.common_prefixes.is_empty());
+        assert_eq!(docs_after_nested_delete.common_prefixes.len(), 0);
         assert_eq!(docs_after_nested_delete.objects.len(), 1);
         assert_eq!(docs_after_nested_delete.objects[0].key, "docs/readme.txt");
-        assert!(root_after_all_deletes.common_prefixes.is_empty());
+        assert_eq!(root_after_all_deletes.common_prefixes.len(), 0);
         assert!(root_after_all_deletes.objects.is_empty());
 
         let _ = std::fs::remove_dir_all(&base);
