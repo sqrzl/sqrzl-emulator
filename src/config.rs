@@ -401,7 +401,7 @@ mod tests {
         assert_eq!(config.ui_port, DEFAULT_SQRZL_UI_PORT);
         assert_eq!(config.max_request_bytes, DEFAULT_SQRZL_MAX_REQUEST_BYTES);
         assert_eq!(config.smtp_port, DEFAULT_SQRZL_SMTP_PORT);
-        assert!(startup_buckets.is_empty());
+        assert_eq!(startup_buckets.len(), 0);
     }
 
     #[test]

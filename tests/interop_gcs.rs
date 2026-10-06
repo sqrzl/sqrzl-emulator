@@ -131,7 +131,7 @@ async fn should_return_not_found_given_missing_lease_object_when_requesting_obje
     .await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(body_bytes(response).await.is_empty());
+    assert_eq!(body_bytes(response).await.len(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]

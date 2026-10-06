@@ -1,6 +1,6 @@
 use super::{state, ProviderAdapter};
 use crate::auth::{AuthConfig, HttpRequestLike};
-use crate::blob::{BlobBackend, BlobRange, CreateUploadSessionRequest};
+use crate::blob::{BlobBackend, CreateUploadSessionRequest};
 use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
 use crate::storage::{
@@ -535,24 +535,6 @@ impl OciAdapter {
             }
         }
         Ok(metadata)
-    }
-
-    fn parse_range_header(value: &str, size: u64) -> Option<(usize, usize)> {
-        let range = value.strip_prefix("bytes=")?;
-        let (start, end) = range.split_once('-')?;
-        let start = start.parse::<u64>().ok()?;
-        if start >= size {
-            return None;
-        }
-        let end = if end.is_empty() {
-            size.saturating_sub(1)
-        } else {
-            end.parse::<u64>().ok()?.min(size.saturating_sub(1))
-        };
-        if end < start {
-            return None;
-        }
-        Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
     }
 
     fn decode_object_path(path: &str) -> Result<String, String> {
@@ -2022,7 +2004,10 @@ impl OciAdapter {
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
             Err(error) => return Err(error.to_string()),
         }
-        let blob = match storage.get_object_metadata(bucket, object) {
+        if let Some(range_header) = req.header("range") {
+            return Self::object_range_response(storage, req, bucket, object, range_header);
+        }
+        let blob = match storage.as_ref().get_blob(bucket, object) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound) => return Ok(Self::object_not_found()),
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::bucket_not_found()),
@@ -2032,53 +2017,50 @@ impl OciAdapter {
             Ok(Some(response)) | Err(response) => return Ok(response),
             Ok(None) => {}
         }
-        if let Some(range_header) = req.header("range") {
-            return Self::object_range_response(storage, bucket, object, &blob, range_header);
-        }
-        let payload = storage
-            .as_ref()
-            .get_blob(bucket, object)
-            .map_err(|err| err.to_string())?;
-        Ok(Self::object_response(StatusCode::OK, &payload)
-            .body(payload.data)
+        Ok(Self::object_response(StatusCode::OK, &blob)
+            .body(blob.data)
             .build())
     }
 
     fn object_range_response(
         storage: &Arc<dyn Storage>,
+        req: &Request,
         bucket: &str,
         object: &str,
-        blob: &crate::models::Object,
         range_header: &str,
     ) -> Result<Response<Body>, String> {
-        if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-            let payload = storage
-                .as_ref()
-                .get_blob_range(
-                    bucket,
-                    object,
-                    BlobRange {
-                        start: start as u64,
-                        end: end as u64,
-                    },
+        if let Some((start, end)) = crate::utils::request::parse_byte_range(range_header) {
+            let (blob, data) = match storage.get_object_range(bucket, object, start, end) {
+                Ok(payload) => payload,
+                Err(crate::error::Error::InvalidRequest(_)) => {
+                    return Ok(Self::invalid_range_response())
+                }
+                Err(crate::error::Error::KeyNotFound) => return Ok(Self::object_not_found()),
+                Err(error) => return Err(error.to_string()),
+            };
+            match Self::read_condition(req, &blob) {
+                Ok(Some(response)) | Err(response) => return Ok(response),
+                Ok(None) => {}
+            }
+            let end = start + data.len() as u64 - 1;
+            return Ok(Self::object_response(StatusCode::PARTIAL_CONTENT, &blob)
+                .header("content-length", &data.len().to_string())
+                .header(
+                    "content-range",
+                    &format!("bytes {start}-{end}/{}", blob.size),
                 )
-                .map_err(|err| err.to_string())?;
-            return Ok(
-                Self::object_response(StatusCode::PARTIAL_CONTENT, &payload.blob)
-                    .header("content-length", &payload.data.len().to_string())
-                    .header(
-                        "content-range",
-                        &format!("bytes {start}-{end}/{}", blob.size),
-                    )
-                    .body(payload.data)
-                    .build(),
-            );
+                .body(data)
+                .build());
         }
-        Ok(Self::error_response(
+        Ok(Self::invalid_range_response())
+    }
+
+    fn invalid_range_response() -> Response<Body> {
+        Self::error_response(
             StatusCode::RANGE_NOT_SATISFIABLE,
             "InvalidRange",
             "The requested range is not satisfiable",
-        ))
+        )
     }
 
     fn head_object(
