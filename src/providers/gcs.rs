@@ -28,6 +28,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 
+mod bounded;
+
 const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
 const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
 const GCS_UPDATED_KEY: &str = "__sqrzl_gcs_updated";
@@ -964,24 +966,6 @@ impl GcsAdapter {
             }
         }
         Ok(())
-    }
-
-    fn parse_range_header(value: &str, size: u64) -> Option<(usize, usize)> {
-        let range = value.strip_prefix("bytes=")?;
-        let (start, end) = range.split_once('-')?;
-        let start = start.parse::<u64>().ok()?;
-        if start >= size {
-            return None;
-        }
-        let end = if end.is_empty() {
-            size.saturating_sub(1)
-        } else {
-            end.parse::<u64>().ok()?.min(size.saturating_sub(1))
-        };
-        if end < start {
-            return None;
-        }
-        Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
     }
 
     fn metadata_from_headers(req: &Request) -> HashMap<String, String> {
@@ -6958,53 +6942,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        if let Some(range_header) = req.header("range") {
-            return Self::object_range_response(storage, None, bucket, object, range_header);
-        }
-        let blob = match storage.as_ref().get_blob(bucket, object) {
-            Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "NoSuchKey",
-                    "The specified key does not exist.",
-                ));
-            }
-            Err(crate::error::Error::BucketNotFound) => {
-                return Ok(Self::xml_bucket_not_found(bucket));
-            }
-            Err(err) => {
-                return Ok(Self::error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "InternalError",
-                    &err.to_string(),
-                ));
-            }
-        };
-        Self::object_media_response_for_blob(req, blob)
-    }
-
-    fn object_media_response_for_blob(
-        req: &Request,
-        blob: crate::models::Object,
-    ) -> Result<Response<Body>, String> {
-        if let Some(range_header) = req.header("range") {
-            if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-                return Ok(Self::object_response(
-                    StatusCode::PARTIAL_CONTENT,
-                    &blob,
-                    end - start + 1,
-                    Some(format!("bytes {start}-{end}/{}", blob.size)),
-                )
-                .body(blob.data[start..=end].to_vec())
-                .build());
-            }
-            return Ok(Self::invalid_range_response());
-        }
-        let body_len = Self::response_body_len(blob.size)?;
-        Ok(Self::object_response(StatusCode::OK, &blob, body_len, None)
-            .body(blob.data)
-            .build())
+        Self::bounded_media_response(storage, req, bucket, object, false)
     }
 
     fn object_head_response(
@@ -7027,78 +6965,6 @@ impl GcsAdapter {
         };
         let body_len = Self::response_body_len(blob.size)?;
         Ok(Self::object_response(StatusCode::OK, &blob, body_len, None).empty())
-    }
-
-    fn object_range_response(
-        storage: &Arc<dyn Storage>,
-        json_request: Option<&Request>,
-        bucket: &str,
-        object: &str,
-        range_header: &str,
-    ) -> Result<Response<Body>, String> {
-        if let Some((start, end)) = crate::utils::request::parse_byte_range(range_header) {
-            let (blob, data) = match storage.get_object_range(bucket, object, start, end) {
-                Ok(payload) => payload,
-                Err(crate::error::Error::InvalidRequest(_)) => {
-                    return Self::object_range_error_response(storage, json_request, bucket, object)
-                }
-                Err(crate::error::Error::KeyNotFound) => {
-                    if json_request.is_some() {
-                        return Ok(Self::json_not_found(object));
-                    }
-                    return Ok(Self::error_response(
-                        StatusCode::NOT_FOUND,
-                        "NoSuchKey",
-                        "The specified key does not exist.",
-                    ));
-                }
-                Err(error) => return Err(error.to_string()),
-            };
-            if let Some(req) = json_request {
-                if let Err(response) = Self::check_current_generation_selector(req, &blob) {
-                    return Ok(*response);
-                }
-                if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
-                    return Ok(response);
-                }
-            }
-            let end = start + data.len() as u64 - 1;
-            return Ok(Self::object_response(
-                StatusCode::PARTIAL_CONTENT,
-                &blob,
-                data.len(),
-                Some(format!("bytes {start}-{end}/{}", blob.size)),
-            )
-            .body(data)
-            .build());
-        }
-        Self::object_range_error_response(storage, json_request, bucket, object)
-    }
-
-    fn object_range_error_response(
-        storage: &Arc<dyn Storage>,
-        json_request: Option<&Request>,
-        bucket: &str,
-        object: &str,
-    ) -> Result<Response<Body>, String> {
-        if let Some(req) = json_request {
-            return Ok(
-                match Self::checked_json_blob(storage, req, bucket, object, false) {
-                    Ok(_) => Self::invalid_range_response(),
-                    Err(response) => *response,
-                },
-            );
-        }
-        match storage.get_object_metadata(bucket, object) {
-            Ok(_) => Ok(Self::invalid_range_response()),
-            Err(crate::error::Error::KeyNotFound) => Ok(Self::error_response(
-                StatusCode::NOT_FOUND,
-                "NoSuchKey",
-                "The specified key does not exist.",
-            )),
-            Err(crate::error::Error::BucketNotFound) => Ok(Self::xml_bucket_not_found(bucket)),
-            Err(error) => Err(error.to_string()),
-        }
     }
 
     fn invalid_range_response() -> Response<Body> {
@@ -8945,28 +8811,13 @@ impl GcsAdapter {
         object: &str,
         alt_media: bool,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::checked_json_blob(storage, req, bucket, object, false) {
+        if alt_media {
+            return Self::bounded_media_response(storage, req, bucket, object, true);
+        }
+        let blob = match Self::checked_json_blob(storage, req, bucket, object) {
             Ok(blob) => blob,
             Err(response) => return Ok(*response),
         };
-        if alt_media {
-            if let Some(range_header) = req.header("range") {
-                return Self::object_range_response(
-                    storage,
-                    Some(req),
-                    bucket,
-                    object,
-                    range_header,
-                );
-            }
-        }
-        if alt_media {
-            let blob = match Self::checked_json_blob(storage, req, bucket, object, true) {
-                Ok(blob) => blob,
-                Err(response) => return Ok(*response),
-            };
-            return Self::object_media_response_for_blob(req, blob);
-        }
         Ok(Self::json_response(
             StatusCode::OK,
             &Self::json_object_metadata(bucket, &blob).to_string(),
@@ -8979,7 +8830,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::checked_json_blob(storage, req, bucket, object, false) {
+        let blob = match Self::checked_json_blob(storage, req, bucket, object) {
             Ok(blob) => blob,
             Err(response) => return Ok(*response),
         };
@@ -9062,7 +8913,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::checked_json_blob(storage, req, bucket, object, false) {
+        let blob = match Self::checked_json_blob(storage, req, bucket, object) {
             Ok(blob) => blob,
             Err(response) => return Ok(*response),
         };
@@ -9148,13 +8999,8 @@ impl GcsAdapter {
         req: &Request,
         bucket: &str,
         object: &str,
-        with_payload: bool,
     ) -> Result<crate::models::Object, Box<Response<Body>>> {
-        let snapshot = if with_payload {
-            storage.get_object(bucket, object)
-        } else {
-            storage.get_object_metadata(bucket, object)
-        };
+        let snapshot = storage.get_object_metadata(bucket, object);
         let blob = match snapshot {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound) => {
@@ -9301,28 +9147,6 @@ impl GcsAdapter {
         if Self::foreign_data_protection_active(storage, bucket) {
             return Ok(Self::foreign_data_protection_json_response());
         }
-        let blob = match storage.as_ref().get_blob(bucket, &object) {
-            Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound) => {
-                return Ok(Self::json_not_found(&object));
-            }
-            Err(crate::error::Error::BucketNotFound) => {
-                return Ok(Self::json_bucket_not_found(bucket));
-            }
-            Err(err) => {
-                return Ok(Self::json_upload_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "INTERNAL",
-                    &err.to_string(),
-                ));
-            }
-        };
-        if let Err(response) = Self::check_current_generation_selector(req, &blob) {
-            return Ok(*response);
-        }
-        if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
-            return Ok(response);
-        }
-        Self::object_media_response_for_blob(req, blob)
+        Self::bounded_media_response(storage, req, bucket, &object, true)
     }
 }
