@@ -84,6 +84,32 @@ def test_azure_empty_block_list_commits(sqrzl_server):
         blob.upload_blob(b"", overwrite=True)
         assert blob.get_block_list(block_list_type="all") == ([], [])
         blob.delete_blob()
+    for kind in ["PageBlob", "AppendBlob"]:
+        blob = container.get_blob_client(kind)
+        if kind == "PageBlob":
+            blob.create_page_blob(512)
+            blob.upload_page(b"p" * 512, offset=0, length=512)
+        else:
+            blob.create_append_blob()
+            blob.append_block(b"preserved")
+        before = blob.get_blob_properties()
+        payload = blob.download_blob().readall()
+        block_id = base64.b64encode(b"missing").decode()
+        for operation, expected_status in [
+            (lambda: blob.stage_block(block_id=block_id, data=b"rejected"), 409),
+            (lambda: blob.commit_block_list([]), 400),
+            (lambda: blob.commit_block_list([azure_blob.BlobBlock(block_id=block_id)]), 400),
+        ]:
+            with pytest.raises(HttpResponseError) as error:
+                operation()
+            assert error.value.status_code == expected_status
+            assert error.value.error_code == "InvalidBlobType"
+            after = blob.get_blob_properties()
+            assert after.blob_type == before.blob_type
+            assert after.etag == before.etag
+            assert after.size == before.size
+            assert blob.download_blob().readall() == payload
+        blob.delete_blob()
     service.delete_container(container.container_name)
 
 
@@ -289,10 +315,13 @@ def test_azure_content_properties_and_upload_checksum_contract(sqrzl_server):
         content_language="en-US",
         content_disposition="attachment; filename=properties.txt",
     )
-    payload = b"native sdk properties"
+    # Azure's published CRC64 wire vector for body 0x11 is d0 61 67 57 b4 5f 54 d2.
+    # https://learn.microsoft.com/en-us/rest/api/storageservices/structured-body-format
+    payload = b"\x11"
+    crc64 = "0GFnV7RfVNI="
     blob.upload_blob(payload, overwrite=True, content_settings=settings, raw_response_hook=capture)
     assert base64.b64decode(observed["content-md5"]) == hashlib.md5(payload).digest()
-    assert "x-ms-content-crc64" in observed
+    assert observed["x-ms-content-crc64"] == crc64
     properties = blob.get_blob_properties().content_settings
     for key in ("content_type", "cache_control", "content_encoding", "content_language", "content_disposition"):
         assert getattr(properties, key) == getattr(settings, key)
@@ -303,8 +332,19 @@ def test_azure_content_properties_and_upload_checksum_contract(sqrzl_server):
 
     block_id = base64.b64encode(b"property-block").decode("ascii")
     observed.clear()
-    blob.stage_block(block_id=block_id, data=payload, raw_response_hook=capture)
-    assert "x-ms-content-crc64" in observed
+    blob.stage_block(
+        block_id=block_id, data=payload, raw_response_hook=capture,
+        headers={"x-ms-content-crc64": crc64},
+    )
+    assert observed["x-ms-content-crc64"] == crc64
+    from azure.core.exceptions import HttpResponseError
+
+    with pytest.raises(HttpResponseError) as error:
+        blob.stage_block(
+            block_id=block_id, data=payload,
+            headers={"x-ms-content-crc64": "0lRftFdnYdA="},
+        )
+    assert error.value.status_code == 400
     observed.clear()
     blob.commit_block_list(
         [azure_blob.BlobBlock(block_id=block_id)],
@@ -315,6 +355,7 @@ def test_azure_content_properties_and_upload_checksum_contract(sqrzl_server):
     properties = blob.get_blob_properties().content_settings
     assert properties.cache_control == "no-cache"
     assert properties.content_encoding is None
+    assert blob.download_blob().readall() == payload
     blob.delete_blob()
     service.delete_container(container.container_name)
 
