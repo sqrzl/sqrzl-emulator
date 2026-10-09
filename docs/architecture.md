@@ -319,8 +319,8 @@ Startup claims the root writer lock, recovers publication decisions, then purges
 abandoned request spools. Native dispatch, admin mutations and lifecycle passes
 share one operation gate so protection checks and their commits cannot interleave
 through another front door. Metadata-only admission and bounded range APIs avoid
-loading payloads for HEAD and protection decisions. Whole materialized S3/Azure
-reads/copies and Azure page/append extents have an explicit 64 MiB local cap.
+loading payloads for HEAD and protection decisions. Whole materialized S3/Azure/GCS
+reads, S3/Azure copies and Azure page/append extents have an explicit 64 MiB local cap.
 
 Startup purges abandoned request spools. Request cancellation, provider
 rejection, abort, completion, overwrite, expired GCS sessions, and obsolete

@@ -320,9 +320,7 @@
         "PutBlob",
         "GetBlob",
         "GetBlobProperties",
-        "PutPageBlob",
-        "PutPage",
-        "ClearPage"
+        "PutPage"
       ],
       "checks": [
         "positive",
@@ -351,16 +349,20 @@
           "negative",
           "native-error"
         ],
-        "PutPageBlob": [
-          "positive"
-        ],
         "PutPage": [
           "positive"
-        ],
-        "ClearPage": [
-          "positive"
         ]
-      }
+      },
+      "operation_ids": [
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.PutBlob.put.PageBlob",
+        "azure-blob.PutPage.put.update",
+        "azure-blob.PutPage.put.clear",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.GetBlob.get.version",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlobProperties.head.version"
+      ]
     },
     "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow": {
       "provider": "azure",
@@ -410,7 +412,10 @@
           "native-error",
           "positive"
         ]
-      }
+      },
+      "operation_ids": [
+        "acs.SendEmail.post.send"
+      ]
     },
     "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send": {
       "provider": "acs",
@@ -435,7 +440,7 @@
     "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_rejects_projected_capture_limit": {
       "provider": "sendgrid",
       "operations": [
-        "SendMail"
+        "Send"
       ],
       "checks": [
         "negative",
@@ -446,13 +451,16 @@
       "auth_mode": "native-if-messaging-auth-lane",
       "scope": "Projected local 64 MiB aggregate capture admission rejects fan-out through the official client, creates no first-recipient mailbox record, and permits a smaller subsequent capture. This is an admission bound, not measured RSS qualification.",
       "operation_checks": {
-        "SendMail": [
+        "Send": [
           "negative",
           "boundary",
           "native-error",
           "positive"
         ]
-      }
+      },
+      "operation_ids": [
+        "sendgrid.Send.post.personalizations"
+      ]
     },
     "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send": {
       "provider": "sendgrid",
@@ -489,7 +497,7 @@
     "sdk-tests/test_email_sdk.py::test_smtp_sdk_rejects_projected_capture_limit": {
       "provider": "smtp",
       "operations": [
-        "SMTPData"
+        "Data"
       ],
       "checks": [
         "negative",
@@ -500,13 +508,16 @@
       "auth_mode": "local-smtp",
       "scope": "Projected local 64 MiB aggregate capture admission rejects fan-out through the official client, creates no first-recipient mailbox record, and permits a smaller subsequent capture. This is an admission bound, not measured RSS qualification.",
       "operation_checks": {
-        "SMTPData": [
+        "Data": [
           "negative",
           "boundary",
           "native-error",
           "positive"
         ]
-      }
+      },
+      "operation_ids": [
+        "smtp.Data.smtp.default"
+      ]
     },
     "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message": {
       "provider": "smtp",

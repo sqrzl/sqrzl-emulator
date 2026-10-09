@@ -4280,7 +4280,8 @@
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
         "acceptance_gates": {
@@ -4340,7 +4341,8 @@
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
         "acceptance_gates": {
@@ -4406,7 +4408,8 @@
             "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
         "acceptance_gates": {
@@ -4719,7 +4722,9 @@
             "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content",
             "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -4751,7 +4756,9 @@
             "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content",
             "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -4783,7 +4790,9 @@
             "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content",
             "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -7883,7 +7892,8 @@
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
+            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message",
+            "sdk-tests/test_email_sdk.py::test_smtp_sdk_rejects_projected_capture_limit"
           ]
         },
         "acceptance_gates": {
@@ -7917,7 +7927,8 @@
             "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send"
+            "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send",
+            "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_rejects_projected_capture_limit"
           ]
         },
         "acceptance_gates": {
@@ -7984,7 +7995,8 @@
             "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send"
+            "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send",
+            "sdk-tests/test_email_sdk.py::test_acs_email_sdk_rejects_projected_capture_limit"
           ]
         },
         "acceptance_gates": {
@@ -9208,6 +9220,74 @@
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
             "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "azure-blob.GetBlob.get.version",
+        "provider": "azure-blob",
+        "family": "snapshots",
+        "operation": "GetBlob",
+        "method": "GET",
+        "path": "/devstoreaccount1/{container}/{blob}?versionid={version}",
+        "variant": "version",
+        "support_tier": "partial",
+        "boundary": "Selected stored Azure version IDs preserve that revision identity; native ETag/date read conditions apply. Version-management operations beyond the local stored-history model remain outside scope.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
+            "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+            "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
+            "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "azure-blob.GetBlobProperties.head.version",
+        "provider": "azure-blob",
+        "family": "snapshots",
+        "operation": "GetBlobProperties",
+        "method": "HEAD",
+        "path": "/devstoreaccount1/{container}/{blob}?versionid={version}",
+        "variant": "version",
+        "support_tier": "partial",
+        "boundary": "Selected stored Azure version IDs preserve that revision identity; native ETag/date read conditions apply. Version-management operations beyond the local stored-history model remain outside scope.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
+            "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+            "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
+            "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
         "acceptance_gates": {
