@@ -156,7 +156,10 @@ async fn should_keep_held_http_reads_on_the_generation_used_for_response_conditi
         ),
         (
             "/devstoreaccount1/coherent/lease",
-            &[("x-ms-version", "2023-11-03")],
+            &[
+                ("x-ms-version", "2023-11-03"),
+                ("if-match", "\"6811fbc0e37e7eb14fdf61ff13ca76de\""),
+            ],
         ),
         (
             "/storage/v1/b/coherent/o/lease?alt=media&ifGenerationMatch=1",
@@ -622,6 +625,30 @@ async fn should_bound_s3_current_and_historical_materialization_before_payload_r
             String::new(),
             vec![],
             http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "GET",
+            String::new(),
+            vec![("if-match", "\"wrong\""), ("range", "invalid")],
+            http::StatusCode::PRECONDITION_FAILED,
+        ),
+        (
+            "GET",
+            String::new(),
+            vec![("if-none-match", "*"), ("range", "invalid")],
+            http::StatusCode::NOT_MODIFIED,
+        ),
+        (
+            "GET",
+            format!("?versionid={version}"),
+            vec![("if-none-match", "*")],
+            http::StatusCode::NOT_MODIFIED,
+        ),
+        (
+            "HEAD",
+            format!("?versionid={version}"),
+            vec![("if-match", "\"wrong\"")],
+            http::StatusCode::PRECONDITION_FAILED,
         ),
         (
             "HEAD",
