@@ -14,6 +14,9 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from campaign_evidence import campaign_rejection_reason
+from sdk_evidence import validate_campaign_processes, validate_sdk_lane
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -102,47 +105,22 @@ def sdk_result_outcome(result: dict) -> str:
         return "scope-unqualified"
     if not result["test"].startswith("sdk-tests/test_large_upload_qualification.py::"):
         return outcome
+    if result.get("qualification_eligible") is not True or result.get(
+        "qualification_rejection_reason"
+    ):
+        return "scope-unqualified"
     campaign = result.get("properties", {}).get("large_upload_campaign", {})
-    if (
-        campaign.get("payload_bytes") != 1_073_741_824
-        or campaign.get("campaign_kind") != "selected-1GiB-resource-qualification"
-        or campaign.get("completed") is not True
-        or campaign.get("sampler_errors")
-        or campaign.get("sample_count", 0) <= 0
-    ):
+    if campaign_rejection_reason(result["test"], campaign) is not None:
         return "scope-unqualified"
-    for resource in ("client_rss", "service_rss", "owned_disk"):
-        peak = campaign.get(f"{resource}_peak_bytes", 0)
-        budget = campaign.get(f"{resource}_budget_bytes", 0)
-        maximum = 5_368_709_120 if resource == "owned_disk" else 536_870_912
-        if not (0 < peak <= budget <= maximum):
-            return "scope-unqualified"
-    phases = campaign.get("phases", [])
-    names = {phase.get("name") for phase in phases}
-    if (
-        not {
-            "normal-process-restart",
-            "abrupt-process-stop-during-transfer",
-            "abrupt-process-restart",
-            "abort-and-staging-cleanup",
-        }
-        <= names
+    return outcome
+
+
+def sdk_junit_outcome(node: str, outcome: str, verified: dict[str, str]) -> str:
+    """An XML pass contains no measurements and cannot override rejected JSON."""
+    if outcome == "passed" and node.startswith(
+        "sdk-tests/test_large_upload_qualification.py::"
     ):
-        return "scope-unqualified"
-    readbacks = [
-        phase for phase in phases if phase.get("name") == "full-range-readback"
-    ]
-    digest = campaign.get("payload_sha256", "")
-    if (
-        not re.fullmatch(r"[0-9a-f]{64}", digest)
-        or len(readbacks) < 2
-        or any(
-            phase.get("sha256") != digest
-            or phase.get("readback_bytes") != 1_073_741_824
-            for phase in readbacks
-        )
-    ):
-        return "scope-unqualified"
+        return "passed" if verified.get(node) == "passed" else "scope-unqualified"
     return outcome
 
 
@@ -274,24 +252,34 @@ def main() -> int:
     lane_evidence = []
     verified_sdk_results = {}
     sdk_lane_results = {}
+    sdk_rejection_reasons = {}
+    source_tree = command(["git", "rev-parse", "HEAD^{tree}"]).strip()
+
+    def tracked_file(path):
+        return subprocess.check_output(["git", "show", f"{head}:{path}"], cwd=ROOT)
+
     for path in args.sdk_evidence:
         lane = json.loads(path.read_text())
-        if (
-            lane.get("source_commit") != head
-            or lane.get("binary_source_commit") != head
-            or lane.get("dirty_worktree")
-            or lane.get("collection_only")
-            or lane.get("exit_status") != 0
-            or not lane.get("binary_source_verified")
-        ):
-            raise ValueError(
-                f"SDK lane is not clean passing exact-head evidence: {path}"
-            )
+        validate_sdk_lane(lane, head, source_tree, tracked_file)
         lane_evidence.append(
             {key: value for key, value in lane.items() if key != "results"}
         )
         for result in lane["results"]:
             node, outcome = result["test"], sdk_result_outcome(result)
+            if (
+                node.startswith("sdk-tests/test_large_upload_qualification.py::")
+                and result["outcome"] == "passed"
+            ):
+                campaign = result.get("properties", {}).get("large_upload_campaign", {})
+                reason = campaign_rejection_reason(node, campaign)
+                if outcome == "passed":
+                    validate_campaign_processes(campaign, lane["process_events"])
+                else:
+                    sdk_rejection_reasons.setdefault(node, {})[lane["lane"]] = (
+                        reason
+                        or result.get("qualification_rejection_reason")
+                        or "result is not explicitly qualification eligible"
+                    )
             sdk_lane_results.setdefault(node, {})[lane["lane"]] = outcome
             prior = verified_sdk_results.get(node)
             verified_sdk_results[node] = (
@@ -307,6 +295,7 @@ def main() -> int:
             )
     for path in args.sdk_results:
         for node, outcome in sdk_records(path).items():
+            outcome = sdk_junit_outcome(node, outcome, verified_sdk_results)
             # Passing one explicitly scoped lane is evidence for its scope only.
             # A failed lane must never be masked by a pass or skip in another lane.
             old = results.get(node)
@@ -322,13 +311,14 @@ def main() -> int:
     for node, assertion in report["scoped_sdk_assertions"].items():
         assertion["result"] = verified_sdk_results.get(node, "no-verified-lane-result")
         assertion["lane_results"] = sdk_lane_results.get(node, {})
+        assertion["lane_rejection_reasons"] = sdk_rejection_reasons.get(node, {})
     report.update(
         schema_version=1,
         source_sha=head,
         collected_at=dt.datetime.now(dt.timezone.utc).isoformat(),
         sdk_lane_evidence=lane_evidence,
         sdk_api_versions=manifest.get("api_versions", {}),
-        interpretation="Passing evidence candidates do not establish operation acceptance. Skipped, ignored, absent and uncollected tests are never proof. SDK assertions retain their selected scope and auth mode.",
+        interpretation="Passing evidence candidates do not establish operation acceptance. Skipped, ignored, absent and uncollected tests are never proof. SDK assertions retain their selected scope and auth mode. Source, build manifest, binary digest and process checks establish consistency of trusted unedited runner artifacts, not cryptographic attestation against a dishonest artifact author. Sampled measurements do not establish instantaneous OS resource bounds.",
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
