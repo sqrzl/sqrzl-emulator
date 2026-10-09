@@ -1,3 +1,4 @@
+use crate::auth::sigv4::RequestValidationError;
 use crate::auth::{AuthConfig, SigV4Config, SignatureVerifier};
 use crate::body::Body;
 use crate::services::xml_error_response;
@@ -44,18 +45,12 @@ pub(crate) fn verify_sigv4_signature(
                 access_key: access_key.to_string(),
                 secret_key: secret_key.to_string(),
             };
-            return presigned
-                .validate_request(req, &config)
-                .map(|()| true)
-                .map_err(|message| {
-                    warn!("Presigned URL signature verification failed: {message}");
-                    xml_error_response(
-                        StatusCode::FORBIDDEN,
-                        "SignatureDoesNotMatch",
-                        "The provided signature does not match",
-                        &req_id,
-                    )
-                });
+            presigned
+                .validate_request_contract(req, &config)
+                .map_err(|error| presigned_validation_failure(&error, &req_id))?;
+            SignatureVerifier::validate_payload(req, "s3")
+                .map_err(|error| request_validation_failure(error, &req_id))?;
+            return Ok(true);
         }
         if !has_credential {
             return Ok(true);
@@ -133,6 +128,20 @@ pub(crate) fn verify_sigv4_signature(
         return Ok(true);
     };
 
+    if crate::auth::AuthInfo::extract_sigv4_principal(auth_header, auth_config).is_none() {
+        return Err(xml_error_response(
+            StatusCode::FORBIDDEN,
+            "InvalidAccessKeyId",
+            "The AWS Access Key Id you provided does not exist in our records",
+            &req_id,
+        ));
+    }
+    if let Err(error) =
+        SignatureVerifier::validate_request(req, &credential_scope, &signed_headers, "s3")
+    {
+        return Err(request_validation_failure(error, &req_id));
+    }
+
     let canonical_request = build_canonical_request(req, &signed_headers);
     let sigv4_config = SigV4Config {
         access_key: access_key.to_string(),
@@ -158,6 +167,57 @@ pub(crate) fn verify_sigv4_signature(
     }
 
     Ok(true)
+}
+
+pub(super) fn presigned_validation_failure(
+    error: &crate::auth::presigned::PresignedValidationError,
+    req_id: &str,
+) -> Response<Body> {
+    use crate::auth::presigned::PresignedValidationError;
+    let (status, code) = match error {
+        PresignedValidationError::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "InvalidRequest"),
+        PresignedValidationError::ClockSkew => (StatusCode::FORBIDDEN, "RequestTimeTooSkewed"),
+        PresignedValidationError::SignatureMismatch(_) => {
+            (StatusCode::FORBIDDEN, "SignatureDoesNotMatch")
+        }
+    };
+    xml_error_response(status, code, &error.to_string(), req_id)
+}
+
+fn request_validation_failure(error: RequestValidationError, req_id: &str) -> Response<Body> {
+    let (status, code, message) = match error {
+        RequestValidationError::InvalidDate => (
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "Invalid request date",
+        ),
+        RequestValidationError::ClockSkew => (
+            StatusCode::FORBIDDEN,
+            "RequestTimeTooSkewed",
+            "The difference between the request time and the current time is too large",
+        ),
+        RequestValidationError::PayloadMismatch => (
+            StatusCode::BAD_REQUEST,
+            "XAmzContentSHA256Mismatch",
+            "The provided x-amz-content-sha256 does not match the request body",
+        ),
+        RequestValidationError::InvalidPayloadHash => (
+            StatusCode::BAD_REQUEST,
+            "InvalidArgument",
+            "The x-amz-content-sha256 header must be a valid SHA-256 hash or a supported payload signing mode",
+        ),
+        RequestValidationError::UnsupportedPayload => (
+            StatusCode::NOT_IMPLEMENTED,
+            "NotImplemented",
+            "This payload signing mode is not supported",
+        ),
+        RequestValidationError::InvalidScope | RequestValidationError::InvalidSignedHeaders => (
+            StatusCode::FORBIDDEN,
+            "SignatureDoesNotMatch",
+            "The credential scope or signed headers do not match the request",
+        ),
+    };
+    xml_error_response(status, code, message, req_id)
 }
 
 /// Extract signature from `SigV4` Authorization header.
@@ -194,11 +254,7 @@ pub(crate) fn extract_signed_headers(auth_header: &str) -> Option<Vec<String>> {
     for part in auth_header.split(',') {
         let part = part.trim();
         if let Some(headers) = part.strip_prefix("SignedHeaders=") {
-            let parsed: Vec<String> = headers
-                .split(';')
-                .map(|h| h.trim().to_lowercase())
-                .filter(|h| !h.is_empty())
-                .collect();
+            let parsed: Vec<String> = headers.split(';').map(str::to_string).collect();
             return Some(parsed);
         }
     }

@@ -24,9 +24,7 @@ pub(super) fn authorized(request: &RequestExt, config: &AuthConfig, service: &st
     };
     let signed_headers = signed_headers
         .split(';')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase)
+        .map(str::to_string)
         .collect::<Vec<_>>();
     if signed_headers.is_empty() {
         return false;
@@ -49,6 +47,9 @@ pub(super) fn authorized(request: &RequestExt, config: &AuthConfig, service: &st
     else {
         return false;
     };
+    if SignatureVerifier::validate_request(request, &scope, &signed_headers, service).is_err() {
+        return false;
+    }
     let canonical = canonical_request(request, &signed_headers);
     SignatureVerifier::verify(
         &signature,

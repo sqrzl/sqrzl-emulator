@@ -218,7 +218,9 @@ impl AcsSmsAdapter {
         ) else {
             return false;
         };
-        if content_hash != acs_hmac::content_hash(&request.body) {
+        if !acs_hmac::timestamp_is_current(date)
+            || content_hash != acs_hmac::content_hash(&request.body)
+        {
             return false;
         }
         let path_and_query = request

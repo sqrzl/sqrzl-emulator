@@ -602,14 +602,19 @@ fn sha256_hex(value: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-async fn canonical_request(body: &[u8], signed_headers: &[&str]) -> String {
+async fn canonical_request(
+    body: &[u8],
+    signed_headers: &[&str],
+    amz_date: &str,
+    payload_hash: &str,
+) -> String {
     let parsed = RequestExt::from_hyper(
         hyper::Request::builder()
             .method("POST")
             .uri("http://localhost/v2/email/outbound-emails")
             .header("host", "localhost:9000")
-            .header("x-amz-date", "20260101T120000Z")
-            .header("x-amz-content-sha256", "UNSIGNED-PAYLOAD")
+            .header("x-amz-date", amz_date)
+            .header("x-amz-content-sha256", payload_hash)
             .header("content-type", "application/json")
             .body(Body::from(body.to_vec()))
             .expect("SES signature request should build"),
@@ -689,11 +694,15 @@ async fn signed_ses_request(
     secret_key: &str,
 ) -> hyper::Request<Full<Bytes>> {
     let body = body.as_bytes().to_vec();
+    let now = chrono::Utc::now();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let stamp = now.format("%Y%m%d").to_string();
+    let payload_hash = sha256_hex(&body);
     let signed_headers = ["host", "x-amz-content-sha256", "x-amz-date"];
-    let canonical = canonical_request(&body, &signed_headers).await;
-    let signature = sign_signature(secret_key, &canonical, "20260101", "20260101T120000Z");
+    let canonical = canonical_request(&body, &signed_headers, &amz_date, &payload_hash).await;
+    let signature = sign_signature(secret_key, &canonical, &stamp, &amz_date);
     let auth_header = format!(
-        "AWS4-HMAC-SHA256 Credential={access_key}/20260101/us-east-1/ses/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}"
+        "AWS4-HMAC-SHA256 Credential={access_key}/{stamp}/us-east-1/ses/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}"
     );
 
     request(
@@ -702,8 +711,8 @@ async fn signed_ses_request(
         &[
             ("authorization", auth_header.as_str()),
             ("host", "localhost:9000"),
-            ("x-amz-date", "20260101T120000Z"),
-            ("x-amz-content-sha256", "UNSIGNED-PAYLOAD"),
+            ("x-amz-date", amz_date.as_str()),
+            ("x-amz-content-sha256", payload_hash.as_str()),
             ("content-type", "application/json"),
         ],
         &body,

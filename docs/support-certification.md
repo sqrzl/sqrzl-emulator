@@ -44,6 +44,28 @@ certification evidence. GCS JSON SDK coverage remains explicitly auth-disabled;
 enforced GCS authentication is covered separately by negative and
 signed-request contract tests.
 
+AWS header-based SigV4 checks the signed timestamp, credential date/service,
+required signed headers, configured access ID, and body hash before mutation.
+Signing accepts ISO8601 basic dates in `x-amz-date` or, when absent, `Date`.
+Presigned URLs reject creation dates more than fifteen minutes ahead, and remain
+valid until their signed expiry (up to seven days). Signed header names must be
+sorted, unique, and lowercase; presigned requests must sign every supplied
+`x-amz-*` header. Conflicting signed query/header copies fail with
+`400 InvalidRequest`. Malformed SHA-256 header values fail with
+`400 InvalidArgument`; named unsupported streaming modes fail with
+`501 NotImplemented`.
+The accepted clock skew is fifteen minutes for S3 and five minutes for SES,
+SNS, and SMS Voice v2. S3 alone accepts `UNSIGNED-PAYLOAD`; streaming signature
+chains and checksum trailers remain unsupported. A supplied S3 SHA-256 body
+hash is checked against buffered or spooled bytes, including presigned uploads.
+
+Configured ACS Email and SMS HMAC authentication requires an IMF-fixdate
+`x-ms-date`, the matching body hash, and the matching signature. The local ACS
+clock-skew policy is fifteen minutes; this is separate from the five-minute
+repeatability interval and is not a native OAuth/RBAC qualification. Request
+freshness checks are covered by adapter regressions independently of SDK smoke
+tests.
+
 ## Health And Diagnostics
 
 Both the API and UI ports expose:

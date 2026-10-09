@@ -325,14 +325,9 @@ pub(crate) fn verify_presigned_url(
             };
 
             // Validate the presigned URL
-            if let Err(e) = presigned.validate_request(req, &presigned_config) {
+            if let Err(e) = presigned.validate_request_contract(req, &presigned_config) {
                 warn!("Presigned URL validation failed: {}", e);
-                return Err(xml_error_response(
-                    StatusCode::FORBIDDEN,
-                    "InvalidSignature",
-                    &format!("Presigned URL validation failed: {e}"),
-                    &req_id,
-                ));
+                return Err(sigv4::presigned_validation_failure(&e, &req_id));
             }
 
             Ok(true)
