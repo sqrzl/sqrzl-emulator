@@ -318,6 +318,146 @@ async fn should_bound_acs_sms_metadata_fanout_before_claims_or_capture() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[tokio::test]
+async fn should_bound_acs_invalid_recipient_replay_before_result_clones_or_claims() {
+    // Arrange a native invalid recipient whose record key and echoed result
+    // each contain ten MiB. Three record representations fit under 64 MiB,
+    // while retaining the caller's result at publication exceeds the limit.
+    let root =
+        std::env::temp_dir().join(format!("capture-invalid-replay-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(FilesystemSmsStore::open(&root).unwrap());
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let first_sent = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let recipient = "x".repeat(10 * 1024 * 1024);
+    let replay_key = format!("acs-sms/{recipient}/{request_id}");
+    let mut payload = json!({"from":"+15550000001", "message":"small", "smsRecipients":[{"to":recipient,"repeatabilityRequestId":request_id,"repeatabilityFirstSent":first_sent}]});
+
+    // Act through the native ACS Send route, then retry a small invalid recipient.
+    let response = native_sms_request(store.clone(), &payload).await;
+
+    // Assert rejection precedes every capture, journal and repeatability write.
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response.headers().get("x-ms-error-code").unwrap(),
+        "RequestBodyTooLarge"
+    );
+    assert!(store
+        .get_repeatability_record(&replay_key)
+        .unwrap()
+        .is_none());
+    assert_sms_capture_is_empty(&root);
+    payload["smsRecipients"][0]["to"] = json!("invalid");
+    let response = native_sms_request(store.clone(), &payload).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body: serde_json::Value =
+        serde_json::from_str(&common::interop::body_text(response).await).unwrap();
+    assert_eq!(body["value"][0]["successful"], false);
+    assert_eq!(body["value"][0]["httpStatusCode"], 400);
+    assert_eq!(body["value"][0]["to"], "invalid");
+    let record = store
+        .get_repeatability_record(&format!("acs-sms/invalid/{request_id}"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.status, 400);
+    let replay = native_sms_request(store.clone(), &payload).await;
+    assert_eq!(replay.status(), StatusCode::ACCEPTED);
+    assert_eq!(common::interop::body_text(replay).await, body.to_string());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn should_bound_acs_invalid_recipient_results_without_repeatability_records() {
+    // Arrange an echoed result whose three response representations alone
+    // exceed the aggregate limit, although no messages or replay records exist.
+    let root =
+        std::env::temp_dir().join(format!("capture-invalid-result-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(FilesystemSmsStore::open(&root).unwrap());
+    let mut payload = json!({"from":"+15550000001", "message":"small", "smsRecipients":[{"to":"x".repeat(24 * 1024 * 1024)}]});
+
+    // Act through the native route with no repeatability GUID.
+    let response = native_sms_request(store.clone(), &payload).await;
+
+    // Assert the result-only path is bounded and preserves a later normal error.
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_sms_capture_is_empty(&root);
+    payload["smsRecipients"][0]["to"] = json!("invalid");
+    let response = native_sms_request(store, &payload).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body: serde_json::Value =
+        serde_json::from_str(&common::interop::body_text(response).await).unwrap();
+    assert_eq!(body["value"][0]["successful"], false);
+    assert_eq!(body["value"][0]["httpStatusCode"], 400);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn should_bound_acs_recipient_source_fields_before_cloning_invalid_repeatability() {
+    // Arrange a small echoed recipient with a large invalid header field. Raw
+    // input and parsed JSON fit, but cloning the recipient field exceeds 64 MiB.
+    let root =
+        std::env::temp_dir().join(format!("capture-invalid-source-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(FilesystemSmsStore::open(&root).unwrap());
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let mut payload = json!({"from":"+15550000001", "message":"small", "smsRecipients":[{"to":"invalid","repeatabilityRequestId":request_id,"repeatabilityFirstSent":"x".repeat(24 * 1024 * 1024)}]});
+
+    // Act through native ACS recipient parsing.
+    let response = native_sms_request(store.clone(), &payload).await;
+
+    // Assert the rejected plan makes no reservation; ordinary invalid metadata
+    // retains its native per-recipient 202 response after a smaller retry.
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_sms_capture_is_empty(&root);
+    payload["smsRecipients"][0]["repeatabilityFirstSent"] = json!("invalid-date");
+    let response = native_sms_request(store.clone(), &payload).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body: serde_json::Value =
+        serde_json::from_str(&common::interop::body_text(response).await).unwrap();
+    assert_eq!(body["value"][0]["repeatabilityResult"], "rejected");
+    assert!(store
+        .get_repeatability_record(&format!("acs-sms/invalid/{request_id}"))
+        .unwrap()
+        .is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+async fn native_sms_request(
+    store: Arc<FilesystemSmsStore>,
+    payload: &serde_json::Value,
+) -> hyper::Response<sqrzl_emulator::body::Body> {
+    let req = RequestExt::from_hyper(request(
+        "POST",
+        "http://localhost/sms?api-version=2021-03-07",
+        &[("content-type", "application/json")],
+        payload.to_string().as_bytes(),
+    ))
+    .await
+    .unwrap();
+    SmsAdapterRegistry::default()
+        .route(store, auth_disabled(), req)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+fn assert_sms_capture_is_empty(root: &std::path::Path) {
+    for child in [
+        "messages",
+        "conversations",
+        "media",
+        ".capture-transactions",
+        ".repeatability",
+    ] {
+        let count = match std::fs::read_dir(root.join("_sms").join(child)) {
+            Ok(entries) => entries.count(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => panic!("failed to inspect {child}: {error}"),
+        };
+        assert_eq!(count, 0, "{child}");
+    }
+}
+
 async fn verify_admission(uri: &str, payload: &str) {
     let store = Arc::new(CountingCaptureStore::default());
     let request = RequestExt::from_hyper(request(
