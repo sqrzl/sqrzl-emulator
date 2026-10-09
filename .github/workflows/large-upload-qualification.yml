@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: "2"
+      PYTHONUNBUFFERED: "1"
       SQRZL_RUN_LARGE_UPLOAD_QUALIFICATION: "1"
       SQRZL_LARGE_UPLOAD_BYTES: "1073741824"
       SQRZL_LARGE_CLIENT_RSS_BYTES: "536870912"
@@ -60,14 +61,22 @@ jobs:
           python -m pip install -r sdk-tests/requirements.lock
           python -m pip check
       - name: Check checksum and interruption oracle
-        run: python sdk-tests/campaign_checks.py
+        run: |
+          python sdk-tests/campaign_checks.py
+          python sdk-tests/campaign_transport_checks.py
       - name: Build immutable binary with clean source provenance
         run: |
           python sdk-tests/build_provenance.py --output-dir target/measured-binary
           echo "SQRZL_BINARY=$PWD/target/measured-binary/sqrzl-emulator" >> "$GITHUB_ENV"
           echo "SQRZL_BINARY_PROVENANCE=$PWD/target/measured-binary/build-provenance.json" >> "$GITHUB_ENV"
       - name: Measure selected 1 GiB workflows, readback and process recovery
-        run: python -m pytest -q sdk-tests/test_large_upload_qualification.py
+        shell: bash
+        env:
+          SQRZL_CAMPAIGN_PROGRESS_DIR: target/campaign-progress
+        run: |
+          set -o pipefail
+          python -u -m pytest -vv -s -o faulthandler_timeout=300 \
+            sdk-tests/test_large_upload_qualification.py 2>&1 | tee target/measured-pytest.log
       - name: Validate exact-source measured resource evidence
         run: |
           python scripts/validate_contract_evidence.py \
@@ -84,4 +93,6 @@ jobs:
             target/sdk-evidence/measured-upload.json
             target/measured-binary/build-provenance.json
             target/measured-contract-acceptance.json
+            target/measured-pytest.log
+            target/campaign-progress/*.jsonl
           retention-days: 30

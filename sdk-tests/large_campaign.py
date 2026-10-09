@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -17,6 +18,7 @@ MIB = 1024 * 1024
 GIB = 1024 * MIB
 PART_BYTES = 64 * MIB
 RANGE_BYTES = 8 * MIB
+INTERRUPTION_WORKER_JOIN_SECONDS = 15
 
 
 def generate_payload(path: Path, size: int) -> str:
@@ -186,6 +188,7 @@ class Campaign:
         ), "insufficient free disk for the explicit campaign budget"
         self.thread.start()
         try:
+            self.phase("generation")
             self.expected_sha256 = generate_payload(self.path, self.size)
             self.checkpoint("payload-generated", payload_sha256=self.expected_sha256)
         except Exception as error:
@@ -221,8 +224,13 @@ class Campaign:
                     # up runtime.process again; it may already be a new child.
                     pid, service_rss = None, None
                 if pid is None:
-                    transition = self._intentional_stops.get(process.pid) if process else None
-                    if process is None and phase in ("normal-restart", "interrupted-transport"):
+                    transition = (
+                        self._intentional_stops.get(process.pid) if process else None
+                    )
+                    if process is None and phase in (
+                        "normal-restart",
+                        "interrupted-transport",
+                    ):
                         transition = phase
                     if transition is None:
                         raise RuntimeError(f"Service process is absent during {phase}")
@@ -243,6 +251,27 @@ class Campaign:
 
     def phase(self, name: str):
         self._phase = name
+        self._progress(name, kind="phase")
+
+    def _progress(self, name: str, *, kind: str, **details):
+        process = self.runtime.process
+        record = {
+            "provider": self.provider,
+            "kind": kind,
+            "name": name,
+            "elapsed_seconds": round(time.monotonic() - self.started, 3),
+            "pid": process.pid if process and process.poll() is None else None,
+            **details,
+        }
+        line = json.dumps(record, sort_keys=True)
+        print(f"[measured-upload] {line}", flush=True)
+        directory = os.getenv("SQRZL_CAMPAIGN_PROGRESS_DIR")
+        if directory:
+            path = Path(directory) / f"{self.provider}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(line + "\n")
+                stream.flush()
 
     def checkpoint(self, name: str, **details):
         self.phases.append(
@@ -253,6 +282,7 @@ class Campaign:
                 **details,
             }
         )
+        self._progress(name, kind="checkpoint", **details)
         self.assert_budgets()
 
     def assert_budgets(self):
@@ -324,82 +354,120 @@ class Campaign:
             armed.set()
             return original_send(request, *args, **kwargs)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            with patch.object(send_owner, "send", side_effect=gated_send):
-                future = executor.submit(upload)
-                try:
-                    if not armed.wait(15):
-                        if future.done():
-                            future.result()
-                        raise AssertionError(
-                            "SDK did not reach the instrumented native HTTP transport"
-                        )
-                    assert reader.paused.wait(
-                        15
-                    ), "HTTP stream did not pause after the selected prefix"
-                    deadline = time.monotonic() + 5
-                    partial = []
-                    while time.monotonic() < deadline:
-                        partial = [
-                            (p.name, p.stat().st_size)
-                            for p in self.settings.storage_dir.glob(
-                                ".spool/.spool-*.tmp"
-                            )
-                            if p.exists() and p.stat().st_size >= reader.pause_at // 2
-                        ]
-                        if partial:
-                            break
-                        time.sleep(0.02)
-                    assert partial and all(
-                        0 < size < reader.length for _, size in partial
-                    ), "no partial request spool observed before interruption"
-                    old = self.runtime.process_pid
-                    self._intentional_stops[old] = "interrupted-transport"
-                    self.runtime.stop(kill=True)
-                    self.checkpoint(
-                        "abrupt-process-stop-during-transfer",
-                        previous_pid=old,
-                        transport_prefix_bytes=reader.delivered,
-                        partial_spool_files=partial,
+        # Executor context managers (and interpreter exit) unconditionally join
+        # their workers, even after Future.result times out. A daemon fallback
+        # bounds this harness failure; it never permits qualification to pass.
+        future = concurrent.futures.Future()
+
+        def run_upload():
+            try:
+                future.set_result(upload())
+            except BaseException as error:
+                future.set_exception(error)
+
+        worker = threading.Thread(
+            target=run_upload,
+            name=f"qualification-interrupted-{self.provider}",
+            daemon=True,
+        )
+        with patch.object(send_owner, "send", side_effect=gated_send):
+            controller_failed = True
+            try:
+                worker.start()
+                if not armed.wait(15):
+                    if future.done():
+                        future.result()
+                    raise AssertionError(
+                        "SDK did not reach the instrumented native HTTP transport"
                     )
-                finally:
-                    reader.release.set()
+                assert reader.paused.wait(
+                    15
+                ), "HTTP stream did not pause after the selected prefix"
+                deadline = time.monotonic() + 5
+                partial = []
+                while time.monotonic() < deadline:
+                    partial = [
+                        (p.name, p.stat().st_size)
+                        for p in self.settings.storage_dir.glob(".spool/.spool-*.tmp")
+                        if p.exists() and p.stat().st_size >= reader.pause_at // 2
+                    ]
+                    if partial:
+                        break
+                    time.sleep(0.02)
+                assert partial and all(
+                    0 < size < reader.length for _, size in partial
+                ), "no partial request spool observed before interruption"
+                old = self.runtime.process_pid
+                self._intentional_stops[old] = "interrupted-transport"
+                self.runtime.stop(kill=True)
+                self.checkpoint(
+                    "abrupt-process-stop-during-transfer",
+                    previous_pid=old,
+                    transport_prefix_bytes=reader.delivered,
+                    partial_spool_files=partial,
+                )
+                controller_failed = False
+            finally:
+                reader.release.set()
                 try:
-                    future.result(timeout=15)
-                except Exception as error:
-                    from botocore.exceptions import HTTPClientError
-                    from requests.exceptions import RequestException
-                    from azure.core.exceptions import (
+                    if controller_failed:
+                        self.runtime.stop(kill=True)
+                finally:
+                    if worker.ident is not None:
+                        worker.join(timeout=INTERRUPTION_WORKER_JOIN_SECONDS)
+                    if worker.is_alive():
+                        message = (
+                            "interrupted SDK worker did not finish within "
+                            f"{INTERRUPTION_WORKER_JOIN_SECONDS} seconds"
+                        )
+                        try:
+                            self.runtime.stop(kill=True)
+                        finally:
+                            self.errors.append(message)
+                            self._progress(
+                                "interruption-worker-timeout",
+                                kind="failure",
+                                detail=message,
+                            )
+                        raise AssertionError(message)
+            # A completed Future alone is insufficient: the worker must also be
+            # joined before restoring the transport or closing its body reader.
+            try:
+                future.result()
+            except Exception as error:
+                from botocore.exceptions import HTTPClientError
+                from requests.exceptions import RequestException
+                from azure.core.exceptions import (
+                    ServiceRequestError,
+                    ServiceResponseError,
+                )
+                from oci.exceptions import (
+                    RequestException as OciSdkRequestException,
+                )
+                from oci._vendor.requests.exceptions import (
+                    RequestException as OciRequestException,
+                )
+
+                assert isinstance(
+                    error,
+                    (
+                        HTTPClientError,
+                        RequestException,
+                        OciRequestException,
+                        OciSdkRequestException,
                         ServiceRequestError,
                         ServiceResponseError,
-                    )
-                    from oci.exceptions import (
-                        RequestException as OciSdkRequestException,
-                    )
-                    from oci._vendor.requests.exceptions import (
-                        RequestException as OciRequestException,
-                    )
-
-                    assert isinstance(
-                        error,
-                        (
-                            HTTPClientError,
-                            RequestException,
-                            OciRequestException,
-                            OciSdkRequestException,
-                            ServiceRequestError,
-                            ServiceResponseError,
-                        ),
-                    ), f"unexpected non-transport interruption error: {error!r}"
-                    self.checkpoint(
-                        "interrupted-client-error",
-                        exception_type=f"{type(error).__module__}.{type(error).__name__}",
-                        detail=str(error)[:1000],
-                    )
-                else:
-                    raise AssertionError(
-                        "interrupted incomplete HTTP upload unexpectedly succeeded"
-                    )
+                    ),
+                ), f"unexpected non-transport interruption error: {error!r}"
+                self.checkpoint(
+                    "interrupted-client-error",
+                    exception_type=f"{type(error).__module__}.{type(error).__name__}",
+                    detail=str(error)[:1000],
+                )
+            else:
+                raise AssertionError(
+                    "interrupted incomplete HTTP upload unexpectedly succeeded"
+                )
         new = self.runtime.start()
         assert new != old
         assert not list(
