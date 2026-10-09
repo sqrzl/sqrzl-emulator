@@ -1782,6 +1782,36 @@ impl AzureBlobAdapter {
         })
     }
 
+    // XML 1.0 fifth-edition Char and Name productions:
+    // https://www.w3.org/TR/xml/#NT-Char and #NT-NameStartChar.
+    fn valid_xml_characters(xml: &str) -> bool {
+        xml.chars().all(|character| {
+            matches!(character, '\t' | '\n' | '\r' | '\u{20}'..='\u{d7ff}'
+                | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
+        })
+    }
+
+    fn xml_name_start(character: char) -> bool {
+        matches!(character, ':' | '_' | 'A'..='Z' | 'a'..='z'
+            | '\u{c0}'..='\u{d6}' | '\u{d8}'..='\u{f6}' | '\u{f8}'..='\u{2ff}'
+            | '\u{370}'..='\u{37d}' | '\u{37f}'..='\u{1fff}' | '\u{200c}'..='\u{200d}'
+            | '\u{2070}'..='\u{218f}' | '\u{2c00}'..='\u{2fef}' | '\u{3001}'..='\u{d7ff}'
+            | '\u{f900}'..='\u{fdcf}' | '\u{fdf0}'..='\u{fffd}' | '\u{10000}'..='\u{effff}')
+    }
+
+    fn valid_xml_name(bytes: &[u8]) -> bool {
+        let Ok(name) = std::str::from_utf8(bytes) else {
+            return false;
+        };
+        let mut characters = name.chars();
+        characters.next().is_some_and(Self::xml_name_start)
+            && characters.all(|character| {
+                Self::xml_name_start(character)
+                    || matches!(character, '-' | '.' | '0'..='9' | '\u{b7}'
+                        | '\u{300}'..='\u{36f}' | '\u{203f}'..='\u{2040}')
+            })
+    }
+
     fn valid_xml_attributes(event: &BytesStart<'_>, decoder: Decoder) -> bool {
         let raw = event.attributes_raw();
         let mut quote = None;
@@ -1803,7 +1833,8 @@ impl AzureBlobAdapter {
         quote.is_none()
             && event.attributes().all(|attribute| {
                 attribute.is_ok_and(|attribute| {
-                    !attribute.value.contains(&b'<')
+                    Self::valid_xml_name(attribute.key.as_ref())
+                        && !attribute.value.contains(&b'<')
                         && attribute
                             .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
                             .is_ok()
@@ -1859,7 +1890,11 @@ impl AzureBlobAdapter {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // One state machine validates XML grammar and block selection before publication.
     fn parse_block_list(xml: &str) -> Result<Vec<AzureBlockReference>, AzureBlockListError> {
+        if !Self::valid_xml_characters(xml) {
+            return Err(AzureBlockListError::InvalidXmlDocument);
+        }
         let xml = xml.strip_prefix('\u{feff}').unwrap_or(xml);
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
@@ -1945,7 +1980,10 @@ impl AzureBlobAdapter {
                         && xml.starts_with("<?xml")
                         && Self::valid_xml_declaration(&event, reader.decoder()) => {}
                 Err(_) | Ok(Event::Decl(_)) => return Err(AzureBlockListError::InvalidXmlDocument),
-                Ok(Event::PI(event)) if event.target().eq_ignore_ascii_case(b"xml") => {
+                Ok(Event::PI(event))
+                    if !Self::valid_xml_name(event.target())
+                        || event.target().eq_ignore_ascii_case(b"xml") =>
+                {
                     return Err(AzureBlockListError::InvalidXmlDocument);
                 }
                 Ok(Event::Comment(_) | Event::PI(_)) => {}
@@ -6202,6 +6240,13 @@ mod tests {
             "<BlockList bogus='<bad>'/>",
             "<!--bad--comment--><BlockList/>",
             "<?XML version='1.0'?><BlockList/>",
+            "<BlockList bo@gus='x'/>",
+            "<BlockList bogus='\u{0}'/>",
+            "<!--\u{0}--><BlockList/>",
+            "<?fixture \u{0}?><BlockList/>",
+            "<?bo@gus allowed?><BlockList/>",
+            "<BlockList \u{b7}note='x'/>",
+            "<BlockList bogus='\u{fffe}'/>",
         ] {
             // Act with malformed XML and the correct lease, so protection cannot mask parsing defects.
             let response = adapter
@@ -6263,7 +6308,7 @@ mod tests {
                     "PUT",
                     &format!("{uri}?comp=blocklist"),
                     &headers,
-                    "\u{feff}<?xml version='1.0' encoding='utf-8' standalone='yes'?><!--valid--><?fixture allowed?><BlockList xmlns='urn:fixture' note='a&amp;b'/>".as_bytes(),
+                    "\u{feff}<?xml version='1.0' encoding='utf-8' standalone='yes'?><!--valid--><?fixture allowed?><BlockList xmlns='urn:fixture' note='a&amp;b' éxtra='valid\u{fffd}' n·1='value'/>".as_bytes(),
                 )
                 .await,
             )
