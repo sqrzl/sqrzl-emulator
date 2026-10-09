@@ -237,8 +237,10 @@ individual requests.
 
 Azure MD5/CRC64, GCS CRC32C, OCI MD5/SHA-256/SHA-384/CRC32C/CRC64, and S3
 request checksum paths are calculated while streaming where their accepted API
-surface requires them. Aborted, rejected, expired, overwritten, and completed
-sessions reclaim their staged files. This is a local emulator contract, not a
+surface requires them. Successful aborts and removals reclaim session payloads; failed requests preserve
+previously accepted parts. Azure omitted uncommitted blocks retain the selected
+retention behavior, and Put Blob overwrite clears them. GCS XML cancellation
+retains a small expiring decision while removing active chunks. This is a local emulator contract, not a
 claim that a single Sqrzl instance has enough disk for every theoretical vendor
 maximum.
 

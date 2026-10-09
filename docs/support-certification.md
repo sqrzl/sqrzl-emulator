@@ -100,12 +100,13 @@ checksum trailers are explicitly unsupported. The pinned boto3 default
 UploadPart checksum must be opted out for the plain multipart subset. A default
 SDK request is tested separately from that opt-out workflow.
 
-Whole materialized S3/Azure reads and copies, Azure snapshot creation and
+Whole materialized S3/Azure/GCS reads, S3/Azure copies, Azure snapshot creation and
 payload-rewriting metadata operations have an explicit 64 MiB local limit.
 Metadata-only HEAD/admission and bounded ranges can inspect larger objects.
 Azure page extents and final append/page mutation extents are limited to 64 MiB;
 native page alignment and per-update limits are checked independently. These
-limits do not restrict streamed BlockBlob uploads. Other provider paths and
+limits do not restrict streamed BlockBlob uploads. GCS JSON mediaLink and
+alt=media downloads share the bounded reader with XML GET. Other provider paths and
 native cloud maximum capacities are not inferred from this local qualification.
 
 Measured large-upload campaigns have separate payload sizes, service/client
@@ -141,6 +142,12 @@ Messaging capture uses a durable batch decision across recipient records,
 indexes, attachments/media and repeatability state. Matching ACS retries across
 restart do not recapture; conflicts fail without replacing a prior batch.
 See [messaging capture durability](messaging-capture-durability.md).
+
+Messaging admission enforces a 64 MiB projected aggregate capture budget before
+fan-out materialization, including rendered files and retained result copies.
+SendGrid personalizations are planned before cloning shared content. This is a
+local admission bound; it does not establish a measured messaging RSS limit.
+Provider errors and SMTP 552 identify the local constraint.
 
 The interruption tests qualify process exits on a single-owner local filesystem.
 They do not claim physical power-loss, arbitrary disk corruption, network

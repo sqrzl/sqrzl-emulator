@@ -4245,7 +4245,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "BlockBlob",
         "support_tier": "partial",
-        "boundary": "Streamed upload; standard HTTP properties and selected transactional checksums.",
+        "boundary": "Streamed upload; standard HTTP properties and selected transactional checksums. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
@@ -4491,7 +4491,7 @@
         "path": "/{account}/{container}/{blob}?comp=metadata",
         "variant": "default",
         "support_tier": "partial",
-        "boundary": "Selected typed metadata with lease/condition admission. Retains version-creation behavior using a bounded payload rewrite; source over64 MiB receives501 before payload read.",
+        "boundary": "Selected typed metadata with lease/condition admission. Retains version-creation behavior using a bounded payload rewrite; source over64 MiB receives501 before payload read. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
@@ -4565,7 +4565,7 @@
         "path": "/{account}/{container}/{blob}?comp=blocklist",
         "variant": "default",
         "support_tier": "partial",
-        "boundary": "Committed/uncommitted selectors and create-only SAS admission.",
+        "boundary": "Committed/uncommitted selectors and create-only SAS admission. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_commit_block_blob_from_put_block_list",
@@ -4647,7 +4647,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "AppendBlob",
         "support_tier": "partial",
-        "boundary": "Materialized mutations capped64 MiB total extent.",
+        "boundary": "Materialized mutations capped64 MiB total extent. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_support_append_and_page_blob_writes",
@@ -4679,7 +4679,7 @@
         "path": "/{account}/{container}/{blob}?comp=appendblock",
         "variant": "default",
         "support_tier": "partial",
-        "boundary": "Native per-block limit plus64 MiB local final extent; conditions and lease.",
+        "boundary": "Native per-block limit plus64 MiB local final extent; conditions and lease. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_support_append_and_page_blob_writes",
@@ -4711,7 +4711,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "PageBlob",
         "support_tier": "partial",
-        "boundary": "Native8 TiB maximum is checked; local extent cap64 MiB.",
+        "boundary": "Native8 TiB maximum is checked; local extent cap64 MiB. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_support_append_and_page_blob_writes",
@@ -4743,7 +4743,7 @@
         "path": "/{account}/{container}/{blob}?comp=page",
         "variant": "update",
         "support_tier": "partial",
-        "boundary": "512-byte alignment, native4 MiB update maximum and local64 MiB extent.",
+        "boundary": "512-byte alignment, native4 MiB update maximum and local64 MiB extent. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_support_append_and_page_blob_writes",
@@ -4775,7 +4775,7 @@
         "path": "/{account}/{container}/{blob}?comp=page",
         "variant": "clear",
         "support_tier": "partial",
-        "boundary": "Selected clear range; local64 MiB extent.",
+        "boundary": "Selected clear range; local64 MiB extent. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_support_append_and_page_blob_writes",
@@ -5483,7 +5483,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "structured-body",
         "support_tier": "unsupported",
-        "boundary": "Structured body format is explicitly rejected before publication.",
+        "boundary": "Structured body format is explicitly rejected before publication. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
@@ -5714,7 +5714,7 @@
         "path": "/{bucket}/{object}",
         "variant": "xml",
         "support_tier": "partial",
-        "boundary": "Selected local object and range semantics.",
+        "boundary": "Selected local object and range semantics. Whole materialized media responses and requested ranges are locally capped at 64 MiB; smaller ranges can read larger streamed objects.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
@@ -6172,7 +6172,7 @@
         "path": "/storage/v1/b/{bucket}/o/{object}?alt=media",
         "variant": "json-media",
         "support_tier": "partial",
-        "boundary": "Selected bytes/range response; OAuth issuance is absent.",
+        "boundary": "Selected bytes/range response; OAuth issuance is absent. Whole materialized media responses and requested ranges are locally capped at 64 MiB; smaller ranges can read larger streamed objects.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
@@ -8619,7 +8619,7 @@
         "path": "/{bucket}/{object}",
         "variant": "xml-range",
         "support_tier": "partial",
-        "boundary": "Single byte range from a coherent generation; local bounded range API. JSON bearer convenience and XML native HMAC remain separate auth modes.",
+        "boundary": "Single byte range from a coherent generation; local bounded range API. JSON bearer convenience and XML native HMAC remain separate auth modes. Whole materialized media responses and requested ranges are locally capped at 64 MiB; smaller ranges can read larger streamed objects.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
@@ -8651,7 +8651,7 @@
         "path": "/storage/v1/b/{bucket}/o/{object}?alt=media",
         "variant": "json-media-range",
         "support_tier": "partial",
-        "boundary": "Single byte range from a coherent generation; local bounded range API. JSON bearer convenience and XML native HMAC remain separate auth modes.",
+        "boundary": "Single byte range from a coherent generation; local bounded range API. JSON bearer convenience and XML native HMAC remain separate auth modes. Whole materialized media responses and requested ranges are locally capped at 64 MiB; smaller ranges can read larger streamed objects.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
@@ -9040,6 +9040,174 @@
           ],
           "sdk": [
             "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "gcs.GetObject.get.json-download",
+        "provider": "gcs",
+        "family": "object_crud",
+        "operation": "GetObject",
+        "method": "GET",
+        "path": "/download/storage/v1/b/{bucket}/o/{object}?alt=media",
+        "variant": "json-download",
+        "support_tier": "partial",
+        "boundary": "Official JSON SDK mediaLink download path; configured local bearer convenience or auth-disabled functional scope. Whole materialized reads have a 64 MiB local limit. Whole materialized media responses and requested ranges are locally capped at 64 MiB; smaller ranges can read larger streamed objects.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
+            "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
+            "provider_conformance::should_preserve_gcs_json_empty_mutation_statuses",
+            "provider_conformance::should_preserve_gcs_xml_empty_mutation_statuses",
+            "provider_conformance::should_require_provider_specific_content_length_for_azure_and_gcs_uploads",
+            "provider_conformance::should_allow_chunked_gcs_uploads_without_content_length",
+            "provider_conformance::should_reject_content_length_mismatch_on_every_storage_front_door",
+            "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
+            "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing",
+            "provider_conformance::should_render_gcs_json_payload_too_large_as_json_without_mutation",
+            "provider_conformance::should_return_provider_specific_missing_object_responses",
+            "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
+            "provider_conformance::should_keep_redirects_precommit_on_every_storage_front_door",
+            "provider_conformance::should_return_every_redirect_before_mutation_on_every_storage_front_door",
+            "provider_conformance::should_distinguish_timeout_before_and_after_commit_on_every_front_door",
+            "provider_conformance::should_commit_before_response_loss_on_every_storage_front_door",
+            "provider_conformance::should_enforce_gcs_xml_generation_preconditions_on_create_and_update",
+            "provider_conformance::should_enforce_gcs_xml_generation_precondition_on_delete",
+            "provider_conformance::should_reject_gcs_json_upload_metageneration_precondition_without_mutation",
+            "provider_conformance::should_reject_gcs_json_etag_mutation_headers_without_applying_delete",
+            "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
+            "provider_conformance::should_not_apply_failed_gcs_generation_not_match_upload",
+            "provider_conformance::should_return_provider_shaped_throttling_without_mutation",
+            "provider_conformance::should_expose_each_transient_status_before_commit_on_every_storage_front_door",
+            "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
+            "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
+            "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
+            "providers::gcs::tests::should_validate_matching_gcs_json_multipart_crc32c",
+            "providers::gcs::tests::should_reject_mismatched_gcs_json_multipart_crc32c_without_mutation",
+            "providers::gcs::tests::should_reject_mismatched_resumable_metadata_crc32c_without_mutation",
+            "providers::gcs::tests::should_validate_matching_gcs_json_media_x_goog_hash_crc32c",
+            "providers::gcs::tests::should_reject_invalid_gcs_json_media_x_goog_hash_without_mutation",
+            "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
+          ],
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "gcs.GetObject.get.json-download-range",
+        "provider": "gcs",
+        "family": "object_crud",
+        "operation": "GetObject",
+        "method": "GET",
+        "path": "/download/storage/v1/b/{bucket}/o/{object}?alt=media",
+        "variant": "json-download-range",
+        "support_tier": "partial",
+        "boundary": "Official JSON SDK mediaLink download path; configured local bearer convenience or auth-disabled functional scope. Ranges use capped coherent storage reads; conditions and current generation refer to the selected result. Whole materialized media responses and requested ranges are locally capped at 64 MiB; smaller ranges can read larger streamed objects.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
+            "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
+            "provider_conformance::should_preserve_gcs_json_empty_mutation_statuses",
+            "provider_conformance::should_preserve_gcs_xml_empty_mutation_statuses",
+            "provider_conformance::should_require_provider_specific_content_length_for_azure_and_gcs_uploads",
+            "provider_conformance::should_allow_chunked_gcs_uploads_without_content_length",
+            "provider_conformance::should_reject_content_length_mismatch_on_every_storage_front_door",
+            "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
+            "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing",
+            "provider_conformance::should_render_gcs_json_payload_too_large_as_json_without_mutation",
+            "provider_conformance::should_return_provider_specific_missing_object_responses",
+            "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
+            "provider_conformance::should_keep_redirects_precommit_on_every_storage_front_door",
+            "provider_conformance::should_return_every_redirect_before_mutation_on_every_storage_front_door",
+            "provider_conformance::should_distinguish_timeout_before_and_after_commit_on_every_front_door",
+            "provider_conformance::should_commit_before_response_loss_on_every_storage_front_door",
+            "provider_conformance::should_enforce_gcs_xml_generation_preconditions_on_create_and_update",
+            "provider_conformance::should_enforce_gcs_xml_generation_precondition_on_delete",
+            "provider_conformance::should_reject_gcs_json_upload_metageneration_precondition_without_mutation",
+            "provider_conformance::should_reject_gcs_json_etag_mutation_headers_without_applying_delete",
+            "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
+            "provider_conformance::should_not_apply_failed_gcs_generation_not_match_upload",
+            "provider_conformance::should_return_provider_shaped_throttling_without_mutation",
+            "provider_conformance::should_expose_each_transient_status_before_commit_on_every_storage_front_door",
+            "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
+            "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
+            "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
+            "providers::gcs::tests::should_validate_matching_gcs_json_multipart_crc32c",
+            "providers::gcs::tests::should_reject_mismatched_gcs_json_multipart_crc32c_without_mutation",
+            "providers::gcs::tests::should_reject_mismatched_resumable_metadata_crc32c_without_mutation",
+            "providers::gcs::tests::should_validate_matching_gcs_json_media_x_goog_hash_crc32c",
+            "providers::gcs::tests::should_reject_invalid_gcs_json_media_x_goog_hash_without_mutation",
+            "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
+          ],
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "azure-blob.PutBlockList.put.empty-list",
+        "provider": "azure-blob",
+        "family": "block_blob_upload",
+        "operation": "PutBlockList",
+        "method": "PUT",
+        "path": "/{account}/{container}/{blob}?comp=blocklist",
+        "variant": "empty-list",
+        "support_tier": "partial",
+        "boundary": "Valid paired or self-closing empty BlockList creates/replaces a zero-byte BlockBlob. Native checksum, SAS, lease and condition admission apply; omitted staged blocks follow the selected retention model. Successful content or metadata mutations create opaque revision ETags independently of transactional content digests.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_commit_block_blob_from_put_block_list",
+            "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
+            "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations",
+            "providers::azure::tests::should_commit_and_list_blocks_after_adapter_restart",
+            "providers::azure::tests::should_discard_block_upload_state_after_a_direct_blob_overwrite",
+            "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas",
+            "providers::azure::tests::should_reject_invalid_azure_block_ids_without_staging_them",
+            "providers::azure::tests::should_reject_malformed_azure_block_lists_without_committing",
+            "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
+            "providers::azure::tests::should_preserve_active_lease_across_azure_blob_overwrites",
+            "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
+            "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits"
           ]
         },
         "acceptance_gates": {
