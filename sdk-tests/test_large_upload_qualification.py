@@ -17,13 +17,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_s3_large_multipart_qualification(sqrzl_server, tmp_path, record_property):
+def _s3_campaign_client(sqrzl_server):
     boto3 = pytest.importorskip("boto3")
     config = pytest.importorskip("botocore.config")
-    errors = pytest.importorskip("botocore.exceptions")
-    sqrzl_server.require_provider("s3")
-    sqrzl_server.require_process()
-    client = boto3.client(
+    return boto3.client(
         "s3",
         endpoint_url=sqrzl_server.api_url,
         aws_access_key_id=sqrzl_server.access_key_id,
@@ -36,9 +33,18 @@ def test_s3_large_multipart_qualification(sqrzl_server, tmp_path, record_propert
             request_checksum_calculation="when_required",
             response_checksum_validation="when_required",
             connect_timeout=5,
-            read_timeout=5,
+            # Completion assembles and syncs the full object before replying.
+            # Keep the native botocore deadline; this is not a five-second SLA.
+            read_timeout=60,
         ),
     )
+
+
+def test_s3_large_multipart_qualification(sqrzl_server, tmp_path, record_property):
+    errors = pytest.importorskip("botocore.exceptions")
+    sqrzl_server.require_provider("s3")
+    sqrzl_server.require_process()
+    client = _s3_campaign_client(sqrzl_server)
     bucket = sqrzl_server.bucket_name("measured-s3")
     key = "qualification/dense.bin"
     with Campaign(sqrzl_server, tmp_path, record_property, "s3") as campaign:
