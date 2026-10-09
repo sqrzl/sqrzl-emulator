@@ -15,9 +15,10 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use hyper::Response;
+use quick_xml::encoding::Decoder;
 use quick_xml::escape::unescape;
-use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::events::{BytesDecl, BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
@@ -1781,10 +1782,88 @@ impl AzureBlobAdapter {
         })
     }
 
+    fn valid_xml_attributes(event: &BytesStart<'_>, decoder: Decoder) -> bool {
+        let raw = event.attributes_raw();
+        let mut quote = None;
+        for (index, byte) in raw.iter().copied().enumerate() {
+            if let Some(delimiter) = quote {
+                if byte == delimiter {
+                    quote = None;
+                    if raw
+                        .get(index + 1)
+                        .is_some_and(|next| !matches!(next, b' ' | b'\t' | b'\n' | b'\r'))
+                    {
+                        return false;
+                    }
+                }
+            } else if matches!(byte, b'\'' | b'"') {
+                quote = Some(byte);
+            }
+        }
+        quote.is_none()
+            && event.attributes().all(|attribute| {
+                attribute.is_ok_and(|attribute| {
+                    !attribute.value.contains(&b'<')
+                        && attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                            .is_ok()
+                })
+            })
+    }
+
+    fn valid_xml_declaration(event: &BytesDecl<'_>, decoder: Decoder) -> bool {
+        let Ok(content) = std::str::from_utf8(event) else {
+            return false;
+        };
+        let declaration = BytesStart::from_content(content, 3);
+        if !Self::valid_xml_attributes(&declaration, decoder) {
+            return false;
+        }
+        let mut position = 0;
+        for attribute in declaration.attributes() {
+            let Ok(attribute) = attribute else {
+                return false;
+            };
+            let value = attribute.value.as_ref();
+            position = match attribute.key.as_ref() {
+                b"version"
+                    if position == 0
+                        && value.strip_prefix(b"1.").is_some_and(|digits| {
+                            !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
+                        }) =>
+                {
+                    1
+                }
+                b"encoding"
+                    if position == 1
+                        && value.first().is_some_and(u8::is_ascii_alphabetic)
+                        && value.iter().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                        }) =>
+                {
+                    2
+                }
+                b"standalone" if matches!(position, 1 | 2) && matches!(value, b"yes" | b"no") => 3,
+                _ => return false,
+            };
+        }
+        position != 0
+    }
+
+    fn block_selector(name: &[u8]) -> Result<AzureBlockSelector, AzureBlockListError> {
+        match name {
+            b"Latest" => Ok(AzureBlockSelector::Latest),
+            b"Committed" => Ok(AzureBlockSelector::Committed),
+            b"Uncommitted" => Ok(AzureBlockSelector::Uncommitted),
+            _ => Err(AzureBlockListError::InvalidBlockList),
+        }
+    }
+
     fn parse_block_list(xml: &str) -> Result<Vec<AzureBlockReference>, AzureBlockListError> {
         let xml = xml.strip_prefix('\u{feff}').unwrap_or(xml);
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
+        reader.config_mut().check_comments = true;
         let mut buf = Vec::new();
         let mut root_seen = false;
         let mut root_closed = false;
@@ -1795,6 +1874,11 @@ impl AzureBlobAdapter {
 
         loop {
             match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(event) | Event::Empty(event))
+                    if !Self::valid_xml_attributes(&event, reader.decoder()) =>
+                {
+                    return Err(AzureBlockListError::InvalidXmlDocument);
+                }
                 Ok(Event::Start(event)) => {
                     let name = event.name().as_ref().to_vec();
                     if !root_seen && name == b"BlockList" {
@@ -1802,7 +1886,7 @@ impl AzureBlobAdapter {
                     } else if root_seen
                         && !root_closed
                         && current_element.is_none()
-                        && matches!(name.as_slice(), b"Latest" | b"Committed" | b"Uncommitted")
+                        && Self::block_selector(&name).is_ok()
                     {
                         current_element = Some(name);
                         current_block_id.clear();
@@ -1820,12 +1904,7 @@ impl AzureBlobAdapter {
                         if current_block_id.is_empty() {
                             return Err(AzureBlockListError::InvalidBlockList);
                         }
-                        let selector = match name.as_slice() {
-                            b"Latest" => AzureBlockSelector::Latest,
-                            b"Committed" => AzureBlockSelector::Committed,
-                            b"Uncommitted" => AzureBlockSelector::Uncommitted,
-                            _ => return Err(AzureBlockListError::InvalidBlockList),
-                        };
+                        let selector = Self::block_selector(&name)?;
                         block_references.push(AzureBlockReference {
                             id: std::mem::take(&mut current_block_id),
                             selector,
@@ -1841,14 +1920,17 @@ impl AzureBlobAdapter {
                         return Err(AzureBlockListError::InvalidXmlDocument);
                     }
                 }
-                Ok(Event::Text(text)) if current_element.is_some() => {
+                Ok(Event::Text(text)) => {
                     let decoded = text
                         .decode()
                         .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
-                    let value = unescape(&decoded)
-                        .map_err(|_| AzureBlockListError::InvalidXmlDocument)?
-                        .to_string();
-                    current_block_id.push_str(&value);
+                    if current_element.is_some() {
+                        let value = unescape(&decoded)
+                            .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
+                        current_block_id.push_str(&value);
+                    } else if !decoded.trim().is_empty() {
+                        return Err(AzureBlockListError::InvalidBlockList);
+                    }
                 }
                 Ok(Event::CData(text)) if current_element.is_some() => {
                     let decoded = text
@@ -1856,21 +1938,16 @@ impl AzureBlobAdapter {
                         .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
                     current_block_id.push_str(&decoded);
                 }
-                Ok(Event::Text(text)) => {
-                    let decoded = text
-                        .decode()
-                        .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
-                    if !decoded.trim().is_empty() {
-                        return Err(AzureBlockListError::InvalidBlockList);
-                    }
-                }
                 Ok(Event::Eof) => break,
                 // A declaration must occur once, at the start, before any other node.
                 Ok(Event::Decl(event))
                     if declaration_allowed
                         && xml.starts_with("<?xml")
-                        && event.version().is_ok() => {}
+                        && Self::valid_xml_declaration(&event, reader.decoder()) => {}
                 Err(_) | Ok(Event::Decl(_)) => return Err(AzureBlockListError::InvalidXmlDocument),
+                Ok(Event::PI(event)) if event.target().eq_ignore_ascii_case(b"xml") => {
+                    return Err(AzureBlockListError::InvalidXmlDocument);
+                }
                 Ok(Event::Comment(_) | Event::PI(_)) => {}
                 _ => return Err(AzureBlockListError::InvalidBlockList),
             }
@@ -6110,6 +6187,21 @@ mod tests {
             "<!--before--><?xml version=\"1.0\"?><BlockList/>",
             " \n<?xml version=\"1.0\"?><BlockList/>",
             "<?xml?><BlockList/>",
+            "<?xml version='garbage'?><BlockList/>",
+            "<?xml encoding='utf-8'?><BlockList/>",
+            "<?xml version='1.0' standalone='garbage'?><BlockList/>",
+            "<?xml version='1.0' standalone='yes' encoding='utf-8'?><BlockList/>",
+            "<?xml version='1.0' version='1.0'?><BlockList/>",
+            "<?xml version='1.0' extra='unknown'?><BlockList/>",
+            "<?xml version='1.0' encoding='bad encoding'?><BlockList/>",
+            "<?xml version='1.0'encoding='utf-8'?><BlockList/>",
+            "<BlockList bogus=>",
+            "<BlockList bogus='one' bogus='two'/>",
+            "<BlockList xmlns='&unknown;'/>",
+            "<BlockList bogus='one'two='two'/>",
+            "<BlockList bogus='<bad>'/>",
+            "<!--bad--comment--><BlockList/>",
+            "<?XML version='1.0'?><BlockList/>",
         ] {
             // Act with malformed XML and the correct lease, so protection cannot mask parsing defects.
             let response = adapter
@@ -6171,7 +6263,7 @@ mod tests {
                     "PUT",
                     &format!("{uri}?comp=blocklist"),
                     &headers,
-                    "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList/>".as_bytes(),
+                    "\u{feff}<?xml version='1.0' encoding='utf-8' standalone='yes'?><!--valid--><?fixture allowed?><BlockList xmlns='urn:fixture' note='a&amp;b'/>".as_bytes(),
                 )
                 .await,
             )
