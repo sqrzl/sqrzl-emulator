@@ -13,6 +13,9 @@ flowchart LR
         AzureSDK[Azure Blob SDKs]
         GCSSDK[Google Cloud Storage SDKs]
         OCISDK[OCI Object Storage SDKs]
+        EmailSDK[SendGrid, SES and ACS Email clients]
+        SmsSDK[Twilio, SNS, AWS SMS Voice and ACS SMS clients]
+        SmtpClient[SMTP clients]
         Browser[Browser admin UI]
         DevOps[Local dev, CI, Docker Compose]
     end
@@ -20,11 +23,14 @@ flowchart LR
     subgraph Sqrzl["sqrzl-emulator process"]
         ApiPort["Provider API listener<br/>0.0.0.0:9000"]
         UiPort["UI and admin listener<br/>0.0.0.0:9001"]
+        SmtpPort["SMTP capture listener<br/>0.0.0.0:2525"]
         SharedStorage["Shared Storage trait object<br/>focused capability traits + FilesystemStorage"]
+        MailStore["MailStore<br/>FilesystemMailStore"]
+        SmsStore["SmsStore<br/>FilesystemSmsStore"]
         Lifecycle["LifecycleExecutor<br/>background task"]
     end
 
-    Disk[Filesystem blob root<br/>SQRZL_BLOBS_PATH]
+    Disk[Filesystem storage and capture root<br/>SQRZL_BLOBS_PATH]
     OpenApi[Admin OpenAPI contract<br/>public/openapi.yml]
     StaticUi[Built SPA assets<br/>./static or /app/ui/dist]
 
@@ -32,14 +38,24 @@ flowchart LR
     AzureSDK --> ApiPort
     GCSSDK --> ApiPort
     OCISDK --> ApiPort
+    EmailSDK --> ApiPort
+    SmsSDK --> ApiPort
+    SmtpClient --> SmtpPort
     Browser --> UiPort
     DevOps --> ApiPort
     DevOps --> UiPort
 
     ApiPort --> SharedStorage
+    ApiPort --> MailStore
+    ApiPort --> SmsStore
     UiPort --> SharedStorage
+    UiPort --> MailStore
+    UiPort --> SmsStore
+    SmtpPort --> MailStore
     Lifecycle --> SharedStorage
     SharedStorage --> Disk
+    MailStore --> Disk
+    SmsStore --> Disk
     UiPort --> StaticUi
     OpenApi --> Browser
 ```
@@ -51,27 +67,41 @@ flowchart TB
     Main["src/main.rs"]
     Config["Config::from_env<br/>src/config.rs"]
     Logging["tracing subscriber<br/>text or json"]
+    RootWriter["StorageRootWriter<br/>exclusive root owner through runtime shutdown"]
     StartupBuckets["SQRZL_BUCKET_LIST validation<br/>ensure_startup_buckets"]
     Storage["Arc&lt;FilesystemStorage&gt;<br/>src/storage/filesystem.rs"]
+    Mail["Arc&lt;FilesystemMailStore&gt;<br/>src/mail/filesystem.rs"]
+    Sms["Arc&lt;FilesystemSmsStore&gt;<br/>src/sms/filesystem.rs"]
     Lifecycle["LifecycleExecutor::start<br/>src/lifecycle.rs"]
-    ProviderServer["Server::new(...).start<br/>src/server/mod.rs"]
-    UiServer["start_ui_server<br/>src/api/server.rs"]
+    ProviderServer["Server::new_with_sms(...).start<br/>src/server/mod.rs"]
+    UiServer["start_ui_server_with_sms<br/>src/api/server.rs"]
+    SmtpServer["SmtpServer::start<br/>src/mail/smtp.rs"]
 
     Main --> Config
     Main --> Logging
-    Main --> Storage
+    Main --> RootWriter
+    RootWriter --> Storage
+    RootWriter --> Mail
+    RootWriter --> Sms
     Main --> StartupBuckets
     StartupBuckets --> Storage
     Main --> Lifecycle
     Main --> ProviderServer
     Main --> UiServer
+    Main --> SmtpServer
 
     Config --> ProviderServer
     Config --> UiServer
     Config --> Lifecycle
+    Config --> SmtpServer
     Storage --> ProviderServer
     Storage --> UiServer
     Storage --> Lifecycle
+    Mail --> ProviderServer
+    Mail --> UiServer
+    Mail --> SmtpServer
+    Sms --> ProviderServer
+    Sms --> UiServer
 ```
 
 ## Provider API Request Path
@@ -79,11 +109,13 @@ flowchart TB
 ```mermaid
 flowchart TD
     Request["HTTP request on API port"]
-    Streamable{"S3 object PUT or UploadPart?"}
+    Streamable{"Selected S3, Azure, GCS or OCI data upload?"}
     Stream["spool_request<br/>stream to disk + hash"]
     Parse["Request::from_hyper_with_max_body<br/>buffer control payload"]
     BodyLimit{"Body exceeds<br/>SQRZL_MAX_REQUEST_BYTES?"}
     Health{"GET /healthz?"}
+    SmsRegistry{"SmsAdapterRegistry::route<br/>src/sms/providers/mod.rs"}
+    MailRegistry{"MailAdapterRegistry::route<br/>src/mail/providers/mod.rs"}
     Registry["AdapterRegistry::handle<br/>src/providers/mod.rs"]
     Azure{"AzureBlobAdapter.matches"}
     GCS{"GcsAdapter.matches"}
@@ -94,6 +126,10 @@ flowchart TD
     GcsHandle["GCS handler<br/>JSON XML APIs, signed URLs, resumable sessions"]
     OciHandle["OCI handler<br/>/n namespace paths and Signature auth"]
     S3Handle["S3 handlers<br/>Router, bucket/object handlers"]
+    SmsHandle["Twilio, SNS, AWS SMS Voice and ACS SMS<br/>native auth + selected request validation"]
+    MailHandle["SendGrid, SES and ACS Email<br/>native auth + selected request validation"]
+    SmsCapture["SmsStore<br/>FilesystemSmsStore capture batch"]
+    MailCapture["MailStore<br/>FilesystemMailStore recipient fan-out"]
 
     ProviderAuth["Provider-specific auth<br/>SharedKey, GOOG1, OCI Signature"]
     S3Auth["S3 auth facade<br/>check_authorization"]
@@ -103,7 +139,7 @@ flowchart TD
     Services["S3 service helpers<br/>src/services/bucket.rs<br/>src/services/object.rs"]
     Storage["Storage trait<br/>src/storage/mod.rs"]
     Response["Provider-compatible response<br/>XML, JSON, headers"]
-    TooLarge["AdapterRegistry::render_payload_too_large<br/>provider-shaped 413 response"]
+    TooLarge["SMS, mail or storage registry<br/>provider-shaped 413 response"]
     HealthResponse["health::response"]
 
     Request --> Streamable
@@ -114,7 +150,11 @@ flowchart TD
     BodyLimit -- yes --> TooLarge
     BodyLimit -- no --> Health
     Health -- yes --> HealthResponse
-    Health -- no --> Registry
+    Health -- no --> SmsRegistry
+    SmsRegistry -- match --> SmsHandle
+    SmsRegistry -- no --> MailRegistry
+    MailRegistry -- match --> MailHandle
+    MailRegistry -- no --> Registry
     Registry --> Azure
     Azure -- match --> AzureHandle
     Azure -- no --> GCS
@@ -136,7 +176,22 @@ flowchart TD
     BlobBackend --> Storage
     Services --> Storage
     Storage --> Response
+    SmsHandle --> SmsCapture --> Response
+    MailHandle --> MailCapture --> Response
 ```
+
+SMS and mail registries match before the storage registry. Their native provider
+responses represent local captures. Mail and SMS have separate store contracts
+under `_mail` and `_sms` in the shared filesystem root; the UI listener uses those
+same stores for captured-message inspection and local simulation. SMTP reaches
+the mail store through its own bounded command and DATA listener.
+
+Capture admission checks a projected 64 MiB aggregate budget before fan-out
+copies and filesystem publication. Backend enforcement includes serialized
+records, raw mail or inline media, and retained results. A durable capture-batch
+decision controls visibility of message files, indexes, media and repeatability
+records, and each capture store recovers that journal when it opens. This
+projected admission limit does not establish measured RSS qualification.
 
 ## S3 Handler Breakdown
 
@@ -269,7 +324,7 @@ flowchart TB
 
     Root["SQRZL_BLOBS_PATH"]
     BucketDir["bucket directory"]
-    BucketControl["bucket sidecars<br/>.bucket.meta.json<br/>.versioning-enabled<br/>.lifecycle.json<br/>.policy.json<br/>bucket.acl.json"]
+    BucketControl["bucket sidecars<br/>.bucket.identity.json<br/>.bucket.meta.json<br/>.versioning-enabled<br/>.lifecycle.json<br/>.policy.json<br/>bucket.acl.json"]
     ObjectDir["hashed object_id directory"]
     ObjectBlob["object.blob"]
     ObjectMeta["object.meta.json"]
@@ -277,6 +332,8 @@ flowchart TB
     Multipart[".multipart/{upload_id}<br/>upload.json + part files"]
     ProviderState[".provider-state/{provider}<br/>restart-safe sidecars"]
     RequestSpool[".spool<br/>in-flight request files"]
+    RootWriter[".sqrzl-writer.lock<br/>exclusive cooperative owner"]
+    Publication["object publication journal<br/>staged generation + commit decision"]
     ProviderUploads[".provider-uploads/{provider}/{session}<br/>staged blocks, chunks, and parts"]
 
     StorageAggregate --> CapabilityTraits --> FS
@@ -289,6 +346,8 @@ flowchart TB
     FS --> StreamSpool
     FS --> UploadCompose
     FS --> Root
+    Root --> RootWriter
+    ObjectDir --> Publication
     Root --> BucketDir
     BucketDir --> BucketControl
     BucketDir --> ObjectDir
@@ -302,19 +361,29 @@ flowchart TB
 ```
 
 Large data-plane request bodies are streamed into root-level spool files while
-MD5, SHA-256, SHA-384, CRC32C, and Azure-compatible CRC64 are calculated
+MD5, SHA-1, SHA-256, SHA-384, CRC32, CRC32C, and CRC64-NVME are calculated
 incrementally. Provider adapters keep only session metadata in memory and in
 `.provider-state`; durable payload bytes live in `.provider-uploads`. Azure
 block lists, GCS resumable chunks, and OCI multipart parts are assembled through
-ordered disk-to-disk copies, and the final file is atomically moved into the
-object layout. S3 multipart completion follows the same no-whole-object-read
+ordered disk-to-disk copies. A staged generation and durable publication decision
+couple visible object bytes with metadata; recovery completes committed decisions
+before reads or index reconstruction. S3 multipart completion follows the same no-whole-object-read
 rule through its existing `.multipart` layout.
 
-Startup purges abandoned request spools. Request cancellation, provider
-rejection, abort, completion, overwrite, expired GCS sessions, and obsolete
-pre-streaming provider state all remove their owned staging files. The storage
-root therefore remains the single capacity boundary for both committed objects
-and uploads in progress.
+Startup claims the root writer lock, recovers publication decisions, then purges
+abandoned request spools. Native dispatch, admin mutations and lifecycle passes
+share one operation gate so protection checks and their commits cannot interleave
+through another front door. Metadata-only admission and bounded range APIs avoid
+loading payloads for HEAD and protection decisions. Whole materialized S3/Azure/GCS
+reads, S3/Azure copies and Azure page/append extents have an explicit 64 MiB local cap.
+
+Completed or rejected requests release their request spools; restart removes
+orphan spools. Abort and expired GCS-session cleanup remove owned upload data.
+Failed completion preserves acknowledged parts for retry. Azure block-list
+selection can retain omitted uncommitted blocks; Put Blob explicitly discards
+that staging. GCS XML cancellation retains a small expiring reply decision after
+active session bytes are removed. Committed objects and uploads in progress
+share the configured filesystem root and its available disk capacity.
 
 ## Auth And Authorization
 

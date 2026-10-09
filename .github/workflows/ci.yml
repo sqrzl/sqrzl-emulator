@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      sdk_upgrade:
+        description: Run the intentional unpinned SDK upgrade qualification lane
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -16,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Update Rust toolchain
         run: rustup update stable
@@ -41,32 +49,130 @@ jobs:
         run: cargo build --workspace --all-targets
 
       - name: Test
-        run: cargo test --workspace --all-targets --all-features
+        shell: bash
+        run: cargo test --workspace --all-targets --all-features 2>&1 | tee target/rust-contract-results.log
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: sdk-tests/requirements.lock
 
       - name: Install SDK test dependencies
-        run: python -m pip install -e ".[sdk-tests]"
+        run: |
+          python -m pip install -r sdk-tests/requirements.lock
+          python -m pip check
 
       - name: SDK functional tests
+        env:
+          SQRZL_SDK_LANE: functional
         run: python -m pytest
+
+      - name: SDK provenance boundary checks
+        run: python sdk-tests/provenance_checks.py
+
+      - name: SDK owned-process readiness checks
+        run: python sdk-tests/runtime_checks.py
+
+      - name: Contract evidence validator boundary checks
+        run: python -m unittest discover -s scripts -p 'test_contract_evidence.py'
+
+      - name: Measured campaign oracle checks
+        run: python sdk-tests/campaign_checks.py
+
+      - name: Measured SDK transport and retry checks
+        run: python sdk-tests/campaign_transport_checks.py
 
       - name: Authenticated provider SDK tests
         env:
           SQRZL_SDK_ENFORCE_AUTH: "1"
           SQRZL_SDK_PROVIDERS: s3,azure,gcs,oci
-        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_oci_sdk.py
+          SQRZL_SDK_LANE: storage-auth
+        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_oci_sdk.py sdk-tests/test_storage_acceptance.py sdk-tests/test_storage_auth_acceptance.py
+
+      - name: Authenticated messaging SDK tests
+        env:
+          SQRZL_SDK_MESSAGING_AUTH: "1"
+          SQRZL_SDK_PROVIDERS: email,twilio,sns,aws-sms-voice-v2
+          SQRZL_SDK_LANE: messaging-auth
+        run: python -m pytest sdk-tests/test_email_sdk.py sdk-tests/test_sms_sdk.py sdk-tests/test_messaging_acceptance.py
+
+      - name: Validate exact operation references and qualification results
+        run: |
+          python scripts/validate_contract_evidence.py \
+            --rust-results target/rust-contract-results.log \
+            --sdk-evidence target/sdk-evidence/functional.json \
+            --sdk-evidence target/sdk-evidence/storage-auth.json \
+            --sdk-evidence target/sdk-evidence/messaging-auth.json \
+            --results-source-sha "$(git rev-parse HEAD)" \
+            --output target/contract-acceptance.json
+
+      - name: Preserve SDK qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk-qualification-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            target/sdk-evidence/*.json
+            target/rust-contract-results.log
+            target/contract-acceptance.json
+          retention-days: 14
+
+  sdk-upgrade:
+    if: github.event_name == 'workflow_dispatch' && inputs.sdk_upgrade
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: rustup update stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - name: Build emulator
+        run: cargo build --locked --bin sqrzl-emulator
+      - name: Install current SDK candidates intentionally
+        run: |
+          python -m pip install --upgrade -e ".[sdk-upgrade]"
+          python -m pip check
+      - name: Candidate SDK functional tests
+        env:
+          SQRZL_SDK_ALLOW_UPGRADE: "1"
+          SQRZL_SDK_LANE: upgrade-functional
+        run: python -m pytest
+      - name: Candidate native storage authentication
+        env:
+          SQRZL_SDK_ALLOW_UPGRADE: "1"
+          SQRZL_SDK_ENFORCE_AUTH: "1"
+          SQRZL_SDK_PROVIDERS: s3,azure,gcs,oci
+          SQRZL_SDK_LANE: upgrade-storage-auth
+        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_oci_sdk.py sdk-tests/test_storage_acceptance.py sdk-tests/test_storage_auth_acceptance.py
+      - name: Candidate messaging authentication
+        env:
+          SQRZL_SDK_ALLOW_UPGRADE: "1"
+          SQRZL_SDK_MESSAGING_AUTH: "1"
+          SQRZL_SDK_PROVIDERS: email,twilio,sns,aws-sms-voice-v2
+          SQRZL_SDK_LANE: upgrade-messaging-auth
+        run: python -m pytest sdk-tests/test_email_sdk.py sdk-tests/test_sms_sdk.py sdk-tests/test_messaging_acceptance.py
+      - name: Preserve upgrade qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk-upgrade-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/sdk-evidence/*.json
+          retention-days: 14
 
   frontend:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -100,6 +206,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Build container image
         run: docker build -t sqrzl-emulator:smoke .
@@ -133,17 +241,26 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: sdk-tests/requirements.lock
 
       - name: Install SDK test dependencies
-        run: python -m pip install -e ".[sdk-tests]"
+        run: python -m pip install -r sdk-tests/requirements.lock
 
       - name: Run complete SDK container smoke
         env:
           SQRZL_API_URL: http://127.0.0.1:9000
           SQRZL_UI_URL: http://127.0.0.1:9001
           SQRZL_SMTP_PORT: "2525"
+          SQRZL_SDK_LANE: container-smoke
         run: python -m pytest
+
+      - name: Preserve container smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk-container-smoke-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/sdk-evidence/*.json
+          retention-days: 14
 
       - name: Stop container
         if: always()

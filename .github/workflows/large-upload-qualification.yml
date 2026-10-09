@@ -1,0 +1,98 @@
+name: Measured large upload qualification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/**
+      - Cargo.toml
+      - Cargo.lock
+      - sdk-tests/**
+      - scripts/**
+      - .github/workflows/large-upload-qualification.yml
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: Comma-separated selected providers (s3,azure,gcs,oci)
+        required: true
+        default: s3,azure,gcs,oci
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  measured-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "2"
+      PYTHONUNBUFFERED: "1"
+      SQRZL_RUN_LARGE_UPLOAD_QUALIFICATION: "1"
+      SQRZL_LARGE_UPLOAD_BYTES: "1073741824"
+      SQRZL_LARGE_CLIENT_RSS_BYTES: "536870912"
+      SQRZL_LARGE_SERVICE_RSS_BYTES: "536870912"
+      SQRZL_LARGE_DISK_BYTES: "5368709120"
+      SQRZL_LARGE_SAMPLE_SECONDS: "0.05"
+      SQRZL_MAX_REQUEST_BYTES: "134217728"
+      SQRZL_SDK_ENFORCE_AUTH: "1"
+      SQRZL_SDK_LANE: measured-upload
+      SQRZL_SDK_PROVIDERS: ${{ inputs.providers || 's3,azure,gcs,oci' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: rustup update stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: measured-upload
+      - name: Validate selected provider scope
+        run: |
+          python - <<'PY'
+          import os
+          selected = {p.strip() for p in os.environ['SQRZL_SDK_PROVIDERS'].split(',')}
+          assert selected and selected <= {'s3', 'azure', 'gcs', 'oci'}, selected
+          PY
+      - name: Install pinned official SDKs
+        run: |
+          python -m pip install -r sdk-tests/requirements.lock
+          python -m pip check
+      - name: Check checksum and interruption oracle
+        run: |
+          python sdk-tests/campaign_checks.py
+          python sdk-tests/campaign_transport_checks.py
+      - name: Build immutable binary with clean source provenance
+        run: |
+          python sdk-tests/build_provenance.py --output-dir target/measured-binary
+          echo "SQRZL_BINARY=$PWD/target/measured-binary/sqrzl-emulator" >> "$GITHUB_ENV"
+          echo "SQRZL_BINARY_PROVENANCE=$PWD/target/measured-binary/build-provenance.json" >> "$GITHUB_ENV"
+      - name: Measure selected 1 GiB workflows, readback and process recovery
+        shell: bash
+        env:
+          SQRZL_CAMPAIGN_PROGRESS_DIR: target/campaign-progress
+        run: |
+          set -o pipefail
+          python -u -m pytest -vv -s -o faulthandler_timeout=300 \
+            sdk-tests/test_large_upload_qualification.py 2>&1 | tee target/measured-pytest.log
+      - name: Validate exact-source measured resource evidence
+        run: |
+          python scripts/validate_contract_evidence.py \
+            --sdk-evidence target/sdk-evidence/measured-upload.json \
+            --results-source-sha "$(git rev-parse HEAD)" \
+            --require-measured-providers "$SQRZL_SDK_PROVIDERS" \
+            --output target/measured-contract-acceptance.json
+      - name: Preserve measured resource and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: measured-upload-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            target/sdk-evidence/measured-upload.json
+            target/measured-binary/build-provenance.json
+            target/measured-contract-acceptance.json
+            target/measured-pytest.log
+            target/campaign-progress/*.jsonl
+          retention-days: 30

@@ -128,8 +128,7 @@ def test_sendgrid_sdk_send(sqrzl_server):
     from sendgrid.helpers.mail import Mail
 
     mailbox, subject = _mailbox_subject("sendgrid")
-    api_key = os.getenv("SQRZL_SENDGRID_API_KEY", "SG.dummy")
-    os.environ["SQRZL_SENDGRID_API_KEY"] = api_key
+    api_key = sqrzl_server.sendgrid_api_key
     client = sendgrid.SendGridAPIClient(api_key)
     client.client.host = sqrzl_server.api_url
 
@@ -239,7 +238,7 @@ def test_sendgrid_sdk_rejects_projected_capture_limit(sqrzl_server):
 
     prefix = os.urandom(4).hex()
     recipients = [f"capture-{prefix}-{n}@example.com" for n in range(50)]
-    client = sendgrid.SendGridAPIClient(os.getenv("SQRZL_SENDGRID_API_KEY", "SG.dummy"))
+    client = sendgrid.SendGridAPIClient(sqrzl_server.sendgrid_api_key)
     client.client.host = sqrzl_server.api_url
     message = Mail(from_email="sender@example.com", to_emails=recipients,
                    subject="local capture limit", plain_text_content="x" * (1536 * 1024))

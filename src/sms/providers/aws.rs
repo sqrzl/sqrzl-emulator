@@ -301,7 +301,7 @@ impl AwsSmsVoiceAdapter {
             .header("x-amzn-errortype", kind)
             .content_type("application/x-amz-json-1.0")
             .body(
-                serde_json::json!({"message": message})
+                serde_json::json!({"__type": kind, "message": message})
                     .to_string()
                     .into_bytes(),
             )
