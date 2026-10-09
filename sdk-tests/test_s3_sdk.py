@@ -53,6 +53,7 @@ def test_s3_core_bucket_object_and_metadata_workflows(sqrzl_server):
     key = "folder/hello.txt"
 
     client.create_bucket(Bucket=bucket)
+    assert bucket in {item["Name"] for item in client.list_buckets()["Buckets"]}
     client.put_object(
         Bucket=bucket,
         Key=key,

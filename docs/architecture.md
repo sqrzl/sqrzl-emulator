@@ -322,11 +322,13 @@ through another front door. Metadata-only admission and bounded range APIs avoid
 loading payloads for HEAD and protection decisions. Whole materialized S3/Azure/GCS
 reads, S3/Azure copies and Azure page/append extents have an explicit 64 MiB local cap.
 
-Startup purges abandoned request spools. Request cancellation, provider
-rejection, abort, completion, overwrite, expired GCS sessions, and obsolete
-pre-streaming provider state all remove their owned staging files. The storage
-root therefore remains the single capacity boundary for both committed objects
-and uploads in progress.
+Completed or rejected requests release their request spools; restart removes
+orphan spools. Abort and expired GCS-session cleanup remove owned upload data.
+Failed completion preserves acknowledged parts for retry. Azure block-list
+selection can retain omitted uncommitted blocks; Put Blob explicitly discards
+that staging. GCS XML cancellation retains a small expiring reply decision after
+active session bytes are removed. Committed objects and uploads in progress
+share the configured filesystem root and its available disk capacity.
 
 ## Auth And Authorization
 
