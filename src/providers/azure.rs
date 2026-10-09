@@ -1782,6 +1782,7 @@ impl AzureBlobAdapter {
     }
 
     fn parse_block_list(xml: &str) -> Result<Vec<AzureBlockReference>, AzureBlockListError> {
+        let xml = xml.strip_prefix('\u{feff}').unwrap_or(xml);
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
@@ -1790,6 +1791,7 @@ impl AzureBlobAdapter {
         let mut current_element: Option<Vec<u8>> = None;
         let mut current_block_id = String::new();
         let mut block_references = Vec::new();
+        let mut declaration_allowed = true;
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -1863,10 +1865,16 @@ impl AzureBlobAdapter {
                     }
                 }
                 Ok(Event::Eof) => break,
-                Err(_) => return Err(AzureBlockListError::InvalidXmlDocument),
-                Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_)) => {}
+                // A declaration must occur once, at the start, before any other node.
+                Ok(Event::Decl(event))
+                    if declaration_allowed
+                        && xml.starts_with("<?xml")
+                        && event.version().is_ok() => {}
+                Err(_) | Ok(Event::Decl(_)) => return Err(AzureBlockListError::InvalidXmlDocument),
+                Ok(Event::Comment(_) | Event::PI(_)) => {}
                 _ => return Err(AzureBlockListError::InvalidBlockList),
             }
+            declaration_allowed = false;
             buf.clear();
         }
 
@@ -6023,6 +6031,174 @@ mod tests {
             storage.get_object("invalid-blocks", "report.txt"),
             Err(crate::error::Error::KeyNotFound)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::too_many_lines)] // One leased versioned fixture proves malformed XML has no publication or staging effects.
+    async fn should_reject_misplaced_azure_xml_declarations_without_mutating() {
+        // Arrange a current blob, prior history, an active lease, and an acknowledged staged block.
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        let container = "invalid-declarations";
+        storage.create_bucket(container.to_string()).unwrap();
+        storage.enable_versioning(container).unwrap();
+        storage
+            .update_bucket_metadata(
+                container,
+                HashMap::from([(AZURE_VERSIONING_KEY.to_string(), "true".to_string())]),
+            )
+            .unwrap();
+        let uri = format!("/devstoreaccount1/{container}/item");
+        for body in [b"historical".as_slice(), b"current".as_slice()] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &uri,
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                        ],
+                        body,
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+        let lease_id = "c7fbf6ab-6848-4b49-b4a9-168d816f6697";
+        acquire_azure_lease_for(&adapter, &storage, &uri, lease_id).await;
+        let headers = [("x-ms-version", AZURE_VERSION), ("x-ms-lease-id", lease_id)];
+        let staged = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=block&blockid=YQ=="),
+                    &headers,
+                    b"staged",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(staged.status(), StatusCode::CREATED);
+        let session_key = AzureBlobAdapter::blob_state_key("devstoreaccount1", container, "item");
+        let current = serde_json::to_value(storage.get_object(container, "item").unwrap()).unwrap();
+        let history = serde_json::to_value(
+            storage
+                .list_object_versions_for_key(container, "item")
+                .unwrap(),
+        )
+        .unwrap();
+        let session = serde_json::to_value(
+            adapter
+                .load_block_session(&storage, &session_key)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+
+        for body in [
+            "<BlockList/><?xml version=\"1.0\"?>",
+            "<?xml version=\"1.0\"?><?xml version=\"1.0\"?><BlockList/>",
+            "<BlockList><?xml version=\"1.0\"?></BlockList>",
+            "<!--before--><?xml version=\"1.0\"?><BlockList/>",
+            " \n<?xml version=\"1.0\"?><BlockList/>",
+            "<?xml?><BlockList/>",
+        ] {
+            // Act with malformed XML and the correct lease, so protection cannot mask parsing defects.
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}?comp=blocklist"),
+                        &headers,
+                        body.as_bytes(),
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+
+            // Assert the native error and all captured state remain unchanged.
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(
+                header_value(&response, "x-ms-error-code"),
+                Some("InvalidXmlDocument"),
+                "{body}"
+            );
+            assert_eq!(
+                serde_json::to_value(storage.get_object(container, "item").unwrap()).unwrap(),
+                current,
+                "{body}"
+            );
+            assert_eq!(
+                serde_json::to_value(
+                    storage
+                        .list_object_versions_for_key(container, "item")
+                        .unwrap()
+                )
+                .unwrap(),
+                history,
+                "{body}"
+            );
+            assert_eq!(
+                serde_json::to_value(
+                    adapter
+                        .load_block_session(&storage, &session_key)
+                        .unwrap()
+                        .unwrap()
+                )
+                .unwrap(),
+                session,
+                "{body}"
+            );
+        }
+
+        // Act with a valid empty declaration-bearing document and then the retained block.
+        let empty = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=blocklist"),
+                    &headers,
+                    "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?><BlockList/>".as_bytes(),
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(empty.status(), StatusCode::CREATED);
+        let restored = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=blocklist"),
+                    &headers,
+                    b"<BlockList><Uncommitted>YQ==</Uncommitted></BlockList>",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+
+        // Assert valid empties remain supported and malformed attempts preserved the staged bytes and lease.
+        assert_eq!(restored.status(), StatusCode::CREATED);
+        let blob = storage.get_object(container, "item").unwrap();
+        assert_eq!(blob.data, b"staged");
+        assert_eq!(AzureBlobAdapter::lease_id(&blob), Some(lease_id));
+        assert!(AzureBlobAdapter::has_active_lease(&blob));
     }
 
     #[tokio::test(flavor = "multi_thread")]
