@@ -641,8 +641,13 @@ fn validate_sns_fields(fields: &[(String, String)]) -> Result<(), String> {
         );
     }
     if let Some(subject) = form_value(fields, "Subject") {
-        if subject.is_empty() || subject.chars().count() > 100 || subject.contains(['\r', '\n']) {
-            return Err("Subject must contain 1 to 100 characters without line breaks".to_string());
+        if subject.is_empty()
+            || subject.chars().count() >= 100
+            || subject.chars().any(char::is_control)
+        {
+            return Err(
+                "Subject must contain 1 to 99 characters without control characters".to_string(),
+            );
         }
     }
     Ok(())
