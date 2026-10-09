@@ -2631,13 +2631,16 @@ mod tests {
     }
 
     #[test]
-    fn should_preserve_bucket_creation_identity_across_get_list_and_restart() {
+    fn should_preserve_bucket_creation_identity_across_restarts() {
+        // Arrange
         let base = temp_path();
         let storage = FilesystemStorage::new(&base);
         storage
             .create_bucket("stable-identity".to_string())
             .unwrap();
+        // Act
         let first = storage.get_bucket("stable-identity").unwrap().created_at;
+        // Assert
         assert_eq!(
             storage.get_bucket("stable-identity").unwrap().created_at,
             first
@@ -2656,6 +2659,7 @@ mod tests {
 
     #[test]
     fn should_migrate_legacy_bucket_identity_once_from_filesystem_creation() {
+        // Arrange
         let base = temp_path();
         let storage = FilesystemStorage::new(&base);
         let bucket_dir = storage.bucket_dir("legacy-identity");
@@ -2667,7 +2671,9 @@ mod tests {
             .or_else(|_| metadata.modified())
             .unwrap()
             .into();
+        // Act
         let first = storage.get_bucket("legacy-identity").unwrap().created_at;
+        // Assert
         assert_eq!(first, expected);
         assert!(bucket_dir.join(".bucket.identity.json").exists());
         fs::write(bucket_dir.join(".bucket.name"), b"legacy-identity").unwrap();
@@ -2711,11 +2717,14 @@ mod tests {
     }
 
     #[test]
-    fn should_preserve_creation_and_update_only_modification_for_bucket_changes() {
+    fn should_update_bucket_modification_identity_only_for_bucket_changes() {
+        // Arrange
         let base = temp_path();
         let storage = FilesystemStorage::new(&base);
         storage.create_bucket("bucket-changes".to_string()).unwrap();
+        // Act
         let initial = storage.get_bucket("bucket-changes").unwrap();
+        // Assert
         assert_eq!(initial.created_at, initial.modified_at);
         storage
             .put_object(
