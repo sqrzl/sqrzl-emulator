@@ -128,8 +128,7 @@ def test_sendgrid_sdk_send(sqrzl_server):
     from sendgrid.helpers.mail import Mail
 
     mailbox, subject = _mailbox_subject("sendgrid")
-    api_key = os.getenv("SQRZL_SENDGRID_API_KEY", "SG.dummy")
-    os.environ["SQRZL_SENDGRID_API_KEY"] = api_key
+    api_key = sqrzl_server.sendgrid_api_key
     client = sendgrid.SendGridAPIClient(api_key)
     client.client.host = sqrzl_server.api_url
 

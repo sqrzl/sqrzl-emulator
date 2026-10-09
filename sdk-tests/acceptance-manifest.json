@@ -1,0 +1,1220 @@
+{
+  "schema_version": 1,
+  "scope_policy": "Evidence is per selected operation. Normal restart, abrupt process termination, and measured resource campaigns are separate gates. No provider-wide support promotion.",
+  "api_versions": {
+    "s3": "2006-03-01",
+    "sns": "2010-03-31",
+    "sesv2": "2019-09-27",
+    "pinpoint-sms-voice-v2": "2022-03-31",
+    "azure-blob": "2026-10-06",
+    "gcs-json": "v1",
+    "gcs-xml-signing": "V2 HMAC",
+    "oci-object-storage": "20160918",
+    "sendgrid": "v3",
+    "acs-email": "2025-09-01",
+    "acs-sms": "2021-03-07",
+    "twilio": "2010-04-01",
+    "smtp": "RFC 5321 supported command subset"
+  },
+  "tests": {
+    "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow": {
+      "provider": "azure",
+      "operations": [
+        "PutBlock",
+        "PutBlockList",
+        "GetBlockList",
+        "GetBlob"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutBlock": [
+          "positive"
+        ],
+        "PutBlockList": [
+          "positive"
+        ],
+        "GetBlockList": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract": {
+      "provider": "azure",
+      "operations": [
+        "CreateContainer",
+        "GetContainerProperties",
+        "PutBlob",
+        "GetBlobProperties",
+        "ListBlobs",
+        "PutBlock",
+        "PutBlockList"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateContainer": [
+          "positive"
+        ],
+        "GetContainerProperties": [
+          "positive"
+        ],
+        "PutBlob": [
+          "positive"
+        ],
+        "GetBlobProperties": [
+          "positive"
+        ],
+        "ListBlobs": [
+          "positive"
+        ],
+        "PutBlock": [
+          "positive"
+        ],
+        "PutBlockList": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows": {
+      "provider": "azure",
+      "operations": [
+        "CreateContainer",
+        "PutBlob",
+        "GetBlobProperties",
+        "GetBlob",
+        "ListBlobs",
+        "ListContainers",
+        "DeleteBlob",
+        "DeleteContainer"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateContainer": [
+          "positive"
+        ],
+        "PutBlob": [
+          "positive"
+        ],
+        "GetBlobProperties": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ],
+        "ListBlobs": [
+          "positive"
+        ],
+        "ListContainers": [
+          "positive"
+        ],
+        "DeleteBlob": [
+          "positive"
+        ],
+        "DeleteContainer": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_native_page_blob_extent_and_range_mutation": {
+      "provider": "azure",
+      "operations": [
+        "PutPageBlob",
+        "PutPage",
+        "ClearPage",
+        "GetBlob"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutPageBlob": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "PutPage": [
+          "positive"
+        ],
+        "ClearPage": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints": {
+      "provider": "azure",
+      "operations": [
+        "PutBlob",
+        "ListBlobs",
+        "GetBlob",
+        "GetContainerProperties",
+        "AppendBlock"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-sas",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutBlob": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "ListBlobs": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ],
+        "GetContainerProperties": [
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "AppendBlock": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow": {
+      "provider": "azure",
+      "operations": [
+        "PutBlock",
+        "PutBlockList",
+        "GetBlob",
+        "DeleteBlob"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutBlock": [
+          "positive"
+        ],
+        "PutBlockList": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ],
+        "DeleteBlob": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send": {
+      "provider": "acs",
+      "operations": [
+        "EmailSend",
+        "EmailGetSendResult"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "EmailSend": [
+          "positive"
+        ],
+        "EmailGetSendResult": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send": {
+      "provider": "sendgrid",
+      "operations": [
+        "POST /v3/mail/send"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "POST /v3/mail/send": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_email_sdk.py::test_ses_sdk_send": {
+      "provider": "ses",
+      "operations": [
+        "SendEmail"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "SendEmail": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message": {
+      "provider": "smtp",
+      "operations": [
+        "MAIL",
+        "RCPT",
+        "DATA"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "MAIL": [
+          "positive"
+        ],
+        "RCPT": [
+          "positive"
+        ],
+        "DATA": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows": {
+      "provider": "gcs",
+      "operations": [
+        "buckets.insert",
+        "objects.insert",
+        "objects.get",
+        "objects.list",
+        "objects.delete",
+        "buckets.delete"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "local-bearer-or-anonymous-convenience",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "buckets.insert": [
+          "positive"
+        ],
+        "objects.insert": [
+          "positive"
+        ],
+        "objects.get": [
+          "positive"
+        ],
+        "objects.list": [
+          "positive"
+        ],
+        "objects.delete": [
+          "positive"
+        ],
+        "buckets.delete": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract": {
+      "provider": "gcs",
+      "operations": [
+        "PUT Bucket",
+        "PUT Object",
+        "GET Object",
+        "DELETE Object",
+        "DELETE Bucket"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-v2-hmac-official-signed-url-api",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PUT Bucket": [
+          "positive",
+          "native-auth"
+        ],
+        "PUT Object": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "GET Object": [
+          "positive",
+          "boundary",
+          "native-auth"
+        ],
+        "DELETE Object": [
+          "positive",
+          "native-auth"
+        ],
+        "DELETE Bucket": [
+          "positive",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow": {
+      "provider": "gcs",
+      "operations": [
+        "resumable.start",
+        "resumable.upload",
+        "objects.get"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "local-bearer-or-anonymous-convenience",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "resumable.start": [
+          "positive"
+        ],
+        "resumable.upload": [
+          "positive"
+        ],
+        "objects.get": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification": {
+      "provider": "azure",
+      "operations": [
+        "large-upload"
+      ],
+      "checks": [
+        "resource-smoke"
+      ],
+      "auth_mode": "functional",
+      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "operation_checks": {
+        "large-upload": [
+          "resource-smoke"
+        ]
+      }
+    },
+    "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification": {
+      "provider": "gcs",
+      "operations": [
+        "large-upload"
+      ],
+      "checks": [
+        "resource-smoke"
+      ],
+      "auth_mode": "local-bearer-convenience",
+      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "operation_checks": {
+        "large-upload": [
+          "resource-smoke"
+        ]
+      }
+    },
+    "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification": {
+      "provider": "oci",
+      "operations": [
+        "large-upload"
+      ],
+      "checks": [
+        "resource-smoke"
+      ],
+      "auth_mode": "functional",
+      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "operation_checks": {
+        "large-upload": [
+          "resource-smoke"
+        ]
+      }
+    },
+    "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification": {
+      "provider": "s3",
+      "operations": [
+        "large-upload"
+      ],
+      "checks": [
+        "resource-smoke"
+      ],
+      "auth_mode": "functional",
+      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "operation_checks": {
+        "large-upload": [
+          "resource-smoke"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_acs_email_native_auth_repeatability_and_process_restart": {
+      "provider": "acs",
+      "operations": [
+        "EmailSend"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "restart",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-configured-credential",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "EmailSend": [
+          "positive",
+          "negative",
+          "condition",
+          "restart",
+          "native-error",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_acs_sms_native_auth_and_process_restart": {
+      "provider": "acs",
+      "operations": [
+        "SmsSend"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "restart",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-configured-credential",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "SmsSend": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_sendgrid_native_auth_and_attachment_error": {
+      "provider": "sendgrid",
+      "operations": [
+        "POST /v3/mail/send"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-configured-credential",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "POST /v3/mail/send": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_ses_native_auth_and_process_restart": {
+      "provider": "ses",
+      "operations": [
+        "SendEmail"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "restart",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-configured-credential",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "SendEmail": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_sms_voice_native_auth_and_destination_error": {
+      "provider": "aws-sms-voice-v2",
+      "operations": [
+        "SendTextMessage"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-configured-credential",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "SendTextMessage": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary": {
+      "provider": "smtp",
+      "operations": [
+        "DATA"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "unauthenticated-smtp",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "DATA": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_sns_native_auth_and_subject_boundary": {
+      "provider": "sns",
+      "operations": [
+        "Publish"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-configured-credential",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "Publish": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_messaging_acceptance.py::test_twilio_native_auth_and_body_boundary": {
+      "provider": "twilio",
+      "operations": [
+        "CreateMessage"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-configured-credential",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateMessage": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows": {
+      "provider": "oci",
+      "operations": [
+        "GetNamespace",
+        "CreateBucket",
+        "PutObject",
+        "HeadObject",
+        "GetObject",
+        "ListObjects",
+        "DeleteObject",
+        "DeleteBucket"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "GetNamespace": [
+          "positive"
+        ],
+        "CreateBucket": [
+          "positive"
+        ],
+        "PutObject": [
+          "positive"
+        ],
+        "HeadObject": [
+          "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ],
+        "ListObjects": [
+          "positive"
+        ],
+        "DeleteObject": [
+          "positive"
+        ],
+        "DeleteBucket": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow": {
+      "provider": "oci",
+      "operations": [
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CommitMultipartUpload",
+        "GetObject"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateMultipartUpload": [
+          "positive"
+        ],
+        "UploadPart": [
+          "positive"
+        ],
+        "CommitMultipartUpload": [
+          "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow": {
+      "provider": "oci",
+      "operations": [
+        "CreatePreauthenticatedRequest",
+        "PutObject(PAR)",
+        "GetObject(PAR)",
+        "DeletePreauthenticatedRequest"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreatePreauthenticatedRequest": [
+          "positive"
+        ],
+        "PutObject(PAR)": [
+          "positive"
+        ],
+        "GetObject(PAR)": [
+          "positive"
+        ],
+        "DeletePreauthenticatedRequest": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows": {
+      "provider": "s3",
+      "operations": [
+        "CreateBucket",
+        "PutObject",
+        "HeadObject",
+        "GetObject",
+        "ListObjectsV2",
+        "ListBuckets",
+        "DeleteObject",
+        "DeleteBucket"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateBucket": [
+          "positive"
+        ],
+        "PutObject": [
+          "positive"
+        ],
+        "HeadObject": [
+          "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ],
+        "ListObjectsV2": [
+          "positive"
+        ],
+        "ListBuckets": [
+          "positive"
+        ],
+        "DeleteObject": [
+          "positive"
+        ],
+        "DeleteBucket": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows": {
+      "provider": "s3",
+      "operations": [
+        "PutBucketVersioning",
+        "CreateMultipartUpload",
+        "UploadPart",
+        "ListParts",
+        "ListMultipartUploads",
+        "CompleteMultipartUpload",
+        "AbortMultipartUpload",
+        "ListObjectVersions"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutBucketVersioning": [
+          "positive"
+        ],
+        "CreateMultipartUpload": [
+          "positive"
+        ],
+        "UploadPart": [
+          "positive"
+        ],
+        "ListParts": [
+          "positive"
+        ],
+        "ListMultipartUploads": [
+          "positive"
+        ],
+        "CompleteMultipartUpload": [
+          "positive"
+        ],
+        "AbortMultipartUpload": [
+          "positive"
+        ],
+        "ListObjectVersions": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication": {
+      "provider": "s3",
+      "operations": [
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-auth"
+      ],
+      "auth_mode": "native-sigv4-presigned",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateMultipartUpload": [
+          "positive"
+        ],
+        "UploadPart": [
+          "positive",
+          "negative",
+          "native-auth"
+        ],
+        "CompleteMultipartUpload": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow": {
+      "provider": "s3",
+      "operations": [
+        "UploadPartCopy",
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "UploadPartCopy": [
+          "positive"
+        ],
+        "CompleteMultipartUpload": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk": {
+      "provider": "acs",
+      "operations": [
+        "SmsSend"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "SmsSend": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2": {
+      "provider": "aws-sms-voice-v2",
+      "operations": [
+        "SendTextMessage",
+        "SendMediaMessage"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "SendTextMessage": [
+          "positive"
+        ],
+        "SendMediaMessage": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish": {
+      "provider": "sns",
+      "operations": [
+        "Publish"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "Publish": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk": {
+      "provider": "twilio",
+      "operations": [
+        "CreateMessage"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateMessage": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart": {
+      "provider": "azure",
+      "operations": [
+        "PutBlob",
+        "GetBlob",
+        "ListBlobs",
+        "DeleteBlob"
+      ],
+      "checks": [
+        "boundary",
+        "condition",
+        "native-error",
+        "negative",
+        "pages",
+        "positive",
+        "restart"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutBlob": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ],
+        "GetBlob": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "ListBlobs": [
+          "positive",
+          "boundary",
+          "pages"
+        ],
+        "DeleteBlob": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart": {
+      "provider": "gcs",
+      "operations": [
+        "objects.insert",
+        "objects.get",
+        "objects.list",
+        "objects.delete"
+      ],
+      "checks": [
+        "boundary",
+        "condition",
+        "native-error",
+        "negative",
+        "pages",
+        "positive",
+        "restart"
+      ],
+      "auth_mode": "local-bearer-or-anonymous-convenience",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "objects.insert": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ],
+        "objects.get": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "objects.list": [
+          "positive",
+          "boundary",
+          "pages"
+        ],
+        "objects.delete": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_storage_acceptance.py::test_oci_object_pages_conditions_and_process_restart": {
+      "provider": "oci",
+      "operations": [
+        "PutObject",
+        "GetObject",
+        "ListObjects",
+        "DeleteObject"
+      ],
+      "checks": [
+        "boundary",
+        "condition",
+        "native-error",
+        "negative",
+        "pages",
+        "positive",
+        "restart"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutObject": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ],
+        "GetObject": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "ListObjects": [
+          "positive",
+          "boundary",
+          "pages"
+        ],
+        "DeleteObject": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart": {
+      "provider": "s3",
+      "operations": [
+        "PutObject",
+        "GetObject",
+        "ListObjectsV2",
+        "DeleteObject"
+      ],
+      "checks": [
+        "boundary",
+        "condition",
+        "native-error",
+        "negative",
+        "pages",
+        "positive",
+        "restart"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutObject": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ],
+        "GetObject": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "ListObjectsV2": [
+          "positive",
+          "boundary",
+          "pages"
+        ],
+        "DeleteObject": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob": {
+      "provider": "azure",
+      "operations": [
+        "PutBlob",
+        "GetBlob"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-signed",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutBlob": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "GetBlob": [
+          "positive",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_storage_auth_acceptance.py::test_oci_native_signature_error_preserves_object": {
+      "provider": "oci",
+      "operations": [
+        "PutObject",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-signed",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutObject": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "GetObject": [
+          "positive",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object": {
+      "provider": "s3",
+      "operations": [
+        "PutObject",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth"
+      ],
+      "auth_mode": "native-signed",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutObject": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "GetObject": [
+          "positive",
+          "native-auth"
+        ]
+      }
+    }
+  }
+}
