@@ -17,6 +17,23 @@ pub(crate) const TRANSACTION_METADATA: &str = "__sqrzl_capture_transaction";
 const TRANSACTIONS: &str = ".capture-transactions";
 const RECORDS: &str = ".repeatability";
 
+#[cfg(test)]
+type PublicationHook = Box<dyn Fn(&str, usize) -> Result<()>>;
+#[cfg(test)]
+std::thread_local! {
+    static PUBLICATION_HOOK: std::cell::RefCell<Option<PublicationHook>> = const { std::cell::RefCell::new(None) };
+    static LISTING_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_listing_phase() {
+    LISTING_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow().as_ref() {
+            hook();
+        }
+    });
+}
+
 /// The durable fingerprint and wire result of one provider-scoped request.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RepeatabilityRecord {
@@ -125,6 +142,11 @@ pub(crate) fn recover(root: &Path) -> Result<()> {
 
 pub(crate) fn commit(root: &Path, id: &str, files: &[(PathBuf, Vec<u8>)]) -> Result<()> {
     commit_with_hook(root, id, files, |phase, index| {
+        #[cfg(test)]
+        PUBLICATION_HOOK.with(|hook| match hook.borrow().as_ref() {
+            Some(hook) => hook(phase, index),
+            None => Ok(()),
+        })?;
         #[cfg(test)]
         if std::env::var("SQRZL_CAPTURE_TEST_PHASE").ok().as_deref() == Some(phase)
             && std::env::var("SQRZL_CAPTURE_TEST_INDEX")
@@ -497,6 +519,77 @@ mod tests {
                 assert!(!entry.file_name().to_string_lossy().contains(".pending-"));
             }
         }
+    }
+
+    #[test]
+    fn should_list_only_committed_mail_when_live_capture_rolls_back() {
+        overlap_rollback_with_listing("mail");
+    }
+
+    #[test]
+    fn should_list_only_committed_sms_when_live_capture_rolls_back() {
+        overlap_rollback_with_listing("sms");
+    }
+
+    fn overlap_rollback_with_listing(domain: &str) {
+        use std::sync::{Arc, Barrier};
+        let root = temp_root();
+        let published = Arc::new(Barrier::new(2));
+        let selected = Arc::new(Barrier::new(2));
+        let rolled_back = Arc::new(Barrier::new(2));
+        let mail = Arc::new(FilesystemMailStore::open(&root).unwrap());
+        let sms = Arc::new(FilesystemSmsStore::open(&root).unwrap());
+        let (writer_mail, writer_sms) = (mail.clone(), sms.clone());
+        let (writer_published, writer_selected, writer_rolled_back) =
+            (published.clone(), selected.clone(), rolled_back.clone());
+        let mail_domain = domain == "mail";
+        let writer = std::thread::spawn(move || {
+            PUBLICATION_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move |phase, index| {
+                    if phase == "file" && index == if mail_domain { 2 } else { 1 } {
+                        writer_published.wait();
+                        writer_selected.wait();
+                        return Err(Error::InternalError(
+                            "injected capture rollback".to_string(),
+                        ));
+                    }
+                    Ok(())
+                }));
+            });
+            let result = if mail_domain {
+                writer_mail
+                    .capture_batch(
+                        &[("pending".to_string(), mail_message(&["alice@example.com"]))],
+                        &[],
+                    )
+                    .map(|_| ())
+            } else {
+                writer_sms
+                    .capture_batch(vec![sms_message("pending")], &[])
+                    .map(|_| ())
+            };
+            PUBLICATION_HOOK.with(|hook| *hook.borrow_mut() = None);
+            writer_rolled_back.wait();
+            result
+        });
+        published.wait();
+        LISTING_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                selected.wait();
+                rolled_back.wait();
+            }));
+        });
+        let listed = if mail_domain {
+            mail.list_messages("alice@example.com", ListMessagesParams::default())
+                .map(|page| page.messages.len())
+        } else {
+            sms.list_messages("+15550000002", ListSmsParams::default())
+                .map(|page| page.messages.len())
+        };
+        LISTING_HOOK.with(|hook| *hook.borrow_mut() = None);
+        assert!(writer.join().unwrap().is_err());
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(listed.unwrap(), 0, "{domain} exposed an aborted capture");
     }
 
     #[test]

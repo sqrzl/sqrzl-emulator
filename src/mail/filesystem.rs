@@ -148,7 +148,15 @@ impl FilesystemMailStore {
             if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
                 continue;
             }
-            let stored = Self::read_stored(&path)?;
+            #[cfg(test)]
+            capture::test_listing_phase();
+            let stored = match Self::read_stored(&path) {
+                Ok(stored) => stored,
+                // Rollback and admin deletion may remove an enumerated entry
+                // before it is opened. It contributes no committed message.
+                Err(Error::MessageNotFound) => continue,
+                Err(error) => return Err(error),
+            };
             let id = stored
                 .message
                 .provider_metadata
@@ -198,7 +206,13 @@ impl FilesystemMailStore {
     }
 
     fn read_stored(path: &Path) -> Result<StoredMessage> {
-        let data = fs::read(path).map_err(|_| Error::MessageNotFound)?;
+        let data = fs::read(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::MessageNotFound
+            } else {
+                io_err(&error)
+            }
+        })?;
         serde_json::from_slice(&data).map_err(|e| Error::InternalError(e.to_string()))
     }
 

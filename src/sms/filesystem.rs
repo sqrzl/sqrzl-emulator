@@ -282,8 +282,13 @@ impl FilesystemSmsStore {
             .message_ids_for_peer(peer)?
             .into_iter()
             .filter_map(|message_id| {
+                #[cfg(test)]
+                capture::test_listing_phase();
                 let message = match Self::read_message_path(&self.message_path(&message_id).ok()?) {
                     Ok(message) => message,
+                    // A returned-error rollback may remove the canonical file
+                    // after this reader enumerated its pending index.
+                    Err(Error::MessageNotFound) => return None,
                     Err(error) => return Some(Err(error)),
                 };
                 let id = message
