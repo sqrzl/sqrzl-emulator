@@ -389,7 +389,9 @@ class Campaign:
         leftover = []
         for root in [
             storage / ".provider-uploads",
-            storage / ".provider-state",
+            storage / ".provider-state" / "azure-block-session-v2",
+            storage / ".provider-state" / "azure-committed-blocks-v2",
+            storage / ".provider-state" / "gcs-resumable-session-v2",
             storage / ".spool",
         ]:
             leftover.extend(
@@ -402,7 +404,18 @@ class Campaign:
         assert (
             not leftover
         ), f"upload/session/spool files remain after abort and cleanup: {leftover}"
-        self.checkpoint("abort-and-staging-cleanup", leftover_files=leftover)
+        self.checkpoint(
+            "abort-and-staging-cleanup",
+            leftover_files=leftover,
+            inspected_namespaces=[
+                ".multipart",
+                ".provider-uploads",
+                ".provider-state/azure-block-session-v2",
+                ".provider-state/azure-committed-blocks-v2",
+                ".provider-state/gcs-resumable-session-v2",
+                ".spool",
+            ],
+        )
 
     def __exit__(self, exc_type, exc, traceback):
         self.stop_event.set()

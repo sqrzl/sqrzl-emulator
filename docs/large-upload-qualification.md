@@ -43,6 +43,8 @@ session queries. OCI list-parts and list-uploads are outside the implemented
 operation scope: the campaign inspects its owned filesystem upload record,
 acknowledged part identity/size and SHA256, and absence of the next part, then
 uses native abort and verifies staging cleanup before deleting the bucket.
+Cleanup checks owned multipart/upload/session/spool namespaces; durable
+non-upload controls, such as Azure container-deletion tombstones, are preserved.
 This inspection is labeled filesystem recovery evidence and does not qualify
 the native OCI listing operations. This is a process interruption gate, separate from filesystem
 publication crash tests and power-loss guarantees.
