@@ -483,6 +483,7 @@ mod tests {
 
     #[test]
     fn should_reject_projected_mail_buffers_before_creating_mailboxes_or_journals() {
+        // Arrange a valid message whose recipient copies exceed the aggregate budget.
         let store = temp_store();
         let mut message = sample_message("alice@example.com");
         message.body_text = Some("x".repeat(1536 * 1024));
@@ -492,7 +493,10 @@ mod tests {
                 name: None,
             })
             .collect();
+        // Act through the filesystem batch entry point.
         let result = store.capture_batch(&[("oversized".to_string(), message)], &[]);
+
+        // Assert rejection precedes any mailbox or transaction entry.
         assert!(matches!(result, Err(Error::CaptureTooLarge)));
         assert_eq!(fs::read_dir(&store.root).unwrap().count(), 1);
         assert_eq!(

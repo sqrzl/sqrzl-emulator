@@ -641,6 +641,7 @@ mod tests {
 
     #[test]
     fn should_reject_projected_inline_media_before_capture_mutations() {
+        // Arrange inline media whose retained copies exceed the aggregate budget.
         let root = temp_path();
         let store = FilesystemSmsStore::open(&root).unwrap();
         let mut new = message(SmsDirection::Outbound, "+15550000001", "+15550000002");
@@ -652,10 +653,11 @@ mod tests {
                 external_url: None,
             })
             .collect();
-        assert!(matches!(
-            store.store_message(new),
-            Err(Error::CaptureTooLarge)
-        ));
+        // Act through the filesystem single-message entry point.
+        let result = store.store_message(new);
+
+        // Assert no capture or transaction entry was created.
+        assert!(matches!(result, Err(Error::CaptureTooLarge)));
         for child in [
             "messages",
             "conversations",

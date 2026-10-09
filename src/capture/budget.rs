@@ -69,13 +69,17 @@ mod tests {
 
     #[test]
     fn should_admit_the_capture_budget_boundary_without_allocation() {
+        // Arrange a counter at the configured boundary.
         let mut budget = CaptureBudget::default();
+
+        // Act by filling the budget and attempting an extra byte and an overflow.
         budget.add(MAX_CAPTURE_BYTES - 1).unwrap();
         budget.add(1).unwrap();
-        assert!(matches!(budget.add(1), Err(Error::CaptureTooLarge)));
-        assert!(matches!(
-            CaptureBudget::default().copies(u64::MAX, 2),
-            Err(Error::CaptureTooLarge)
-        ));
+        let extra = budget.add(1);
+        let overflow = CaptureBudget::default().copies(u64::MAX, 2);
+
+        // Assert neither over-limit projection can be admitted.
+        assert!(matches!(extra, Err(Error::CaptureTooLarge)));
+        assert!(matches!(overflow, Err(Error::CaptureTooLarge)));
     }
 }
