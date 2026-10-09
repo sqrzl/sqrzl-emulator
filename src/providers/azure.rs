@@ -1135,23 +1135,6 @@ impl AzureBlobAdapter {
         }
     }
 
-    fn lookup_blob(
-        storage: &Arc<dyn Storage>,
-        container: &str,
-        blob_key: &str,
-        snapshot: Option<&str>,
-        version_id: Option<&str>,
-    ) -> crate::error::Result<crate::models::Object> {
-        if let Some(version_id) = version_id {
-            return storage.get_object_version(container, blob_key, version_id);
-        }
-        let key = snapshot.map_or_else(
-            || blob_key.to_string(),
-            |value| Self::snapshot_storage_key(blob_key, value),
-        );
-        storage.get_object(container, &key)
-    }
-
     fn lookup_blob_metadata(
         storage: &Arc<dyn Storage>,
         container: &str,
@@ -1159,10 +1142,14 @@ impl AzureBlobAdapter {
         snapshot: Option<&str>,
         version_id: Option<&str>,
     ) -> crate::error::Result<crate::models::Object> {
-        if snapshot.is_some() || version_id.is_some() {
-            return Self::lookup_blob(storage, container, blob_key, snapshot, version_id);
+        if let Some(version_id) = version_id {
+            return storage.get_object_version_metadata(container, blob_key, version_id);
         }
-        storage.get_object_metadata(container, blob_key)
+        let key = snapshot.map_or_else(
+            || blob_key.to_string(),
+            |value| Self::snapshot_storage_key(blob_key, value),
+        );
+        storage.get_object_metadata(container, &key)
     }
 
     fn set_blob_type(blob: &mut crate::models::Object, blob_type: &str) {
@@ -2530,7 +2517,7 @@ impl AzureBlobAdapter {
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
         let action = req.header("x-ms-lease-action").unwrap_or("");
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -2642,16 +2629,9 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match storage.as_ref().get_blob(container, blob_key) {
+        let blob = match Self::bounded_mutation_blob(storage, container, blob_key, 0) {
             Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ))
-            }
-            Err(error) => return Err(error.to_string()),
+            Err(response) => return Ok(response),
         };
         if let Err(response) = Self::ensure_lease_allows(req, &blob) {
             return Ok(response);
@@ -2731,7 +2711,7 @@ impl AzureBlobAdapter {
                 "The x-ms-immutability-policy-mode header must be Unlocked or Locked.",
             ));
         }
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -2777,7 +2757,7 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -2833,7 +2813,7 @@ impl AzureBlobAdapter {
                 ))
             }
         };
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -3333,16 +3313,9 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
-        let existing = match storage.as_ref().get_blob(container, blob_key) {
-            Ok(existing) => existing,
-            Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ))
-            }
-            Err(error) => return Err(error.to_string()),
+        let existing = match Self::bounded_mutation_blob(storage, container, blob_key, 0) {
+            Ok(blob) => blob,
+            Err(response) => return Ok(response),
         };
         if let Err(response) = Self::ensure_mutation_allowed(req, &existing) {
             return Ok(response);
@@ -3367,7 +3340,7 @@ impl AzureBlobAdapter {
             return Ok(Self::condition_failed());
         }
         let stored = storage
-            .get_object(container, blob_key)
+            .get_object_metadata(container, blob_key)
             .map_err(|error| error.to_string())?;
         Ok(Self::response(StatusCode::OK)
             .header("etag", &format!("\"{}\"", stored.etag))
@@ -3474,7 +3447,7 @@ impl AzureBlobAdapter {
 
     fn materialized_extent_unsupported() -> Response<Body> {
         Self::error_response(StatusCode::NOT_IMPLEMENTED, "FeatureNotSupported",
-            "This emulator supports page blob extents and materialized append/page mutations up to 64 MiB. Large BlockBlob uploads remain streamed.")
+            "This emulator materializes at most 64 MiB for page extents, mutation, snapshot, and read operations. Large BlockBlob uploads remain streamed.")
     }
 
     #[allow(clippy::result_large_err)]
@@ -4005,6 +3978,7 @@ impl AzureBlobAdapter {
             .unwrap_or_default()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn get_blob(
         storage: &Arc<dyn Storage>,
         req: &Request,
@@ -4012,80 +3986,120 @@ impl AzureBlobAdapter {
         blob_key: &str,
         snapshot: Option<&str>,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::lookup_blob(
-            storage,
-            container,
-            blob_key,
-            snapshot,
-            req.query_param("versionid"),
-        ) {
-            Ok(blob) => blob,
-            Err(
-                crate::error::Error::KeyNotFound
-                | crate::error::Error::NoSuchVersion
-                | crate::error::Error::BucketNotFound,
-            ) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ));
+        let version = req.query_param("versionid");
+        let initial =
+            match Self::lookup_blob_metadata(storage, container, blob_key, snapshot, version) {
+                Ok(blob) => blob,
+                Err(
+                    crate::error::Error::KeyNotFound
+                    | crate::error::Error::NoSuchVersion
+                    | crate::error::Error::BucketNotFound,
+                ) => return Ok(Self::blob_not_found()),
+                Err(error) => return Err(error.to_string()),
+            };
+        let selected = |size| -> Option<(u64, u64)> {
+            match Self::requested_range(req) {
+                Some(range) => Self::parse_range_header(range, size)
+                    .map(|(start, end)| (start as u64, end as u64)),
+                None => Some((0, size.saturating_sub(1))),
             }
-            Err(err) => return Err(err.to_string()),
         };
-        if let Some(range_header) = Self::requested_range(req) {
-            return Ok(Self::get_blob_range(
-                storage,
-                container,
-                blob_key,
-                &blob,
-                range_header,
+        let Some((start, end)) = selected(initial.size) else {
+            return Ok(Self::error_response(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "InvalidRange",
+                "The requested range is not satisfiable.",
             ));
+        };
+        let len = if initial.size == 0 {
+            0
+        } else {
+            end - start + 1
+        };
+        if len > AZURE_MAX_MATERIALIZED_MUTATION_BYTES {
+            return Ok(Self::materialized_extent_unsupported());
         }
-        let body_len = Self::response_body_len(blob.size)?;
+        let (blob, data) = if len == 0 {
+            (initial, Vec::new())
+        } else {
+            // The capped storage read prevents a concurrent replacement from
+            // growing allocation after metadata admission.
+            let capped_end =
+                end.min(start.saturating_add(AZURE_MAX_MATERIALIZED_MUTATION_BYTES - 1));
+            let read = if let Some(version) = version {
+                storage.get_object_version_range(
+                    container,
+                    blob_key,
+                    version,
+                    start,
+                    Some(capped_end),
+                )
+            } else {
+                let key = snapshot.map_or_else(
+                    || blob_key.to_string(),
+                    |value| Self::snapshot_storage_key(blob_key, value),
+                );
+                storage.get_object_range(container, &key, start, Some(capped_end))
+            };
+            let (blob, data) = match read {
+                Ok(value) => value,
+                Err(
+                    crate::error::Error::KeyNotFound
+                    | crate::error::Error::NoSuchVersion
+                    | crate::error::Error::BucketNotFound,
+                ) => return Ok(Self::blob_not_found()),
+                Err(crate::error::Error::InvalidRequest(_)) => {
+                    return Ok(Self::error_response(
+                        StatusCode::RANGE_NOT_SATISFIABLE,
+                        "InvalidRange",
+                        "The requested range is not satisfiable.",
+                    ))
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            let Some((actual_start, actual_end)) = selected(blob.size) else {
+                return Ok(Self::condition_failed());
+            };
+            let actual_len = if blob.size == 0 {
+                0
+            } else {
+                actual_end - actual_start + 1
+            };
+            if actual_len > AZURE_MAX_MATERIALIZED_MUTATION_BYTES
+                || actual_len != data.len() as u64
+                || actual_start != start
+            {
+                return Ok(Self::materialized_extent_unsupported());
+            }
+            (blob, data)
+        };
         let expose_version_id = Self::azure_history_visible(storage, container);
         let is_current_version = expose_version_id
             .then(|| Self::is_current_version(storage, container, blob_key, &blob))
             .flatten();
+        let ranged = Self::requested_range(req).is_some();
+        let content_range = ranged.then(|| {
+            format!(
+                "bytes {}-{}/{}",
+                start,
+                start + data.len().saturating_sub(1) as u64,
+                blob.size
+            )
+        });
         Ok(Self::blob_response(
-            StatusCode::OK,
+            if ranged {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            },
             &blob,
-            body_len,
-            None,
+            data.len(),
+            content_range,
             is_current_version,
             expose_version_id,
         )
-        .body(blob.data)
+        .body(data)
         .build())
-    }
-
-    fn get_blob_range(
-        storage: &Arc<dyn Storage>,
-        container: &str,
-        blob_key: &str,
-        blob: &crate::models::Object,
-        range_header: &str,
-    ) -> Response<Body> {
-        if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-            let data = blob.data[start..=end].to_vec();
-            return Self::blob_response(
-                StatusCode::PARTIAL_CONTENT,
-                blob,
-                data.len(),
-                Some(format!("bytes {start}-{end}/{}", blob.size)),
-                Self::azure_history_visible(storage, container)
-                    .then(|| Self::is_current_version(storage, container, blob_key, blob))
-                    .flatten(),
-                Self::azure_history_visible(storage, container),
-            )
-            .body(data)
-            .build();
-        }
-        Self::error_response(
-            StatusCode::RANGE_NOT_SATISFIABLE,
-            "InvalidRange",
-            "The requested range is not satisfiable.",
-        )
     }
 
     fn head_blob(
@@ -4160,7 +4174,8 @@ impl AzureBlobAdapter {
         snapshot: Option<&str>,
     ) -> Result<Response<Body>, String> {
         if let Some(version_id) = req.query_param("versionid") {
-            let version = match storage.get_object_version(container, blob_key, version_id) {
+            let version = match storage.get_object_version_metadata(container, blob_key, version_id)
+            {
                 Ok(version) => version,
                 Err(
                     crate::error::Error::NoSuchVersion
@@ -4195,7 +4210,7 @@ impl AzureBlobAdapter {
         }
         if let Some(snapshot) = snapshot {
             let snapshot_key = Self::snapshot_storage_key(blob_key, snapshot);
-            let selected = match storage.as_ref().get_blob(container, &snapshot_key) {
+            let selected = match storage.get_object_metadata(container, &snapshot_key) {
                 Ok(selected) => selected,
                 Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                     return Ok(Self::error_response(

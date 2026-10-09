@@ -418,6 +418,28 @@ impl VersionStore for IndexedStorage {
         self.inner.get_object_version(bucket, key, version_id)
     }
 
+    fn get_object_version_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<crate::models::Object> {
+        self.inner
+            .get_object_version_metadata(bucket, key, version_id)
+    }
+
+    fn get_object_version_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(crate::models::Object, Vec<u8>)> {
+        self.inner
+            .get_object_version_range(bucket, key, version_id, start, end)
+    }
+
     fn list_object_versions(
         &self,
         bucket: &str,

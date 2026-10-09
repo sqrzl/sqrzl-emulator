@@ -303,6 +303,11 @@ def test_s3_direct_put_native_checksums_and_rejection(sqrzl_server):
                                 ChecksumAlgorithm=algorithm, **{field: checksum})
         assert put[field] == checksum
         assert put["ChecksumType"] == "FULL_OBJECT"
+        if algorithm == "SHA256":
+            # Tagging requires a request XML checksum even under the optout profile.
+            client.put_object_tagging(Bucket=bucket, Key=algorithm,
+                                      Tagging={"TagSet": [{"Key": "proof", "Value": "transactional"}]})
+
         for method in (client.get_object, client.head_object):
             response = method(Bucket=bucket, Key=algorithm, ChecksumMode="ENABLED")
             assert response[field] == checksum

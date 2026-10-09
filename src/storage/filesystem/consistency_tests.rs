@@ -436,3 +436,320 @@ async fn should_admit_s3_replacements_and_subresources_without_loading_existing_
     }
     fs::remove_dir_all(base).unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
+async fn should_bound_s3_current_and_historical_materialization_before_payload_reads() {
+    use http_body_util::{BodyExt as _, Full};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
+    *storage.test_hook.lock().unwrap() = None;
+    storage.enable_versioning("coherent").unwrap();
+    storage
+        .put_object(
+            "coherent",
+            "large".to_string(),
+            Object::new(
+                "large".to_string(),
+                b"seed".to_vec(),
+                "text/plain".to_string(),
+            ),
+        )
+        .unwrap();
+    let object_id = FilesystemStorage::compute_object_id("coherent", "large");
+    let metadata_path = storage.object_metadata_path("coherent", &object_id);
+    let mut object = FilesystemStorage::read_object_metadata(&metadata_path).unwrap();
+    let version = object.version_id.clone().unwrap();
+    object.size = 64 * 1024 * 1024 + 1;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(storage.object_data_path("coherent", &object_id))
+        .unwrap()
+        .set_len(object.size)
+        .unwrap();
+    FilesystemStorage::atomic_write(&metadata_path, &serde_json::to_vec(&object).unwrap()).unwrap();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counter = reads.clone();
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if matches!(
+            phase,
+            TestPhase::FullPayload | TestPhase::ReadPayloadMetadata
+        ) {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+    let config = Arc::new(crate::Config {
+        access_key_id: None,
+        secret_access_key: None,
+        enforce_auth: false,
+        admin_auth_disabled: false,
+        blobs_path: base.to_string_lossy().to_string(),
+        lifecycle_interval: Duration::from_hours(1),
+        api_port: 0,
+        ui_port: 0,
+        max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+        smtp_port: 0,
+        vendor_credentials: crate::config::VendorCredentials::default(),
+    });
+    let upload = storage
+        .create_multipart_upload("coherent", "copy-part".to_string())
+        .unwrap();
+    for (method, path, headers, status) in [
+        (
+            "GET",
+            "large".to_string(),
+            vec![],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "GET",
+            "large".to_string(),
+            vec![("if-match", "\"wrong\"".to_string())],
+            http::StatusCode::PRECONDITION_FAILED,
+        ),
+        (
+            "GET",
+            "large".to_string(),
+            vec![("if-none-match", format!("\"{}\"", object.etag))],
+            http::StatusCode::NOT_MODIFIED,
+        ),
+        (
+            "PUT",
+            "lease".to_string(),
+            vec![
+                ("x-amz-copy-source", "/coherent/large".to_string()),
+                ("x-amz-copy-source-if-match", "\"wrong\"".to_string()),
+            ],
+            http::StatusCode::PRECONDITION_FAILED,
+        ),
+        (
+            "GET",
+            format!("large?versionId={version}"),
+            vec![],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "HEAD",
+            format!("large?versionId={version}"),
+            vec![],
+            http::StatusCode::OK,
+        ),
+        (
+            "PUT",
+            "lease".to_string(),
+            vec![("x-amz-copy-source", "/coherent/large".to_string())],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "PUT",
+            "lease".to_string(),
+            vec![(
+                "x-amz-copy-source",
+                format!("/coherent/large?versionId={version}"),
+            )],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "PUT",
+            format!("copy-part?partNumber=1&uploadId={}", upload.upload_id),
+            vec![("x-amz-copy-source", "/coherent/large".to_string())],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+    ] {
+        reads.store(0, Ordering::SeqCst);
+        let mut builder = hyper::Request::builder()
+            .method(method)
+            .uri(format!("http://localhost/coherent/{path}"));
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let req = crate::server::RequestExt::from_hyper(
+            builder.body(Full::new(bytes::Bytes::new())).unwrap(),
+        )
+        .await
+        .unwrap();
+        let response = crate::providers::AdapterRegistry::default()
+            .handle(storage.clone(), config.clone(), req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{method} {path}");
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            0,
+            "{method} {path} read a payload before rejecting its extent"
+        );
+    }
+    assert_eq!(
+        storage.get_object("coherent", "lease").unwrap().data,
+        b"{\"v\":1}\n"
+    );
+    assert!(storage
+        .list_parts("coherent", &upload.upload_id)
+        .unwrap()
+        .is_empty());
+    // Both current and historical range requests may read a small selection of
+    // a large object, while whole-object materialization remains unsupported.
+    for suffix in [String::new(), format!("?versionId={version}")] {
+        let req = crate::server::RequestExt::from_hyper(
+            hyper::Request::builder()
+                .method("GET")
+                .uri(format!("http://localhost/coherent/large{suffix}"))
+                .header("range", "bytes=0-2")
+                .body(Full::new(bytes::Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let response = crate::providers::AdapterRegistry::default()
+            .handle(storage.clone(), config.clone(), req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            b"see".as_slice()
+        );
+    }
+    let mut bucket_metadata = storage.get_bucket("coherent").unwrap().metadata;
+    bucket_metadata.insert("azure_versioning_enabled".to_string(), "true".to_string());
+    storage
+        .update_bucket_metadata("coherent", bucket_metadata)
+        .unwrap();
+    let lease_id = "00000000-0000-0000-0000-000000000001";
+    for (method, suffix, headers, expected) in [
+        (
+            "GET",
+            String::new(),
+            vec![],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "HEAD",
+            format!("?versionid={version}"),
+            vec![],
+            http::StatusCode::OK,
+        ),
+        (
+            "PUT",
+            "?comp=metadata".to_string(),
+            vec![],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "PUT",
+            "?comp=snapshot".to_string(),
+            vec![],
+            http::StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            "PUT",
+            "?comp=lease".to_string(),
+            vec![
+                ("x-ms-lease-action", "acquire"),
+                ("x-ms-proposed-lease-id", lease_id),
+                ("x-ms-lease-duration", "-1"),
+            ],
+            http::StatusCode::CREATED,
+        ),
+        (
+            "PUT",
+            "?comp=lease".to_string(),
+            vec![
+                ("x-ms-lease-action", "release"),
+                ("x-ms-lease-id", lease_id),
+            ],
+            http::StatusCode::OK,
+        ),
+        (
+            "PUT",
+            "?comp=legalhold".to_string(),
+            vec![("x-ms-legal-hold", "true")],
+            http::StatusCode::OK,
+        ),
+        (
+            "PUT",
+            "?comp=legalhold".to_string(),
+            vec![("x-ms-legal-hold", "false")],
+            http::StatusCode::OK,
+        ),
+    ] {
+        reads.store(0, Ordering::SeqCst);
+        let mut builder = hyper::Request::builder()
+            .method(method)
+            .uri(format!(
+                "http://localhost/devstoreaccount1/coherent/large{suffix}"
+            ))
+            .header("content-length", "0")
+            .header("x-ms-version", "2023-11-03");
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let req = crate::server::RequestExt::from_hyper(
+            builder.body(Full::new(bytes::Bytes::new())).unwrap(),
+        )
+        .await
+        .unwrap();
+        let response = crate::providers::AdapterRegistry::default()
+            .handle(storage.clone(), config.clone(), req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "Azure {method} {suffix}");
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            0,
+            "Azure {method} {suffix} materialized a payload"
+        );
+    }
+    let req = crate::server::RequestExt::from_hyper(
+        hyper::Request::builder()
+            .method("GET")
+            .uri("http://localhost/devstoreaccount1/coherent/large")
+            .header("x-ms-version", "2023-11-03")
+            .header("x-ms-range", "bytes=0-2")
+            .body(Full::new(bytes::Bytes::new()))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let response = crate::providers::AdapterRegistry::default()
+        .handle(storage.clone(), config.clone(), req)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), http::StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        b"see".as_slice()
+    );
+    *storage.test_hook.lock().unwrap() = None;
+    storage
+        .put_object(
+            "coherent",
+            "large".to_string(),
+            Object::new(
+                "large".to_string(),
+                b"new".to_vec(),
+                "text/plain".to_string(),
+            ),
+        )
+        .unwrap();
+    let historical = storage
+        .get_object_version_metadata("coherent", "large", &version)
+        .unwrap();
+    assert_eq!(historical.data, Vec::<u8>::new());
+    assert_eq!(historical.size, object.size);
+    assert_eq!(
+        storage
+            .get_object_version_range("coherent", "large", &version, 0, Some(2))
+            .unwrap()
+            .1,
+        b"see"
+    );
+    assert_eq!(
+        storage
+            .get_object_metadata("coherent", "large")
+            .unwrap()
+            .size,
+        3
+    );
+    fs::remove_dir_all(base).unwrap();
+}
