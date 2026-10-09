@@ -228,6 +228,7 @@ impl FilesystemSmsStore {
         messages: Vec<NewSmsMessage>,
         records: &[RepeatabilityRecord],
     ) -> Result<Vec<SmsMessage>> {
+        super::budget::check_messages(&messages, records)?;
         let _guard = self
             .write_lock
             .lock()
@@ -636,6 +637,43 @@ mod tests {
             media: Vec::new(),
             metadata: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn should_reject_projected_inline_media_before_capture_mutations() {
+        // Arrange inline media whose retained copies exceed the aggregate budget.
+        let root = temp_path();
+        let store = FilesystemSmsStore::open(&root).unwrap();
+        let mut new = message(SmsDirection::Outbound, "+15550000001", "+15550000002");
+        new.media = (0..2)
+            .map(|n| crate::sms::model::NewSmsMedia {
+                filename: format!("{n}.bin"),
+                content_type: "application/octet-stream".to_string(),
+                content: Some(vec![0; 16 * 1024 * 1024 + 1]),
+                external_url: None,
+            })
+            .collect();
+        // Act through the filesystem single-message entry point.
+        let result = store.store_message(new);
+
+        // Assert no capture or transaction entry was created.
+        assert!(matches!(result, Err(Error::CaptureTooLarge)));
+        for child in [
+            "messages",
+            "conversations",
+            "media",
+            "destinations",
+            "callbacks",
+        ] {
+            assert_eq!(fs::read_dir(store.root.join(child)).unwrap().count(), 0);
+        }
+        assert_eq!(
+            fs::read_dir(store.root.join(".capture-transactions"))
+                .unwrap()
+                .count(),
+            0
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

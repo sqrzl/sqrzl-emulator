@@ -574,6 +574,14 @@ impl MailAdapter for AcsEmailAdapter {
                     ))
                 }
             };
+            if let Err(error) = crate::mail::budget::check_messages(std::iter::once(&message), &[])
+            {
+                return Ok(Self::error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "RequestBodyTooLarge",
+                    &error.to_string(),
+                ));
+            }
             let operation_id = match req.header("operation-id") {
                 Some(value) if valid_uuid(value) => value.to_ascii_lowercase(),
                 Some(_) => {
@@ -630,6 +638,15 @@ impl MailAdapter for AcsEmailAdapter {
                     Value::String(repeatability.request_hash),
                 );
             }
+            if let Err(error) =
+                crate::mail::budget::check_messages(std::iter::once(&message), &records)
+            {
+                return Ok(Self::error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "RequestBodyTooLarge",
+                    &error.to_string(),
+                ));
+            }
             let captured = mail.capture_batch(&[(operation_id.clone(), message.clone())], &records);
             let captured = match captured {
                 Ok(Some(mut batches)) => Ok(batches.remove(0)),
@@ -638,6 +655,13 @@ impl MailAdapter for AcsEmailAdapter {
             };
             let stored_messages = match captured {
                 Ok(stored_messages) => stored_messages,
+                Err(crate::error::Error::CaptureTooLarge) => {
+                    return Ok(Self::error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "RequestBodyTooLarge",
+                        &crate::error::Error::CaptureTooLarge.to_string(),
+                    ));
+                }
                 Err(crate::error::Error::InvalidRequest(message)) => {
                     return Ok(Self::invalid_request_response(&message));
                 }

@@ -229,3 +229,78 @@ def test_azure_communication_email_sdk_send(sqrzl_server):
     assert messages, f"no messages found for mailbox {mailbox}"
     detail = _get_mailbox_message(sqrzl_server, mailbox, messages[0]["message_id"])
     assert detail["subject"] == subject
+
+
+def test_sendgrid_sdk_rejects_projected_capture_limit(sqrzl_server):
+    sqrzl_server.require_provider("sendgrid")
+    sendgrid = pytest.importorskip("sendgrid")
+    errors = pytest.importorskip("python_http_client.exceptions")
+    from sendgrid.helpers.mail import Mail
+
+    prefix = os.urandom(4).hex()
+    recipients = [f"capture-{prefix}-{n}@example.com" for n in range(50)]
+    client = sendgrid.SendGridAPIClient(os.getenv("SQRZL_SENDGRID_API_KEY", "SG.dummy"))
+    client.client.host = sqrzl_server.api_url
+    message = Mail(from_email="sender@example.com", to_emails=recipients,
+                   subject="local capture limit", plain_text_content="x" * (1536 * 1024))
+    with pytest.raises(errors.HTTPError) as error:
+        client.send(message)
+    assert error.value.status_code == 413
+    assert b"local 64 MiB aggregate limit" in error.value.body
+    assert _list_mailbox_messages(sqrzl_server, recipients[0]) == []
+    accepted = client.send(Mail(from_email="sender@example.com", to_emails=recipients[0],
+                                subject="retry after limit", plain_text_content="small"))
+    assert accepted.status_code == 202
+    assert _wait_for_messages(sqrzl_server, recipients[0])
+
+
+def test_acs_email_sdk_rejects_projected_capture_limit(sqrzl_server):
+    sqrzl_server.require_provider("acs")
+    email_mod = pytest.importorskip("azure.communication.email")
+    azure_transport = pytest.importorskip("azure.core.pipeline.transport")
+    from azure.core.exceptions import HttpResponseError
+
+    class LocalHttpTransport(azure_transport.RequestsTransport):
+        def send(self, request, **kwargs):
+            if request.url.startswith("https://"):
+                request.url = "http://" + request.url.removeprefix("https://")
+            return super().send(request, **kwargs)
+
+    access_key = base64.b64encode(b"shared-secret").decode("ascii")
+    client = email_mod.EmailClient.from_connection_string(
+        f"endpoint={sqrzl_server.api_url};accesskey={access_key}", transport=LocalHttpTransport())
+    prefix = os.urandom(4).hex()
+    recipients = [f"capture-{prefix}-{n}@example.com" for n in range(50)]
+    message = {"senderAddress": "sender@example.com", "recipients": {"to": [{"address": address} for address in recipients]},
+               "content": {"subject": "local capture limit", "plainText": "x" * (1536 * 1024)}}
+    with pytest.raises(HttpResponseError) as error:
+        client.begin_send(message)
+    assert error.value.status_code == 413
+    assert error.value.error.code == "RequestBodyTooLarge"
+    assert "local 64 MiB aggregate limit" in str(error.value)
+    assert _list_mailbox_messages(sqrzl_server, recipients[0]) == []
+    message["content"]["plainText"] = "small"
+    message["recipients"]["to"] = [{"address": recipients[0]}]
+    client.begin_send(message).result(timeout=10)
+    assert _wait_for_messages(sqrzl_server, recipients[0])
+
+
+def test_smtp_sdk_rejects_projected_capture_limit(sqrzl_server):
+    sqrzl_server.require_provider("smtp")
+    prefix = os.urandom(4).hex()
+    recipients = [f"capture-{prefix}-{n}@example.com" for n in range(20)]
+    message = EmailMessage()
+    message["From"] = "sender@example.com"
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = "local capture limit"
+    message.set_content("x" * (1024 * 1024))
+    with smtplib.SMTP("127.0.0.1", sqrzl_server.smtp_port, timeout=10) as client:
+        with pytest.raises(smtplib.SMTPDataError) as error:
+            client.send_message(message)
+        assert error.value.smtp_code == 552
+        assert b"local 64 MiB aggregate limit" in error.value.smtp_error
+        assert _list_mailbox_messages(sqrzl_server, recipients[0]) == []
+        message.replace_header("To", recipients[0])
+        message.set_content("small")
+        client.send_message(message)
+    assert _wait_for_messages(sqrzl_server, recipients[0])

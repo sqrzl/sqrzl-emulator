@@ -13,6 +13,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
+pub(crate) mod budget;
+
 pub(crate) const TRANSACTION_METADATA: &str = "__sqrzl_capture_transaction";
 const TRANSACTIONS: &str = ".capture-transactions";
 const RECORDS: &str = ".repeatability";

@@ -302,6 +302,13 @@ impl MailAdapter for SesEmailAdapter {
             };
             let stored_messages = match fan_out(mail.as_ref(), &message) {
                 Ok(stored_messages) => stored_messages,
+                Err(crate::error::Error::CaptureTooLarge) => {
+                    return Ok(ResponseBuilder::new(StatusCode::PAYLOAD_TOO_LARGE)
+                        .header("x-amzn-errortype", "RequestEntityTooLarge")
+                        .content_type("application/x-amz-json-1.1")
+                        .body(serde_json::json!({"message":crate::error::Error::CaptureTooLarge.to_string()}).to_string().into_bytes())
+                        .build());
+                }
                 Err(crate::error::Error::InvalidRequest(message)) => {
                     return Ok(Self::invalid_request_response(&message));
                 }

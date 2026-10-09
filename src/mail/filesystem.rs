@@ -227,6 +227,7 @@ impl MailStore for FilesystemMailStore {
         messages: &[(String, Message)],
         records: &[RepeatabilityRecord],
     ) -> Result<Option<Vec<Vec<StoredMessage>>>> {
+        super::budget::check_messages(messages.iter().map(|(_, message)| message), records)?;
         let _guard = self
             .capture_lock
             .lock()
@@ -278,6 +279,7 @@ impl MailStore for FilesystemMailStore {
         message_id: &str,
         message: Message,
     ) -> Result<StoredMessage> {
+        super::budget::check_single_copy(&message, mailbox, message_id)?;
         let _guard = self
             .capture_lock
             .lock()
@@ -477,6 +479,45 @@ mod tests {
             raw_mime: None,
             thread_id: None,
         }
+    }
+
+    #[test]
+    fn should_reject_projected_mail_buffers_before_creating_mailboxes_or_journals() {
+        // Arrange a valid message whose recipient copies exceed the aggregate budget.
+        let store = temp_store();
+        let mut message = sample_message("alice@example.com");
+        message.body_text = Some("x".repeat(1536 * 1024));
+        message.to = (0..50)
+            .map(|n| crate::mail::Address {
+                email: format!("recipient{n}@example.com"),
+                name: None,
+            })
+            .collect();
+        // Act through the filesystem batch entry point.
+        let result = store.capture_batch(&[("oversized".to_string(), message)], &[]);
+
+        // Assert rejection precedes any mailbox or transaction entry.
+        assert!(matches!(result, Err(Error::CaptureTooLarge)));
+        assert_eq!(fs::read_dir(&store.root).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(store.root.join(".capture-transactions"))
+                .unwrap()
+                .count(),
+            0
+        );
+        let mut raw = sample_message("raw@example.com");
+        raw.raw_mime = Some(vec![0; 12 * 1024 * 1024]);
+        assert!(matches!(
+            store.store_message("raw@example.com", "raw", raw),
+            Err(Error::CaptureTooLarge)
+        ));
+        assert_eq!(fs::read_dir(&store.root).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(store.root.join(".capture-transactions"))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 
     #[test]

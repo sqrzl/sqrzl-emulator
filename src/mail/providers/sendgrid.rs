@@ -8,6 +8,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use http::Method;
 use http::StatusCode;
 use hyper::Response;
+use serde::ser::SerializeMap;
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -19,6 +21,59 @@ const SENDGRID_MAX_MESSAGE_BYTES: usize = 30 * 1024 * 1024;
 
 pub struct SendGridAdapter;
 
+enum ParseMessagesError {
+    Invalid(String),
+    CaptureLimit,
+}
+
+impl From<String> for ParseMessagesError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+
+struct HeaderOverlay<'a> {
+    base: &'a HashMap<String, String>,
+    overrides: &'a HashMap<String, String>,
+}
+
+impl Serialize for HeaderOverlay<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        for (key, value) in self.base {
+            if !self
+                .overrides
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(key))
+            {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        for (key, value) in self.overrides {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+#[derive(Serialize)]
+struct PlannedMessage<'a> {
+    source_protocol: SourceProtocol,
+    from: &'a Address,
+    to: &'a [Address],
+    cc: &'a [Address],
+    bcc: &'a [Address],
+    reply_to: &'a [Address],
+    subject: &'a str,
+    headers: HeaderOverlay<'a>,
+    body_text: &'a Option<String>,
+    body_html: &'a Option<String>,
+    attachments: &'a [Attachment],
+    provider_metadata: &'a HashMap<String, Value>,
+    raw_mime: Option<&'a [u8]>,
+    thread_id: Option<&'a str>,
+}
+
 impl SendGridAdapter {
     fn invalid_request_response(message: &str) -> Response<Body> {
         ResponseBuilder::new(StatusCode::BAD_REQUEST)
@@ -28,6 +83,13 @@ impl SendGridAdapter {
                     .to_string()
                     .into_bytes(),
             )
+            .build()
+    }
+
+    fn capture_limit_response() -> Response<Body> {
+        ResponseBuilder::new(StatusCode::PAYLOAD_TOO_LARGE)
+            .content_type("application/json; charset=utf-8")
+            .body(serde_json::json!({"errors":[{"message":crate::error::Error::CaptureTooLarge.to_string()}]}).to_string().into_bytes())
             .build()
     }
 
@@ -47,7 +109,7 @@ impl SendGridAdapter {
     // Keep the provider's nested request contract in one validation pass so no
     // field can be persisted before the complete payload has been checked.
     #[allow(clippy::too_many_lines)]
-    fn parse_messages(req: &MailRequest) -> Result<Vec<Message>, String> {
+    fn parse_messages(req: &MailRequest) -> Result<Vec<Message>, ParseMessagesError> {
         let payload = serde_json::from_slice::<Value>(&req.body)
             .map_err(|err| format!("invalid sendgrid request body: {err}"))?;
         let payload = payload
@@ -74,7 +136,9 @@ impl SendGridAdapter {
             .filter(|values| !values.is_empty())
             .ok_or_else(|| "sendgrid request must include personalizations".to_string())?;
         if personalizations.len() > 1_000 {
-            return Err("sendgrid supports at most 1000 personalizations".to_string());
+            return Err("sendgrid supports at most 1000 personalizations"
+                .to_string()
+                .into());
         }
         let global_from = parse_address(payload.get("from"))?;
         let (body_text, body_html) = parse_content(payload.get("content"))?;
@@ -82,9 +146,11 @@ impl SendGridAdapter {
             None => Vec::new(),
             Some(Value::Array(values)) if !values.is_empty() => parse_attachments(values)?,
             Some(Value::Array(_)) => {
-                return Err("sendgrid attachments must contain at least one item".to_string())
+                return Err("sendgrid attachments must contain at least one item"
+                    .to_string()
+                    .into())
             }
-            Some(_) => return Err("sendgrid attachments must be an array".to_string()),
+            Some(_) => return Err("sendgrid attachments must be an array".to_string().into()),
         };
         let global_headers = parse_headers(payload.get("headers"))?;
         let reply_to = parse_reply_to(payload)?;
@@ -92,6 +158,8 @@ impl SendGridAdapter {
         let mut seen_recipients = HashSet::new();
         let mut recipient_count = 0usize;
         let mut messages = Vec::with_capacity(personalizations.len());
+        let mut budget = crate::capture::budget::CaptureBudget::default();
+        let provider_metadata = HashMap::new();
         for personalization in personalizations {
             let personalization = personalization
                 .as_object()
@@ -111,26 +179,59 @@ impl SendGridAdapter {
             let bcc = parse_optional_addresses(personalization.get("bcc"))?;
             recipient_count += to.len() + cc.len() + bcc.len();
             if recipient_count > 1_000 {
-                return Err("sendgrid supports at most 1000 total recipients".to_string());
+                return Err("sendgrid supports at most 1000 total recipients"
+                    .to_string()
+                    .into());
             }
             for recipient in to.iter().chain(cc.iter()).chain(bcc.iter()) {
                 if !seen_recipients.insert(recipient.email.trim().to_ascii_lowercase()) {
-                    return Err("sendgrid recipient email addresses must be unique".to_string());
+                    return Err("sendgrid recipient email addresses must be unique"
+                        .to_string()
+                        .into());
                 }
             }
             let from = parse_address(personalization.get("from"))?
                 .or_else(|| global_from.clone())
                 .ok_or_else(|| "sendgrid request must include from".to_string())?;
 
-            let subject = first_string(
-                personalization
-                    .get("subject")
-                    .or_else(|| payload.get("subject"))
-                    .and_then(Value::as_str),
+            let subject = personalization
+                .get("subject")
+                .or_else(|| payload.get("subject"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "sendgrid request must include subject".to_string())?;
+            let override_headers = parse_headers(personalization.get("headers"))?;
+            let plan = PlannedMessage {
+                source_protocol: SourceProtocol::SendGrid,
+                from: &from,
+                to: &to,
+                cc: &cc,
+                bcc: &bcc,
+                reply_to: &reply_to,
+                subject,
+                headers: HeaderOverlay {
+                    base: &global_headers,
+                    overrides: &override_headers,
+                },
+                body_text: &body_text,
+                body_html: &body_html,
+                attachments: &attachments,
+                provider_metadata: &provider_metadata,
+                raw_mime: None,
+                thread_id: None,
+            };
+            crate::mail::budget::add_message(
+                &mut budget,
+                &plan,
+                0,
+                to.iter()
+                    .chain(cc.iter())
+                    .chain(bcc.iter())
+                    .map(Address::mailbox_key),
             )
-            .ok_or_else(|| "sendgrid request must include subject".to_string())?;
+            .map_err(|_| ParseMessagesError::CaptureLimit)?;
             let mut headers = global_headers.clone();
-            merge_headers(&mut headers, parse_headers(personalization.get("headers"))?);
+            merge_headers(&mut headers, override_headers);
 
             messages.push(Message {
                 source_protocol: SourceProtocol::SendGrid,
@@ -139,7 +240,7 @@ impl SendGridAdapter {
                 cc,
                 bcc,
                 reply_to: reply_to.clone(),
-                subject,
+                subject: subject.to_string(),
                 headers,
                 body_text: body_text.clone(),
                 body_html: body_html.clone(),
@@ -242,10 +343,16 @@ impl crate::mail::providers::MailAdapter for SendGridAdapter {
 
             let messages = match Self::parse_messages(&req) {
                 Ok(messages) => messages,
-                Err(message) => return Ok(Self::invalid_request_response(&message)),
+                Err(ParseMessagesError::Invalid(message)) => {
+                    return Ok(Self::invalid_request_response(&message))
+                }
+                Err(ParseMessagesError::CaptureLimit) => return Ok(Self::capture_limit_response()),
             };
             let stored_batches = match fan_out_batch(mail.as_ref(), &messages) {
                 Ok(stored) => stored,
+                Err(crate::error::Error::CaptureTooLarge) => {
+                    return Ok(Self::capture_limit_response())
+                }
                 Err(crate::error::Error::InvalidRequest(message)) => {
                     return Ok(Self::invalid_request_response(&message));
                 }
@@ -309,12 +416,6 @@ fn parse_optional_addresses(value: Option<&Value>) -> Result<Vec<Address>, Strin
         }
         Some(_) => Err("sendgrid recipient collections must be arrays".to_string()),
     }
-}
-
-fn first_string(value: Option<&str>) -> Option<String> {
-    value
-        .filter(|value| !value.is_empty())
-        .map(std::string::ToString::to_string)
 }
 
 fn parse_content(value: Option<&Value>) -> Result<(Option<String>, Option<String>), String> {

@@ -8,6 +8,7 @@
 //! reusing `Storage`. See `docs/support-certification.md` for how this domain's
 //! compatibility claims are tracked in `compatibility-matrix.json`.
 
+pub(crate) mod budget;
 pub mod filesystem;
 pub mod model;
 pub mod providers;
@@ -154,6 +155,7 @@ pub(crate) fn fan_out_batch<S: MailStore + ?Sized>(
     store: &S,
     messages: &[Message],
 ) -> Result<Vec<Vec<StoredMessage>>> {
+    budget::check_messages(messages.iter(), &[])?;
     let requests = messages
         .iter()
         .map(|message| (generate_message_id(), message.clone()))
@@ -213,6 +215,7 @@ pub(crate) fn fan_out_with_id<S: MailStore + ?Sized>(
     message: &Message,
     message_id: &str,
 ) -> Result<Vec<StoredMessage>> {
+    budget::check_messages(std::iter::once(message), &[])?;
     if let Some(mut captured) =
         store.capture_batch(&[(message_id.to_string(), message.clone())], &[])?
     {
