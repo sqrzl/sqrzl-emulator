@@ -223,6 +223,9 @@ async fn assert_aws_auth_failure(
             assert_eq!(response.status(), status);
             assert_eq!(response.headers().get("x-amzn-errortype").unwrap(), code);
             let body: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+            if service == "sms-voice" {
+                assert_eq!(body["__type"], code);
+            }
             assert!(body["message"]
                 .as_str()
                 .is_some_and(|message| !message.is_empty()));
