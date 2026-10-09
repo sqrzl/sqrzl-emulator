@@ -81,6 +81,9 @@ jobs:
       - name: Measured campaign oracle checks
         run: python sdk-tests/campaign_checks.py
 
+      - name: Measured SDK transport and retry checks
+        run: python sdk-tests/campaign_transport_checks.py
+
       - name: Authenticated provider SDK tests
         env:
           SQRZL_SDK_ENFORCE_AUTH: "1"
