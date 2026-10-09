@@ -518,6 +518,7 @@ fn should_reject_invalid_committed_journal_before_mutating_public_files() {
 
 #[test]
 fn should_fail_closed_on_pending_publications_before_selected_version_reads() {
+    // Arrange
     let root = std::env::temp_dir().join(format!("sqrzl-version-recovery-{}", Uuid::new_v4()));
     let storage = FilesystemStorage::open(&root).unwrap();
     storage.create_bucket(BUCKET.to_string()).unwrap();
@@ -534,6 +535,8 @@ fn should_fail_closed_on_pending_publications_before_selected_version_reads() {
         .put_object(BUCKET, "item".to_string(), generation(NEW, "new"))
         .unwrap();
     let object_id = FilesystemStorage::compute_object_id(BUCKET, "item");
+    // Act
+    // Assert
     for directory in [
         storage.object_id_dir(BUCKET, &object_id),
         storage.version_dir(BUCKET, &object_id, &version),

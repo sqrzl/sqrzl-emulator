@@ -4161,8 +4161,14 @@ impl AzureBlobAdapter {
         } else {
             // The capped storage read prevents a concurrent replacement from
             // growing allocation after metadata admission.
-            let capped_end =
-                end.min(start.saturating_add(AZURE_MAX_MATERIALIZED_MUTATION_BYTES - 1));
+            // Preserve the client's extent rather than the first generation's
+            // clamped end: the coherent read can observe a larger replacement.
+            let limit_end = start.saturating_add(AZURE_MAX_MATERIALIZED_MUTATION_BYTES - 1);
+            let requested_end = Self::requested_range(req)
+                .and_then(|range| range.strip_prefix("bytes="))
+                .and_then(|range| range.split_once('-'))
+                .and_then(|(_, end)| end.parse::<u64>().ok());
+            let capped_end = requested_end.map_or(limit_end, |end| end.min(limit_end));
             let read = if let Some(version) = version {
                 storage.get_object_version_range(
                     container,

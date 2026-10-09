@@ -117,7 +117,8 @@ async fn verify_reads(server: &LiveServer, path: &str, headers: &[(&str, &str)])
                 StatusCode::PARTIAL_CONTENT
             } else {
                 StatusCode::OK
-            }
+            },
+            "{path}, ranged={ranged}"
         );
         let length: usize = response.headers()["content-length"]
             .to_str()
