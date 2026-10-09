@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - src/**
+      - Cargo.toml
+      - Cargo.lock
       - sdk-tests/**
       - scripts/**
       - .github/workflows/large-upload-qualification.yml
@@ -70,12 +73,13 @@ jobs:
           python scripts/validate_contract_evidence.py \
             --sdk-evidence target/sdk-evidence/measured-upload.json \
             --results-source-sha "$(git rev-parse HEAD)" \
+            --require-measured-providers "$SQRZL_SDK_PROVIDERS" \
             --output target/measured-contract-acceptance.json
       - name: Preserve measured resource and recovery evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: measured-upload-${{ github.sha }}
+          name: measured-upload-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             target/sdk-evidence/measured-upload.json
             target/measured-binary/build-provenance.json

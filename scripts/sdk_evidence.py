@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from campaign_evidence import digest, integer
 
@@ -88,6 +89,36 @@ def validate_sdk_lane(lane: dict, head: str, source_tree: str, tracked_file) -> 
         if not isinstance(event, dict) or not integer(event.get("pid"), 1):
             raise ValueError("SDK managed process event is malformed")
         if event.get("kind") == "start":
+            addresses = event.get("health_addresses")
+            if (
+                not isinstance(addresses, dict)
+                or set(addresses) != {"api", "ui"}
+                or event.get("health_ownership") != "accepted-connection-child-pid"
+            ):
+                raise ValueError(
+                    "SDK process readiness lacks owned API/UI health addresses"
+                )
+            parsed = [
+                urlsplit(url) for url in addresses.values() if isinstance(url, str)
+            ]
+            if (
+                len(parsed) != 2
+                or any(
+                    address.scheme != "http"
+                    or address.hostname != "127.0.0.1"
+                    or not address.port
+                    or address.path
+                    or address.query
+                    or address.fragment
+                    or address.username
+                    or address.password
+                    for address in parsed
+                )
+                or len({address.port for address in parsed}) != 2
+            ):
+                raise ValueError(
+                    "SDK process readiness has invalid owned API/UI health addresses"
+                )
             if (
                 active is not None
                 or event.get("binary_sha256") != lane["binary_sha256"]
@@ -101,6 +132,10 @@ def validate_sdk_lane(lane: dict, head: str, source_tree: str, tracked_file) -> 
                 event["pid"] != active
                 or type(event.get("exit_code")) is not int
                 or (event["kind"] == "abrupt-stop" and event["exit_code"] != -9)
+                or (
+                    event["kind"] == "normal-stop"
+                    and event["exit_code"] not in (0, -15)
+                )
             ):
                 raise ValueError("SDK process stop lacks its matching reaped child")
             active = None

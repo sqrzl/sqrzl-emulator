@@ -16,15 +16,28 @@ SQRZL_RUN_LARGE_UPLOAD_QUALIFICATION=1 SQRZL_LARGE_UPLOAD_BYTES=1073741824 \
 SQRZL_SDK_ENFORCE_AUTH=1 SQRZL_SDK_PROVIDERS=s3,azure,gcs,oci \
 SQRZL_SDK_LANE=measured-upload \
   .venv-sdk/bin/python -m pytest -q sdk-tests/test_large_upload_qualification.py
+.venv-sdk/bin/python scripts/validate_contract_evidence.py \
+  --sdk-evidence target/sdk-evidence/measured-upload.json \
+  --results-source-sha "$(git rev-parse HEAD)" \
+  --require-measured-providers s3,azure,gcs,oci \
+  --output target/measured-contract-acceptance.json
 ```
 
 The separate `Measured large upload qualification` workflow runs on pull
-requests that change the SDK harness or evidence validators, and can also be
+requests that change runtime `src/**`, `Cargo.toml`, `Cargo.lock`, the SDK
+harness, evidence validators, or this workflow, and can also be
 triggered manually. Its manual provider selector records disabled providers as
 skipped gates; full four-provider acceptance requires all four tests to pass.
 It checks out the exact pull-request head and retains the measured JSON, build
 manifest and mechanically validated operation evidence. The immutable build
 output directory must be new for each run.
+
+`--require-measured-providers` makes qualification fail unless every explicitly
+selected provider has an eligible passing result in the authenticated
+`measured-upload` lane. Missing, skipped, or rejected campaigns cannot make
+that job pass. The report is retained on rejection; unrelated operation
+references may remain unproven. The collector without this option reports
+evidence gaps without requiring a completed resource campaign.
 
 Each test writes dense, index-dependent bytes with a bounded 1 MiB generator
 and an independent SHA256 oracle. It uploads through official SDK operations,
@@ -52,6 +65,13 @@ non-upload controls, such as Azure container-deletion tombstones, are preserved.
 This inspection is labeled filesystem recovery evidence and does not qualify
 the native OCI listing operations. This is a process interruption gate, separate from filesystem
 publication crash tests and power-loss guarantees.
+
+Every managed start verifies that the child owns the actual accepted API and
+UI health connections. Linux checks socket inodes and endpoint pairs in
+`/proc`; macOS checks established connections with `lsof`. A foreign HTTP200
+response cannot establish readiness. Failed startup reaps the attempted child
+and closes its log. Unexpected process exits fail the run and cannot be
+recorded as normal termination.
 
 GCS JSON uses the local bearer convenience credential. Native GCS V2 HMAC
 qualification runs separately in the SDK authentication lane; this resource

@@ -14,7 +14,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from campaign_evidence import campaign_rejection_reason
+from campaign_evidence import SCOPES, campaign_rejection_reason
 from sdk_evidence import validate_campaign_processes, validate_sdk_lane
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -182,7 +182,9 @@ def evaluate(
             raise ValueError(f"Unknown or invalid SDK operation IDs for {node}")
         for operation in operation_ids:
             if node not in by_id[operation]["evidence_candidates"].get("sdk", []):
-                raise ValueError(f"Missing SDK operation evidence link: {operation}: {node}")
+                raise ValueError(
+                    f"Missing SDK operation evidence link: {operation}: {node}"
+                )
     scoped_sdk = {
         node: {**scope, "result": results.get(node, "not-run")}
         for node, scope in manifest.get("tests", {}).items()
@@ -202,6 +204,37 @@ def evaluate(
             "scope_policy", "No acceptance manifest supplied"
         ),
     }
+
+
+def require_measured_campaigns(report: dict, providers: str) -> None:
+    """Fail a qualification job unless every selected measured scope is proven."""
+    selected = [provider.strip() for provider in providers.split(",")]
+    if (
+        not selected
+        or len(set(selected)) != len(selected)
+        or not set(selected) <= {"s3", "azure", "gcs", "oci"}
+    ):
+        raise ValueError("Invalid selected measured provider scope")
+    lanes = [
+        lane
+        for lane in report.get("sdk_lane_evidence", [])
+        if lane.get("lane") == "measured-upload"
+    ]
+    if (
+        len(lanes) != 1
+        or lanes[0].get("storage_auth_enforced") is not True
+        or not set(selected) <= set(lanes[0].get("enabled_providers", []))
+    ):
+        raise ValueError("Missing authenticated selected measured lane evidence")
+    for provider in selected:
+        name = next(name for name, scope in SCOPES.items() if scope[0] == provider)
+        node = f"sdk-tests/test_large_upload_qualification.py::{name}"
+        assertion = report.get("scoped_sdk_assertions", {}).get(node, {})
+        if (
+            assertion.get("result") != "passed"
+            or assertion.get("lane_results", {}).get("measured-upload") != "passed"
+        ):
+            raise ValueError(f"Unproven selected measured campaign: {provider}")
 
 
 def main() -> int:
@@ -228,6 +261,10 @@ def main() -> int:
         help="Required with results; must match the checked out HEAD",
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--require-measured-providers",
+        help="Comma-separated providers requiring eligible measured-upload passes; unrelated references may remain unproven",
+    )
     args = parser.parse_args()
     head = command(["git", "rev-parse", "HEAD"]).strip()
     if (
@@ -338,6 +375,8 @@ def main() -> int:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
+    if args.require_measured_providers is not None:
+        require_measured_campaigns(report, args.require_measured_providers)
     print(
         f"Validated {len(report['operations'])} operations and {report['reference_count']} exact references; {report['passed_reference_count']} references have passing results."
     )

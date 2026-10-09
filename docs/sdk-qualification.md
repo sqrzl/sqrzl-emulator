@@ -79,10 +79,23 @@ For resource campaigns, `sqrzl_server.process_pid`, `storage_dir`,
 `sqrzl_server.restart(kill=False)` performs normal termination and restart;
 `restart(kill=True)` performs abrupt termination. The runtime also exposes
 `stop(kill=...)` and `start()` for staged interruption. Each stop waits for the
-old process to exit, and each start verifies health and a new PID. Restart
-tests skip remote endpoints explicitly. Remote/container smoke, normal
+old process to exit, and each start verifies health and a new PID. Readiness
+requires the child to own both accepted API and UI health
+connections, using socket inode/endpoint checks on Linux or `lsof` on macOS.
+Start events record these explicit loopback addresses and
+`health_ownership=accepted-connection-child-pid`. A foreign listener's HTTP200
+does not establish readiness. Failed startup reaps the child and closes the
+log; an unexpected exit fails qualification instead of becoming a normal-stop
+event. The evidence validator requires the same ownership and stop boundaries.
+Restart tests skip remote endpoints explicitly. Remote/container smoke, normal
 restart, abrupt termination, crash publication, and measured resource
 qualification are distinct evidence categories.
+
+The measured upload workflow runs for runtime source, Cargo manifest/lock,
+harness, validator, and workflow changes. Its
+`--require-measured-providers` gate requires every selected provider's eligible
+`measured-upload` result; reporting unrelated pending references remains
+allowed. See [the campaign commands](large-upload-qualification.md).
 
 Each run writes `target/sdk-evidence/<lane>.json`, or the path supplied by
 `SQRZL_SDK_EVIDENCE`. The artifact records source SHA and dirty state, SDK and

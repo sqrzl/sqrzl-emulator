@@ -3,17 +3,20 @@ from __future__ import annotations
 import base64
 import importlib.metadata
 import hashlib
+import http.client
 import json
 import inspect
 import re
 import os
 import shutil
 import socket
+import sys
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,13 +40,21 @@ class SqrzlRuntime:
     """One owned child process; restart retains ports, credentials and storage."""
 
     def __init__(
-        self, binary: Path, env: dict[str, str], runtime_dir: Path, api_url: str
+        self,
+        binary: Path,
+        env: dict[str, str],
+        runtime_dir: Path,
+        api_url: str,
+        ui_url: str | None = None,
     ):
         self.binary = binary
         self.env = env
         self.runtime_dir = runtime_dir
         self.log_path = runtime_dir / "emulator.log"
         self.api_url = api_url
+        self.health_addresses = {"api": api_url}
+        if ui_url is not None:
+            self.health_addresses["ui"] = ui_url
         self.process = None
         self.events = []
         self._log_file = None
@@ -71,17 +82,22 @@ class SqrzlRuntime:
             stderr=subprocess.STDOUT,
         )
         try:
-            _wait_for_health(self.api_url, self.process)
-        except Exception:
-            self.stop(kill=True)
-            raise RuntimeError(
-                f"SQRZL startup failed; log tail:\n{self.log_path.read_text(errors='replace')[-8000:]}"
-            )
+            for url in self.health_addresses.values():
+                _wait_for_health(url, self.process)
+        except Exception as error:
+            try:
+                self.stop(kill=True)
+            finally:
+                raise RuntimeError(
+                    f"SQRZL startup failed: {error}; log tail:\n{self.log_path.read_text(errors='replace')[-8000:]}"
+                ) from error
         self.events.append(
             {
                 "kind": "start",
                 "pid": self.process.pid,
                 "binary_sha256": self.binary_sha256,
+                "health_addresses": self.health_addresses,
+                "health_ownership": "accepted-connection-child-pid",
             }
         )
         return self.process.pid
@@ -90,6 +106,7 @@ class SqrzlRuntime:
         if self.process is None:
             return None
         pid = self.process.pid
+        unexpected = self.process.poll() is not None
         timed_out = False
         if self.process.poll() is None:
             self.process.kill() if kill else self.process.terminate()
@@ -104,7 +121,11 @@ class SqrzlRuntime:
                 "kind": (
                     "stop-timeout"
                     if timed_out
-                    else "abrupt-stop" if kill else "normal-stop"
+                    else (
+                        "unexpected-stop"
+                        if unexpected
+                        else "abrupt-stop" if kill else "normal-stop"
+                    )
                 ),
                 "pid": pid,
                 "exit_code": self.process.returncode,
@@ -113,8 +134,12 @@ class SqrzlRuntime:
         if self._log_file is not None:
             self._log_file.close()
             self._log_file = None
+        exit_code = self.process.returncode
+        self.process = None
         if timed_out:
             raise RuntimeError("SQRZL stop timed out; child was killed and reaped")
+        if unexpected or exit_code not in ((-9,) if kill else (0, -15)):
+            raise RuntimeError(f"SQRZL child exited unexpectedly: {exit_code}")
         return pid
 
     def restart(self, kill: bool = False) -> int:
@@ -214,6 +239,64 @@ def _reserve_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _owns_health_connection(process, port: int, client_port: int) -> bool:
+    """Bind HTTP readiness to the accepted connection, not a shared LISTEN port."""
+    if process.poll() is not None:
+        return False
+    if sys.platform.startswith("linux"):
+        root = Path(f"/proc/{process.pid}")
+        try:
+            sockets = set()
+            for descriptor in (root / "fd").iterdir():
+                try:
+                    link = os.readlink(descriptor)
+                except FileNotFoundError:
+                    continue
+                if link.startswith("socket:["):
+                    sockets.add(link[8:-1])
+            for line in (root / "net/tcp").read_text().splitlines()[1:]:
+                fields = line.split()
+                if (
+                    fields[3] == "01"
+                    and fields[9] in sockets
+                    and fields[1] == f"0100007F:{port:04X}"
+                    and fields[2] == f"0100007F:{client_port:04X}"
+                ):
+                    return process.poll() is None
+        except FileNotFoundError:
+            return False
+        return False
+    if sys.platform == "darwin":
+        lsof = shutil.which("lsof") or "/usr/sbin/lsof"
+        result = subprocess.run(
+            [
+                lsof,
+                "-nP",
+                "-a",
+                "-p",
+                str(process.pid),
+                f"-i4TCP:{port}",
+                "-sTCP:ESTABLISHED",
+                "-Fpn",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.stderr:
+            raise RuntimeError(
+                f"Cannot verify health socket ownership: {result.stderr}"
+            )
+        return (
+            result.returncode == 0
+            and f"p{process.pid}" in result.stdout.splitlines()
+            and f"n127.0.0.1:{port}->127.0.0.1:{client_port}"
+            in result.stdout.splitlines()
+            and process.poll() is None
+        )
+    raise RuntimeError("Managed socket ownership requires Linux /proc or macOS lsof")
+
+
 def _wait_for_health(
     api_url: str, process: subprocess.Popen[str] | None = None
 ) -> None:
@@ -225,9 +308,34 @@ def _wait_for_health(
                 f"SQRZL exited before /healthz became ready: {process.returncode}"
             )
         try:
-            with urllib.request.urlopen(f"{api_url}/healthz", timeout=1) as response:
-                if response.status == 200:
-                    return
+            address = urllib.parse.urlsplit(api_url)
+            if (
+                address.scheme != "http"
+                or address.hostname != "127.0.0.1"
+                or not address.port
+            ):
+                raise RuntimeError(
+                    "Managed health requires an explicit IPv4 loopback address"
+                )
+            connection = http.client.HTTPConnection(
+                address.hostname, address.port, timeout=1
+            )
+            try:
+                connection.request("GET", "/healthz")
+                client_port = connection.sock.getsockname()[1]
+                response = connection.getresponse()
+                if response.status == 200 and (
+                    process is None
+                    or _owns_health_connection(process, address.port, client_port)
+                ):
+                    response.read()
+                    if process is None or process.poll() is None:
+                        return
+                last_error = RuntimeError(
+                    f"Health response at {api_url} is not owned by the managed child"
+                )
+            finally:
+                connection.close()
         except (OSError, urllib.error.URLError) as exc:
             last_error = exc
         time.sleep(0.1)
@@ -407,7 +515,13 @@ def sqrzl_server() -> SqrzlSettings:
         ]:
             env.pop(name, None)
 
-    runtime = SqrzlRuntime(binary, env, runtime_dir, f"http://127.0.0.1:{api_port}")
+    runtime = SqrzlRuntime(
+        binary,
+        env,
+        runtime_dir,
+        f"http://127.0.0.1:{api_port}",
+        ui_url=f"http://127.0.0.1:{ui_port}",
+    )
     settings = SqrzlSettings(
         api_url=f"http://127.0.0.1:{api_port}",
         ui_url=f"http://127.0.0.1:{ui_port}",
@@ -625,6 +739,8 @@ def pytest_sessionfinish(session, exitstatus):
                 "upgrade_candidate": os.getenv("SQRZL_SDK_ALLOW_UPGRADE") == "1",
                 "enabled_providers": sorted(_providers_from_env()),
                 "messaging_auth_lane": os.getenv("SQRZL_SDK_MESSAGING_AUTH") == "1",
+                "storage_auth_enforced": os.getenv("SQRZL_SDK_ENFORCE_AUTH") == "1"
+                or os.getenv("SQRZL_SDK_MESSAGING_AUTH") == "1",
                 "gcs_json_auth": (
                     "disabled"
                     if "gcs" not in _providers_from_env()

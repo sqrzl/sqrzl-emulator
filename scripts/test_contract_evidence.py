@@ -14,6 +14,7 @@ from validate_contract_evidence import (
     sdk_result_outcome,
 )
 from sdk_evidence import validate_campaign_processes, validate_sdk_lane
+import validate_contract_evidence
 
 
 def matrix():
@@ -167,22 +168,32 @@ def resource_result(provider="s3"):
                 phase=(
                     "generation"
                     if elapsed < 0.3
-                    else {
-                        "s3": "multipart-upload",
-                        "azure": "block-upload",
-                        "gcs": "resumable-upload",
-                        "oci": "multipart-upload",
-                    }[provider]
-                    if elapsed < 1.0
-                    else "bounded-range-checksum"
-                    if elapsed < 1.4
-                    else "normal-restart"
-                    if elapsed < 1.5
-                    else "bounded-range-checksum"
-                    if elapsed < 2.5
-                    else "interrupted-transport"
-                    if elapsed < 3.1
-                    else "staging-recovery"
+                    else (
+                        {
+                            "s3": "multipart-upload",
+                            "azure": "block-upload",
+                            "gcs": "resumable-upload",
+                            "oci": "multipart-upload",
+                        }[provider]
+                        if elapsed < 1.0
+                        else (
+                            "bounded-range-checksum"
+                            if elapsed < 1.4
+                            else (
+                                "normal-restart"
+                                if elapsed < 1.5
+                                else (
+                                    "bounded-range-checksum"
+                                    if elapsed < 2.5
+                                    else (
+                                        "interrupted-transport"
+                                        if elapsed < 3.1
+                                        else "staging-recovery"
+                                    )
+                                )
+                            )
+                        )
+                    )
                 ),
                 client_rss_bytes=67_108_864,
                 service_pid=pid,
@@ -299,10 +310,93 @@ def source_lane():
             {"kind": "normal-stop", "pid": 303, "exit_code": -15},
         ],
     }
+    for event in lane["process_events"]:
+        if event["kind"] == "start":
+            event.update(
+                health_addresses={
+                    "api": "http://127.0.0.1:19000",
+                    "ui": "http://127.0.0.1:19001",
+                },
+                health_ownership="accepted-connection-child-pid",
+            )
     return lane, head, tree, source
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_should_require_distinct_owned_api_and_ui_readiness_evidence(self):
+        for change in ("missing", "foreign", "duplicate-port", "remote"):
+            with self.subTest(change=change):
+                lane, head, tree, source = source_lane()
+                event = lane["process_events"][0]
+                if change == "missing":
+                    del event["health_addresses"]["ui"]
+                elif change == "foreign":
+                    event["health_ownership"] = "HTTP200 only"
+                elif change == "duplicate-port":
+                    event["health_addresses"]["ui"] = event["health_addresses"]["api"]
+                else:
+                    event["health_addresses"]["ui"] = "http://example.invalid:19001"
+                with self.assertRaisesRegex(ValueError, "readiness"):
+                    validate_sdk_lane(lane, head, tree, source.__getitem__)
+
+    def test_should_require_each_explicit_selected_measured_campaign(self):
+        nodes = [resource_result(provider)["test"] for provider in ("s3", "azure")]
+        report = {
+            "scoped_sdk_assertions": {
+                node: {
+                    "result": "passed",
+                    "lane_results": {"measured-upload": "passed"},
+                }
+                for node in nodes
+            },
+            "sdk_lane_evidence": [
+                {
+                    "lane": "measured-upload",
+                    "enabled_providers": ["s3", "azure"],
+                    "storage_auth_enforced": True,
+                }
+            ],
+        }
+        validate_contract_evidence.require_measured_campaigns(report, "s3,azure")
+        # Unrelated provider scopes may remain explicitly unproven.
+        for change in (
+            "missing",
+            "skipped",
+            "scope-unqualified",
+            "wrong-lane",
+            "auth-disabled",
+        ):
+            with self.subTest(change=change):
+                altered = copy.deepcopy(report)
+                selected = altered["scoped_sdk_assertions"][nodes[1]]
+                if change == "missing":
+                    del altered["scoped_sdk_assertions"][nodes[1]]
+                elif change == "wrong-lane":
+                    selected["lane_results"] = {"functional": "passed"}
+                elif change == "auth-disabled":
+                    altered["sdk_lane_evidence"][0]["storage_auth_enforced"] = False
+                else:
+                    selected["result"] = change
+                    selected["lane_results"]["measured-upload"] = change
+                with self.assertRaisesRegex(ValueError, "selected measured"):
+                    validate_contract_evidence.require_measured_campaigns(
+                        altered, "s3,azure"
+                    )
+
+    def test_should_reject_empty_or_unknown_required_measured_scope(self):
+        for providers in ("", "s3,", "s3,gmail", "s3,s3"):
+            with self.subTest(providers=providers):
+                with self.assertRaisesRegex(ValueError, "selected measured"):
+                    validate_contract_evidence.require_measured_campaigns({}, providers)
+
+    def test_should_not_accept_an_unexpected_exit_as_a_normal_stop(self):
+        for exit_code in (1, -9):
+            with self.subTest(exit_code=exit_code):
+                lane, head, tree, source = source_lane()
+                lane["process_events"][-1]["exit_code"] = exit_code
+                with self.assertRaisesRegex(ValueError, "stop"):
+                    validate_sdk_lane(lane, head, tree, source.__getitem__)
+
     def test_should_reject_sdk_scope_with_an_unknown_operation_id(self):
         node = "sdk-tests/test_example.py::test_works"
         manifest = {"tests": {node: {"operation_ids": ["example.Unknown.current"]}}}
@@ -314,15 +408,19 @@ class EvidenceTests(unittest.TestCase):
         manifest = {"tests": {node: {"operation_ids": ["example.Get.current"]}}}
         with self.assertRaisesRegex(ValueError, "evidence link"):
             evaluate(
-                matrix(), manifest,
-                {"interop::works", "sdk-tests/test_example.py::test_works", node}, {},
+                matrix(),
+                manifest,
+                {"interop::works", "sdk-tests/test_example.py::test_works", node},
+                {},
             )
 
     def test_should_reject_missing_client_or_one_live_service_rss_measurement(self):
         for resource in ("client_rss_bytes", "service_rss_bytes"):
             with self.subTest(resource=resource):
                 result = resource_result()
-                result["properties"]["large_upload_campaign"]["samples"][10][resource] = None
+                result["properties"]["large_upload_campaign"]["samples"][10][
+                    resource
+                ] = None
                 self.assertEqual(sdk_result_outcome(result), "scope-unqualified")
 
     def test_should_require_upload_and_both_readback_measurements(self):
@@ -334,7 +432,9 @@ class EvidenceTests(unittest.TestCase):
                         sample["phase"] = "unmeasured-operation"
                 self.assertEqual(sdk_result_outcome(result), "scope-unqualified")
 
-    def test_should_require_recovery_measurements_when_recovery_outlasts_sampling_slack(self):
+    def test_should_require_recovery_measurements_when_recovery_outlasts_sampling_slack(
+        self,
+    ):
         result = resource_result()
         for sample in result["properties"]["large_upload_campaign"]["samples"]:
             if sample["elapsed_seconds"] >= 3.1:
@@ -349,7 +449,9 @@ class EvidenceTests(unittest.TestCase):
                 campaign["phases"][8]["elapsed_seconds"] = 3.12
                 campaign["phases"][9]["elapsed_seconds"] = 3.14
                 campaign["elapsed_seconds"] = 3.15
-                campaign["samples"] = [s for s in campaign["samples"] if s["elapsed_seconds"] <= 3.0]
+                campaign["samples"] = [
+                    s for s in campaign["samples"] if s["elapsed_seconds"] <= 3.0
+                ]
                 campaign["sample_count"] = len(campaign["samples"])
                 self.assertEqual(sdk_result_outcome(result), "passed")
 

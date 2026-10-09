@@ -72,6 +72,9 @@ jobs:
       - name: SDK provenance boundary checks
         run: python sdk-tests/provenance_checks.py
 
+      - name: SDK owned-process readiness checks
+        run: python sdk-tests/runtime_checks.py
+
       - name: Contract evidence validator boundary checks
         run: python -m unittest discover -s scripts -p 'test_contract_evidence.py'
 
@@ -106,7 +109,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sdk-qualification-${{ github.sha }}
+          name: sdk-qualification-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             target/sdk-evidence/*.json
             target/rust-contract-results.log
@@ -156,7 +159,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sdk-upgrade-${{ github.sha }}
+          name: sdk-upgrade-${{ github.event.pull_request.head.sha || github.sha }}
           path: target/sdk-evidence/*.json
           retention-days: 14
 
@@ -252,7 +255,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sdk-container-smoke-${{ github.sha }}
+          name: sdk-container-smoke-${{ github.event.pull_request.head.sha || github.sha }}
           path: target/sdk-evidence/*.json
           retention-days: 14
 
