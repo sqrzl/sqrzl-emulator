@@ -1,6 +1,7 @@
 use super::SmsAdapter;
 use crate::auth::{acs_hmac, parse_connection_string, AuthConfig};
 use crate::body::Body;
+use crate::capture::RepeatabilityRecord;
 use crate::server::{RequestExt as SmsRequest, ResponseBuilder};
 use crate::sms::model::{is_e164, NewSmsMessage};
 use crate::sms::{
@@ -13,9 +14,10 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub struct AcsSmsAdapter;
+static ACS_SMS_CLAIMS: Mutex<()> = Mutex::new(());
 const ACS_SMS_API_VERSIONS: &[&str] = &["2021-03-07", "2026-01-23"];
 
 struct AcsRecipient {
@@ -61,14 +63,15 @@ impl AcsSmsAdapter {
             .build()
     }
 
-    fn store_recipient(
+    fn prepare_recipient(
         store: &dyn SmsStore,
         batch_id: &str,
         sender: &str,
         message_body: &str,
         options: Option<&Value>,
         recipient: &AcsRecipient,
-    ) -> crate::error::Result<(Value, Option<crate::sms::SmsMessage>)> {
+        pending_records: &[RepeatabilityRecord],
+    ) -> crate::error::Result<(Value, Option<NewSmsMessage>, Option<RepeatabilityRecord>)> {
         let to = recipient.to.as_str();
         let repeatability_request_id = recipient.repeatability_request_id.as_ref();
         let repeatability_first_sent = recipient.repeatability_first_sent.as_ref();
@@ -93,40 +96,21 @@ impl AcsSmsAdapter {
             "repeatability_request_hash".to_string(),
             Value::String(request_hash.clone()),
         );
-        if let Some(request_id) = repeatability_request_id {
-            if let Some(existing) = store
-                .list_messages(to, ListSmsParams::default())?
-                .messages
-                .into_iter()
-                .find(|message| {
-                    message.provider == SmsProvider::Acs
-                        && message.from == sender
-                        && message
-                            .metadata
-                            .get("repeatability_request_id")
-                            .and_then(Value::as_str)
-                            == Some(request_id.as_str())
-                })
-            {
-                let matches_first_sent = existing
-                    .metadata
-                    .get("repeatability_first_sent")
-                    .and_then(Value::as_str)
-                    == repeatability_first_sent.map(String::as_str);
-                let matches_request = existing
-                    .metadata
-                    .get("repeatability_request_hash")
-                    .and_then(Value::as_str)
-                    == Some(request_hash.as_str());
+        let key = repeatability_request_id
+            .map(|request_id| format!("acs-sms/{to}/{}", request_id.to_ascii_lowercase()));
+        if let Some(key) = &key {
+            let record = pending_records
+                .iter()
+                .find(|record| &record.key == key)
+                .cloned()
+                .or(store.get_repeatability_record(key)?);
+            if let Some(record) = record {
+                let matches = record.request_hash == request_hash
+                    && Some(record.first_sent.as_str())
+                        == repeatability_first_sent.map(String::as_str);
                 return Ok((
-                    if matches_first_sent && matches_request {
-                        serde_json::json!({
-                            "to": to,
-                            "messageId": existing.provider_message_id,
-                            "successful": true,
-                            "httpStatusCode": 202,
-                            "repeatabilityResult": "accepted"
-                        })
+                    if matches {
+                        record.result
                     } else {
                         repeatability_error(
                             to,
@@ -134,31 +118,106 @@ impl AcsSmsAdapter {
                         )
                     },
                     None,
+                    None,
                 ));
             }
         }
-        let stored = store.store_message(NewSmsMessage {
-            batch_id: Some(batch_id.to_string()),
-            provider: SmsProvider::Acs,
-            provider_message_id: None,
-            direction: SmsDirection::Outbound,
-            channel: SmsChannel::Sms,
-            from: sender.to_string(),
-            to: to.to_string(),
-            body: message_body.to_string(),
-            media: Vec::new(),
-            metadata,
-        })?;
-        let mut result = serde_json::json!({
-            "to": to,
-            "messageId": stored.provider_message_id,
-            "successful": true,
-            "httpStatusCode": 202,
-        });
+        if let Some(request_id) = repeatability_request_id {
+            if let Some(result) = Self::legacy_recipient_result(
+                store,
+                sender,
+                to,
+                request_id,
+                repeatability_first_sent.map(String::as_str),
+                &request_hash,
+            )? {
+                return Ok((result, None, None));
+            }
+        }
+        let provider_message_id = crate::sms::generate_provider_message_id(SmsProvider::Acs);
+        let (mut result, message) = if is_e164(to) {
+            (
+                serde_json::json!({"to":to, "messageId":provider_message_id, "successful":true, "httpStatusCode":202}),
+                Some(NewSmsMessage {
+                    batch_id: Some(batch_id.to_string()),
+                    provider: SmsProvider::Acs,
+                    provider_message_id: Some(provider_message_id),
+                    direction: SmsDirection::Outbound,
+                    channel: SmsChannel::Sms,
+                    from: sender.to_string(),
+                    to: to.to_string(),
+                    body: message_body.to_string(),
+                    media: Vec::new(),
+                    metadata,
+                }),
+            )
+        } else {
+            (
+                serde_json::json!({"to":to, "successful":false, "httpStatusCode":400, "errorMessage":"Invalid To phone number format."}),
+                None,
+            )
+        };
         if repeatability_request_id.is_some() {
             result["repeatabilityResult"] = Value::String("accepted".to_string());
         }
-        Ok((result, Some(stored)))
+        let record = key.map(|key| RepeatabilityRecord {
+            key,
+            request_hash,
+            first_sent: repeatability_first_sent.cloned().unwrap_or_default(),
+            status: if message.is_some() { 202 } else { 400 },
+            result: result.clone(),
+            transaction_id: String::new(),
+        });
+        Ok((result, message, record))
+    }
+
+    fn legacy_recipient_result(
+        store: &dyn SmsStore,
+        _sender: &str,
+        to: &str,
+        request_id: &str,
+        repeatability_first_sent: Option<&str>,
+        request_hash: &str,
+    ) -> crate::error::Result<Option<Value>> {
+        if let Some(existing) = store
+            .list_messages(to, ListSmsParams::default())?
+            .messages
+            .into_iter()
+            .find(|message| {
+                message.provider == SmsProvider::Acs
+                    && message
+                        .metadata
+                        .get("repeatability_request_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value.eq_ignore_ascii_case(request_id))
+            })
+        {
+            let matches_first_sent = existing
+                .metadata
+                .get("repeatability_first_sent")
+                .and_then(Value::as_str)
+                == repeatability_first_sent;
+            let matches_request = existing
+                .metadata
+                .get("repeatability_request_hash")
+                .and_then(Value::as_str)
+                == Some(request_hash);
+            return Ok(Some(if matches_first_sent && matches_request {
+                serde_json::json!({
+                    "to": to,
+                    "messageId": existing.provider_message_id,
+                    "successful": true,
+                    "httpStatusCode": 202,
+                    "repeatabilityResult": "accepted"
+                })
+            } else {
+                repeatability_error(
+                    to,
+                    "Repeatability request metadata does not match the original request",
+                )
+            }));
+        }
+        Ok(None)
     }
 
     fn connection_key() -> Option<String> {
@@ -311,18 +370,17 @@ impl AcsSmsAdapter {
             Ok(options) => options.cloned(),
             Err(message) => return Self::validation_error("SmsSendOptions", &message),
         };
+        let Ok(_claim) = ACS_SMS_CLAIMS.lock() else {
+            return Self::standard_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                "ACS SMS claim lock poisoned",
+            );
+        };
+        let mut records = Vec::new();
         let mut results = Vec::with_capacity(recipients.len());
         let mut captured = Vec::with_capacity(recipients.len());
         for recipient in recipients {
-            if !is_e164(&recipient.to) {
-                results.push(serde_json::json!({
-                    "to": recipient.to,
-                    "successful": false,
-                    "httpStatusCode": 400,
-                    "errorMessage": "Invalid To phone number format."
-                }));
-                continue;
-            }
             if recipient.repeatability_request_id.is_some()
                 != recipient.repeatability_first_sent.is_some()
                 || recipient
@@ -340,48 +398,70 @@ impl AcsSmsAdapter {
                 ));
                 continue;
             }
-            let result = match Self::store_recipient(
+            match Self::prepare_recipient(
                 store,
                 &batch_id,
                 sender,
                 message_body,
                 options.as_ref(),
                 &recipient,
+                &records,
             ) {
-                Ok((result, stored)) => {
-                    if let Some(stored) = stored {
-                        captured.push(stored);
+                Ok((result, message, record)) => {
+                    if let Some(message) = message {
+                        captured.push(message);
                     }
-                    result
+                    if let Some(record) = record {
+                        records.push(record);
+                    }
+                    results.push(result);
                 }
                 Err(error) => {
-                    let rollback_errors = captured
-                        .iter()
-                        .filter_map(|stored: &crate::sms::SmsMessage| {
-                            store
-                                .delete_message(&stored.peer, &stored.message_id)
-                                .err()
-                                .map(|rollback| {
-                                    format!("{}/{}: {rollback}", stored.peer, stored.message_id)
-                                })
-                        })
-                        .collect::<Vec<_>>();
-                    let message = if rollback_errors.is_empty() {
-                        error.to_string()
-                    } else {
-                        format!(
-                            "{error}; rollback failed for {}",
-                            rollback_errors.join(", ")
-                        )
-                    };
                     return Self::standard_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "InternalError",
-                        &message,
-                    );
+                        &error.to_string(),
+                    )
                 }
-            };
-            results.push(result);
+            }
+        }
+        match store.capture_batch(captured.clone(), &records) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let mut stored: Vec<crate::sms::SmsMessage> = Vec::new();
+                for message in captured {
+                    match store.store_message(message) {
+                        Ok(message) => stored.push(message),
+                        Err(error) => {
+                            let rollback_errors = stored
+                                .iter()
+                                .filter_map(|message| {
+                                    store
+                                        .delete_message(&message.peer, &message.message_id)
+                                        .err()
+                                })
+                                .collect::<Vec<_>>();
+                            let message = if rollback_errors.is_empty() {
+                                error.to_string()
+                            } else {
+                                format!("{error}; rollback failed: {rollback_errors:?}")
+                            };
+                            return Self::standard_error(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "InternalError",
+                                &message,
+                            );
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                return Self::standard_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "InternalError",
+                    &error.to_string(),
+                )
+            }
         }
         Self::send_response(&results)
     }

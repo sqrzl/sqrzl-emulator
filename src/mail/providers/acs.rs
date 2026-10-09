@@ -1,6 +1,7 @@
 use crate::auth::AuthConfig;
 use crate::auth::{acs_hmac, parse_connection_string};
 use crate::body::Body;
+use crate::capture::RepeatabilityRecord;
 use crate::mail::model::{Address, Attachment, Message, SourceProtocol};
 use crate::mail::providers::MailAdapter;
 use crate::mail::{fan_out_with_id, MailStore, ALL_MAILBOX};
@@ -14,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const ENV_ACS_CONNECTION_STRING: &str = "SQRZL_ACS_CONNECTION_STRING";
 const ACS_EMAIL_MAX_REQUEST_BYTES: usize = 10 * 1024 * 1024;
@@ -22,6 +23,9 @@ const ACS_EMAIL_MAX_RECIPIENTS: usize = 50;
 const ACS_EMAIL_API_VERSIONS: &[&str] = &["2023-03-01", "2023-03-31", "2025-09-01"];
 
 pub struct AcsEmailAdapter;
+// Lookup, fingerprint validation, operation-id reservation and publication are
+// one synchronous claim. Persistence remains the authority across restarts.
+static ACS_EMAIL_CLAIMS: Mutex<()> = Mutex::new(());
 type RecipientGroups = (Vec<Address>, Vec<Address>, Vec<Address>);
 
 struct Repeatability {
@@ -283,11 +287,16 @@ impl AcsEmailAdapter {
                 .as_bytes(),
         );
         digest.update([0]);
-        digest.update(req.header("operation-id").unwrap_or("").as_bytes());
+        digest.update(
+            req.header("operation-id")
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_bytes(),
+        );
         digest.update([0]);
         digest.update(&req.body);
         Ok(Some(Repeatability {
-            request_id: request_id.to_string(),
+            request_id: request_id.to_ascii_lowercase(),
             first_sent: first_sent.to_string(),
             request_hash: hex::encode(digest.finalize()),
         }))
@@ -308,8 +317,44 @@ impl AcsEmailAdapter {
                         .provider_metadata
                         .get("repeatability_request_id")
                         .and_then(Value::as_str)
-                        == Some(repeatability.request_id.as_str())
+                        .is_some_and(|value| value.eq_ignore_ascii_case(&repeatability.request_id))
             }))
+    }
+
+    fn replay_response(req: &MailRequest, record: &RepeatabilityRecord) -> Response<Body> {
+        if record.status == 202 {
+            return Self::accepted_response(req, record.result["id"].as_str().unwrap_or_default());
+        }
+        Self::error_response(
+            StatusCode::from_u16(record.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            record.result["code"].as_str().unwrap_or("InvalidRequest"),
+            record.result["message"].as_str().unwrap_or_default(),
+        )
+    }
+
+    fn rejected_request(
+        mail: &dyn MailStore,
+        repeatability: Option<&Repeatability>,
+        message: &str,
+    ) -> Response<Body> {
+        if let Some(repeatability) = repeatability {
+            let record = RepeatabilityRecord {
+                key: format!("acs-email/{}", repeatability.request_id),
+                request_hash: repeatability.request_hash.clone(),
+                first_sent: repeatability.first_sent.clone(),
+                status: 400,
+                result: serde_json::json!({"code":"InvalidRequest", "message":message}),
+                transaction_id: String::new(),
+            };
+            if let Err(error) = mail.capture_batch(&[], &[record]) {
+                return Self::error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "InternalError",
+                    &error.to_string(),
+                );
+            }
+        }
+        Self::invalid_request_response(message)
     }
 
     fn accepted_response(req: &MailRequest, message_id: &str) -> Response<Body> {
@@ -444,7 +489,12 @@ impl MailAdapter for AcsEmailAdapter {
                     .strip_prefix("/emails/operations/")
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| "invalid ACS operation path".to_string())?;
-                if mail.get_message(ALL_MAILBOX, operation_id).is_err() {
+                if mail.get_message(ALL_MAILBOX, operation_id).is_err()
+                    && mail
+                        .get_repeatability_record(&format!("acs-email-operation/{operation_id}"))
+                        .map_err(|error| error.to_string())?
+                        .is_none()
+                {
                     return Ok(ResponseBuilder::new(StatusCode::NOT_FOUND)
                         .header("x-ms-error-code", "NotFound")
                         .content_type("application/json; charset=utf-8")
@@ -472,7 +522,24 @@ impl MailAdapter for AcsEmailAdapter {
                 Ok(value) => value,
                 Err(response) => return Ok(response),
             };
+            let _claim = ACS_EMAIL_CLAIMS
+                .lock()
+                .map_err(|_| "ACS email claim lock poisoned".to_string())?;
             if let Some(repeatability) = repeatability.as_ref() {
+                let key = format!("acs-email/{}", repeatability.request_id);
+                if let Some(record) = mail
+                    .get_repeatability_record(&key)
+                    .map_err(|error| error.to_string())?
+                {
+                    if record.first_sent != repeatability.first_sent
+                        || record.request_hash != repeatability.request_hash
+                    {
+                        return Ok(Self::invalid_request_response(
+                            "Repeated request does not match the original request",
+                        ));
+                    }
+                    return Ok(Self::replay_response(&req, &record));
+                }
                 let existing = match Self::existing_repeatability(mail.as_ref(), repeatability) {
                     Ok(existing) => existing,
                     Err(error) => return Err(error.to_string()),
@@ -498,18 +565,57 @@ impl MailAdapter for AcsEmailAdapter {
 
             let mut message = match Self::parse_message(&req) {
                 Ok(message) => message,
-                Err(message) => return Ok(Self::invalid_request_response(&message)),
+                Err(message) => {
+                    return Ok(Self::rejected_request(
+                        mail.as_ref(),
+                        repeatability.as_ref(),
+                        &message,
+                    ))
+                }
             };
             let operation_id = match req.header("operation-id") {
-                Some(value) if valid_uuid(value) => value.to_string(),
+                Some(value) if valid_uuid(value) => value.to_ascii_lowercase(),
                 Some(_) => {
-                    return Ok(Self::invalid_request_response(
+                    return Ok(Self::rejected_request(
+                        mail.as_ref(),
+                        repeatability.as_ref(),
                         "Operation-Id must be a UUID",
                     ))
                 }
                 None => uuid::Uuid::new_v4().to_string(),
             };
+            if mail
+                .get_repeatability_record(&format!("acs-email-operation/{operation_id}"))
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                return Ok(Self::rejected_request(
+                    mail.as_ref(),
+                    repeatability.as_ref(),
+                    "Operation-Id already exists",
+                ));
+            }
+            let request_hash = repeatability.as_ref().map_or_else(
+                || hex::encode(Sha256::digest(&req.body)),
+                |value| value.request_hash.clone(),
+            );
+            let mut records = vec![RepeatabilityRecord {
+                key: format!("acs-email-operation/{operation_id}"),
+                request_hash,
+                first_sent: String::new(),
+                status: 202,
+                result: serde_json::json!({"id":operation_id}),
+                transaction_id: String::new(),
+            }];
             if let Some(repeatability) = repeatability {
+                records.push(RepeatabilityRecord {
+                    key: format!("acs-email/{}", repeatability.request_id),
+                    request_hash: repeatability.request_hash.clone(),
+                    first_sent: repeatability.first_sent.clone(),
+                    status: 202,
+                    result: serde_json::json!({"id":operation_id}),
+                    transaction_id: String::new(),
+                });
                 message.provider_metadata.insert(
                     "repeatability_request_id".to_string(),
                     Value::String(repeatability.request_id),
@@ -523,12 +629,24 @@ impl MailAdapter for AcsEmailAdapter {
                     Value::String(repeatability.request_hash),
                 );
             }
-            let stored_messages = match fan_out_with_id(mail.as_ref(), &message, &operation_id) {
+            let captured = mail.capture_batch(&[(operation_id.clone(), message.clone())], &records);
+            let captured = match captured {
+                Ok(Some(mut batches)) => Ok(batches.remove(0)),
+                Ok(None) => fan_out_with_id(mail.as_ref(), &message, &operation_id),
+                Err(error) => Err(error),
+            };
+            let stored_messages = match captured {
                 Ok(stored_messages) => stored_messages,
                 Err(crate::error::Error::InvalidRequest(message)) => {
                     return Ok(Self::invalid_request_response(&message));
                 }
-                Err(err) => return Err(err.to_string()),
+                Err(err) => {
+                    return Ok(Self::error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "InternalError",
+                        &err.to_string(),
+                    ))
+                }
             };
             let message_id = stored_messages
                 .first()

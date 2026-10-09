@@ -8,6 +8,7 @@
 //! Writes go through a temp-file-then-rename so a crash mid-write can't leave a
 //! corrupt file.
 
+use crate::capture::{self, RepeatabilityRecord, TRANSACTION_METADATA};
 use crate::error::{Error, Result};
 use crate::mail::model::{
     DeliveryStatus, ListMessagesParams, ListMessagesResult, MailboxInfo, Message, StoredMessage,
@@ -17,10 +18,14 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 pub struct FilesystemMailStore {
     root: PathBuf,
+    capture_lock: Mutex<()>,
 }
+
+type CaptureFiles = Vec<(PathBuf, Vec<u8>)>;
 
 const RAW_SUFFIX: &str = ".raw";
 const MAILBOX_METADATA: &str = ".mailbox";
@@ -35,7 +40,11 @@ impl FilesystemMailStore {
     pub fn open(blobs_path: impl AsRef<Path>) -> Result<Self> {
         let root = blobs_path.as_ref().join("_mail");
         fs::create_dir_all(&root).map_err(|err| io_err(&err))?;
-        Ok(Self { root })
+        capture::recover(&root)?;
+        Ok(Self {
+            root,
+            capture_lock: Mutex::new(()),
+        })
     }
 
     fn mailbox_dir(&self, mailbox: &str) -> Result<PathBuf> {
@@ -88,56 +97,45 @@ impl FilesystemMailStore {
             .join(format!("{message_id}{RAW_SUFFIX}")))
     }
 
-    fn read_stored(path: &Path) -> Result<StoredMessage> {
-        let data = fs::read(path).map_err(|_| Error::MessageNotFound)?;
-        serde_json::from_slice(&data).map_err(|e| Error::InternalError(e.to_string()))
-    }
-
-    fn read_raw(path: &Path) -> Option<Vec<u8>> {
-        fs::read(path).ok()
-    }
-}
-
-impl MailStore for FilesystemMailStore {
-    fn store_message(
+    fn prepare_copy(
         &self,
         mailbox: &str,
         message_id: &str,
-        message: Message,
-    ) -> Result<StoredMessage> {
+        mut message: Message,
+        transaction_id: &str,
+    ) -> Result<(StoredMessage, CaptureFiles)> {
         self.ensure_mailbox_dir(mailbox)?;
         let path = self.message_path(mailbox, message_id)?;
+        message.provider_metadata.insert(
+            TRANSACTION_METADATA.to_string(),
+            serde_json::Value::String(transaction_id.to_string()),
+        );
         let received_at = Utc::now();
         let stored = StoredMessage {
             message_id: message_id.to_string(),
             mailbox: mailbox.to_string(),
-            message: message.clone(),
+            message,
             delivery_status: DeliveryStatus::accepted(received_at),
             received_at,
         };
-        let data = serde_json::to_vec(&stored).map_err(|e| Error::InternalError(e.to_string()))?;
-        write_atomic(&path, &data)?;
-        if let Some(raw_mime) = &message.raw_mime {
-            let raw_path = self.raw_message_path(mailbox, message_id)?;
-            write_atomic(&raw_path, raw_mime)?;
+        let mut files = vec![(
+            path,
+            serde_json::to_vec(&stored).map_err(|error| Error::InternalError(error.to_string()))?,
+        )];
+        if let Some(raw_mime) = &stored.message.raw_mime {
+            files.push((
+                self.raw_message_path(mailbox, message_id)?,
+                raw_mime.clone(),
+            ));
         }
-        Ok(stored)
+        Ok((stored, files))
     }
 
-    fn get_message(&self, mailbox: &str, message_id: &str) -> Result<StoredMessage> {
-        let path = self.message_path(mailbox, message_id)?;
-        let mut stored = Self::read_stored(&path)?;
-        let raw_path = self.raw_message_path(mailbox, message_id)?;
-        if let Some(raw_mime) = Self::read_raw(&raw_path) {
-            stored.message.raw_mime = Some(raw_mime);
-        }
-        Ok(stored)
-    }
-
-    fn list_messages(
+    fn list_messages_snapshot(
         &self,
         mailbox: &str,
-        params: ListMessagesParams,
+        params: &ListMessagesParams,
+        committed: &std::collections::HashSet<String>,
     ) -> Result<ListMessagesResult> {
         let dir = self.mailbox_dir(mailbox)?;
         let Ok(entries) = fs::read_dir(&dir) else {
@@ -150,7 +148,16 @@ impl MailStore for FilesystemMailStore {
             if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
                 continue;
             }
-            messages.push(Self::read_stored(&path)?);
+            let stored = Self::read_stored(&path)?;
+            let id = stored
+                .message
+                .provider_metadata
+                .get(TRANSACTION_METADATA)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if id.is_empty() || committed.contains(id) {
+                messages.push(stored);
+            }
         }
         messages.sort_by(|a, b| {
             a.received_at
@@ -180,7 +187,119 @@ impl MailStore for FilesystemMailStore {
         })
     }
 
+    fn visible(&self, message: &StoredMessage) -> bool {
+        let id = message
+            .message
+            .provider_metadata
+            .get(TRANSACTION_METADATA)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        capture::is_committed(&self.root, id)
+    }
+
+    fn read_stored(path: &Path) -> Result<StoredMessage> {
+        let data = fs::read(path).map_err(|_| Error::MessageNotFound)?;
+        serde_json::from_slice(&data).map_err(|e| Error::InternalError(e.to_string()))
+    }
+
+    fn read_raw(path: &Path) -> Option<Vec<u8>> {
+        fs::read(path).ok()
+    }
+}
+
+impl MailStore for FilesystemMailStore {
+    fn capture_batch(
+        &self,
+        messages: &[(String, Message)],
+        records: &[RepeatabilityRecord],
+    ) -> Result<Option<Vec<Vec<StoredMessage>>>> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
+        let id = capture::new_transaction_id();
+        let mut files = Vec::new();
+        let mut result = Vec::with_capacity(messages.len());
+        for (message_id, message) in messages {
+            let mut targets = message
+                .recipients()
+                .into_iter()
+                .map(crate::mail::Address::mailbox_key)
+                .collect::<Vec<_>>();
+            targets.sort();
+            targets.dedup();
+            if targets.is_empty() {
+                return Err(Error::InvalidRequest(
+                    "message has no recipients".to_string(),
+                ));
+            }
+            targets.insert(0, ALL_MAILBOX.to_string());
+            let mut copies = Vec::new();
+            for mailbox in targets {
+                let (stored, copy_files) =
+                    self.prepare_copy(&mailbox, message_id, message.clone(), &id)?;
+                files.extend(copy_files);
+                if mailbox != ALL_MAILBOX {
+                    copies.push(stored);
+                }
+            }
+            result.push(copies);
+        }
+        for record in records {
+            let mut record = record.clone();
+            record.transaction_id.clone_from(&id);
+            files.push(capture::record_file(&self.root, &record)?);
+        }
+        capture::commit(&self.root, &id, &files)?;
+        Ok(Some(result))
+    }
+
+    fn get_repeatability_record(&self, key: &str) -> Result<Option<RepeatabilityRecord>> {
+        capture::load_record(&self.root, key)
+    }
+
+    fn store_message(
+        &self,
+        mailbox: &str,
+        message_id: &str,
+        message: Message,
+    ) -> Result<StoredMessage> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
+        let id = capture::new_transaction_id();
+        let (stored, files) = self.prepare_copy(mailbox, message_id, message, &id)?;
+        capture::commit(&self.root, &id, &files)?;
+        Ok(stored)
+    }
+
+    fn get_message(&self, mailbox: &str, message_id: &str) -> Result<StoredMessage> {
+        let path = self.message_path(mailbox, message_id)?;
+        let mut stored = Self::read_stored(&path)?;
+        if !self.visible(&stored) {
+            return Err(Error::MessageNotFound);
+        }
+        let raw_path = self.raw_message_path(mailbox, message_id)?;
+        if let Some(raw_mime) = Self::read_raw(&raw_path) {
+            stored.message.raw_mime = Some(raw_mime);
+        }
+        Ok(stored)
+    }
+
+    fn list_messages(
+        &self,
+        mailbox: &str,
+        params: ListMessagesParams,
+    ) -> Result<ListMessagesResult> {
+        self.list_messages_snapshot(mailbox, &params, &capture::committed_snapshot(&self.root)?)
+    }
+
     fn delete_message(&self, mailbox: &str, message_id: &str) -> Result<()> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
         let path = self.message_path(mailbox, message_id)?;
         let raw_path = self.raw_message_path(mailbox, message_id)?;
         match fs::remove_file(&path) {
@@ -196,6 +315,10 @@ impl MailStore for FilesystemMailStore {
     }
 
     fn delete_mailbox(&self, mailbox: &str) -> Result<()> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
         let dir = self.mailbox_dir(mailbox)?;
         match fs::remove_dir_all(&dir) {
             Ok(()) => Ok(()),
@@ -210,6 +333,10 @@ impl MailStore for FilesystemMailStore {
         message_id: &str,
         status: DeliveryStatus,
     ) -> Result<()> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
         let path = self.message_path(mailbox, message_id)?;
         let mut stored = Self::read_stored(&path)?;
         stored.delivery_status = status;
@@ -218,6 +345,7 @@ impl MailStore for FilesystemMailStore {
     }
 
     fn list_mailboxes(&self) -> Result<Vec<MailboxInfo>> {
+        let committed = capture::committed_snapshot(&self.root)?;
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Ok(Vec::new());
         };
@@ -238,11 +366,12 @@ impl MailStore for FilesystemMailStore {
                 }
                 Err(err) => return Err(io_err(&err)),
             };
-            if address == ALL_MAILBOX {
+            if address == ALL_MAILBOX || entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
 
-            let result = self.list_messages(&address, ListMessagesParams::default())?;
+            let result =
+                self.list_messages_snapshot(&address, &ListMessagesParams::default(), &committed)?;
             mailboxes.push(MailboxInfo {
                 address,
                 message_count: result.messages.len(),
@@ -254,6 +383,10 @@ impl MailStore for FilesystemMailStore {
     }
 
     fn ensure_mailbox(&self, mailbox: &str) -> Result<()> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
         self.ensure_mailbox_dir(mailbox)?;
         Ok(())
     }

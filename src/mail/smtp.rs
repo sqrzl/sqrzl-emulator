@@ -104,12 +104,12 @@ where
             continue;
         };
 
+        if let Some(error) = command_argument_error(&command, rest, line.contains(' ')) {
+            write_line(&mut writer, error).await?;
+            continue;
+        }
         match command.as_str() {
             "EHLO" | "HELO" => {
-                if rest.is_empty() || rest.chars().any(char::is_whitespace) {
-                    write_line(&mut writer, "501 Domain/address required").await?;
-                    continue;
-                }
                 greeted = true;
                 transaction = Transaction::default();
                 write_line(&mut writer, "250 sqrzl-emulator").await?;
@@ -125,7 +125,7 @@ where
                         write_line(&mut writer, "250 OK").await?;
                     }
                     None if unsupported_envelope_parameters(rest) => {
-                        write_line(&mut writer, "555 MAIL FROM parameters not supported").await?
+                        write_line(&mut writer, "555 MAIL FROM parameters not supported").await?;
                     }
                     None => write_line(&mut writer, "501 Syntax error in MAIL FROM").await?,
                 }
@@ -139,15 +139,11 @@ where
                     write_line(&mut writer, "250 OK").await?;
                 }
                 None if unsupported_envelope_parameters(rest) => {
-                    write_line(&mut writer, "555 RCPT TO parameters not supported").await?
+                    write_line(&mut writer, "555 RCPT TO parameters not supported").await?;
                 }
                 None => write_line(&mut writer, "501 Syntax error in RCPT TO").await?,
             },
             "DATA" => {
-                if !rest.is_empty() {
-                    write_line(&mut writer, "501 DATA does not accept arguments").await?;
-                    continue;
-                }
                 if transaction.from.is_none() || transaction.recipients.is_empty() {
                     write_line(&mut writer, "503 Bad sequence of commands").await?;
                     continue;
@@ -170,17 +166,11 @@ where
                 }
                 transaction = Transaction::default();
             }
-            "RSET" if !rest.is_empty() => {
-                write_line(&mut writer, "501 RSET does not accept arguments").await?
-            }
             "RSET" => {
                 transaction = Transaction::default();
                 write_line(&mut writer, "250 OK").await?;
             }
             "NOOP" => write_line(&mut writer, "250 OK").await?,
-            "QUIT" if !rest.is_empty() => {
-                write_line(&mut writer, "501 QUIT does not accept arguments").await?
-            }
             "QUIT" => {
                 write_line(&mut writer, "221 Bye").await?;
                 break;
@@ -238,6 +228,18 @@ fn split_command(line: &str) -> Option<(String, &str)> {
     }
     let (command, rest) = line.split_once(' ').unwrap_or((line, ""));
     Some((command.to_ascii_uppercase(), rest.trim()))
+}
+
+fn command_argument_error(command: &str, rest: &str, has_parameters: bool) -> Option<&'static str> {
+    if matches!(command, "EHLO" | "HELO")
+        && (rest.is_empty() || rest.chars().any(char::is_whitespace))
+    {
+        Some("501 Domain/address required")
+    } else if matches!(command, "DATA" | "RSET" | "QUIT") && has_parameters {
+        Some("501 Command does not accept arguments")
+    } else {
+        None
+    }
 }
 
 fn unsupported_envelope_parameters(rest: &str) -> bool {
@@ -664,8 +666,10 @@ mod tests {
             send(&mut client, command).await;
             assert_reply(&mut client, "250").await;
         }
-        send(&mut client, "DATA unexpected-argument").await;
-        assert_reply(&mut client, "501").await;
+        for command in ["DATA unexpected-argument", "DATA ", "DATA  "] {
+            send(&mut client, command).await;
+            assert_reply(&mut client, "501").await;
+        }
         assert!(mail
             .list_messages("alice@example.com", ListMessagesParams::default())
             .unwrap()

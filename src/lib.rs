@@ -3,6 +3,7 @@ pub mod api;
 pub mod auth;
 pub mod blob;
 pub mod body;
+pub mod capture;
 mod compatibility_matrix;
 pub mod config;
 pub mod error;

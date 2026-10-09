@@ -34,6 +34,30 @@ pub const ALL_MAILBOX: &str = "_all";
 /// [`fan_out`], which every capture path (SMTP, and later SendGrid/SES/ACS
 /// adapters) should go through rather than calling `store_message` directly.
 pub trait MailStore: Send + Sync {
+    /// Optional atomic batch publication used by durable capture backends.
+    /// `None` asks the caller to use the legacy rollback-capable path.
+    ///
+    /// # Errors
+    /// Returns an error when validation or durable publication fails.
+    fn capture_batch(
+        &self,
+        _messages: &[(String, Message)],
+        _records: &[crate::capture::RepeatabilityRecord],
+    ) -> Result<Option<Vec<Vec<StoredMessage>>>> {
+        Ok(None)
+    }
+
+    /// Looks up an immutable, provider-scoped repeatability result.
+    ///
+    /// # Errors
+    /// Returns an error when the record cannot be read.
+    fn get_repeatability_record(
+        &self,
+        _key: &str,
+    ) -> Result<Option<crate::capture::RepeatabilityRecord>> {
+        Ok(None)
+    }
+
     ///
     /// # Errors
     ///
@@ -124,12 +148,19 @@ pub fn fan_out<S: MailStore + ?Sized>(store: &S, message: &Message) -> Result<Ve
     fan_out_with_id(store, message, &generate_message_id())
 }
 
-/// Atomically captures every message in one provider request. If any fan-out
-/// fails, all copies created for earlier messages in the batch are removed.
+/// Captures every message in one provider request. Durable backends publish
+/// the batch together; fallback backends roll back copies on returned errors.
 pub(crate) fn fan_out_batch<S: MailStore + ?Sized>(
     store: &S,
     messages: &[Message],
 ) -> Result<Vec<Vec<StoredMessage>>> {
+    let requests = messages
+        .iter()
+        .map(|message| (generate_message_id(), message.clone()))
+        .collect::<Vec<_>>();
+    if let Some(result) = store.capture_batch(&requests, &[])? {
+        return Ok(result);
+    }
     let mut captured: Vec<(String, Vec<String>)> = Vec::with_capacity(messages.len());
     let mut result = Vec::with_capacity(messages.len());
     for message in messages {
@@ -182,6 +213,11 @@ pub(crate) fn fan_out_with_id<S: MailStore + ?Sized>(
     message: &Message,
     message_id: &str,
 ) -> Result<Vec<StoredMessage>> {
+    if let Some(mut captured) =
+        store.capture_batch(&[(message_id.to_string(), message.clone())], &[])?
+    {
+        return Ok(captured.remove(0));
+    }
     let mut mailboxes: Vec<String> = message
         .recipients()
         .into_iter()
