@@ -37,6 +37,8 @@ where
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
     let route = route::parse(&path)?;
+    let gate = storage.operation_gate();
+    let _owner = gate.lock().await;
 
     match route {
         Route::Buckets => match method {
@@ -211,6 +213,7 @@ fn get_bucket(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>
 }
 
 fn delete_bucket(storage: &Arc<dyn Storage>, bucket: &str) -> Result<Response<Body>> {
+    ensure_admin_bucket_mutable(storage, bucket)?;
     tokio::task::block_in_place(|| bucket_service::delete_bucket(storage.as_ref(), bucket))?;
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
@@ -241,6 +244,7 @@ where
     }
 
     let body: VersioningReq = read_json(req).await?;
+    ensure_admin_bucket_mutable(&storage, bucket)?;
     tokio::task::block_in_place(|| {
         bucket_service::set_versioning(storage.as_ref(), bucket, body.enabled)
     })?;
@@ -527,6 +531,7 @@ fn get_object_metadata(
 }
 
 fn delete_object(storage: &Arc<dyn Storage>, bucket: &str, key: &str) -> Result<Response<Body>> {
+    ensure_admin_object_mutable(storage, bucket, key, true)?;
     tokio::task::block_in_place(|| {
         object_service::delete_object(storage.as_ref(), bucket, key)?;
         let versions = storage.list_object_versions_for_key(bucket, key)?;
@@ -569,6 +574,7 @@ where
     if let Err(message) = validation::validate_blob_key(key) {
         return Err(Error::InvalidRequest(message));
     }
+    ensure_admin_object_mutable(&storage, bucket, key, false)?;
     let existed = tokio::task::block_in_place(|| {
         object_service::object_exists(storage.as_ref(), bucket, key)
     })?;
@@ -703,10 +709,44 @@ fn delete_object_version(
     key: &str,
     version_id: &str,
 ) -> Result<Response<Body>> {
+    ensure_admin_object_mutable(storage, bucket, key, true)?;
     tokio::task::block_in_place(|| {
         object_service::delete_object_version(storage.as_ref(), bucket, key, version_id)
     })?;
     Ok(empty_response(StatusCode::NO_CONTENT))
+}
+
+fn ensure_admin_bucket_mutable(storage: &Arc<dyn Storage>, bucket: &str) -> Result<()> {
+    if crate::lifecycle::foreign_provider_data_protection_active(storage.as_ref(), bucket)? {
+        return Err(Error::AccessDenied);
+    }
+    Ok(())
+}
+
+fn ensure_admin_object_mutable(
+    storage: &Arc<dyn Storage>,
+    bucket: &str,
+    key: &str,
+    include_versions: bool,
+) -> Result<()> {
+    ensure_admin_bucket_mutable(storage, bucket)?;
+    let now = chrono::Utc::now();
+    match storage.get_object_metadata(bucket, key) {
+        Ok(object) if crate::lifecycle::object_has_active_data_protection(&object, now) => {
+            return Err(Error::AccessDenied)
+        }
+        Ok(_) | Err(Error::KeyNotFound) => {}
+        Err(error) => return Err(error),
+    }
+    if include_versions
+        && storage
+            .list_object_versions_for_key(bucket, key)?
+            .iter()
+            .any(|version| crate::lifecycle::object_has_active_data_protection(version, now))
+    {
+        return Err(Error::AccessDenied);
+    }
+    Ok(())
 }
 
 async fn put_object_tags<B>(

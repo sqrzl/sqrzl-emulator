@@ -25,6 +25,38 @@ pub use s3::S3Adapter;
 static DATA_PROTECTION_ACTIVATION_LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> =
     OnceLock::new();
 
+/// Azure object-level protection owns its shared bucket namespace while active.
+/// Foreign adapters cannot honor Azure lease IDs or WORM version semantics, so
+/// their operations fail explicitly rather than discarding those attributes.
+pub(crate) fn azure_object_protection_active(storage: &dyn Storage, bucket: &str) -> bool {
+    let now = chrono::Utc::now();
+    let mut marker = None;
+    loop {
+        let page = match storage.list_objects(bucket, None, None, marker.as_deref(), Some(1000)) {
+            Ok(page) => page,
+            Err(crate::Error::BucketNotFound) => return false,
+            Err(_) => return true,
+        };
+        if page
+            .objects
+            .iter()
+            .any(|object| crate::lifecycle::object_has_active_azure_protection(object, now))
+        {
+            return true;
+        }
+        if !page.is_truncated {
+            return false;
+        }
+        let Some(next) = page.next_marker else {
+            return true;
+        };
+        if marker.as_ref() == Some(&next) {
+            return true;
+        }
+        marker = Some(next);
+    }
+}
+
 /// Returns the process-wide activation lock for one provider-shared bucket namespace.
 ///
 /// Provider adapters must hold this lock from their final foreign-owner check through
@@ -119,7 +151,10 @@ impl AdapterRegistry {
                 {
                     return Ok(response);
                 }
+                let gate = storage.operation_gate();
+                let owner = gate.lock().await;
                 let response = adapter.handle(storage, auth_config, req.clone()).await?;
+                drop(owner);
                 return faults::after(&req, response).await;
             }
         }

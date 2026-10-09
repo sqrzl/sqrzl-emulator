@@ -177,17 +177,16 @@ pub async fn bucket_delete(
         if s3_foreign_history_conflict(storage.as_ref(), bucket) {
             return Ok(s3_foreign_history_conflict_response(&req_id));
         }
-        tokio::task::block_in_place(|| bucket_service::delete_bucket(storage.as_ref(), bucket))?;
-        Ok(apply_bucket_cors_headers(
+        let result =
+            tokio::task::block_in_place(|| bucket_service::delete_bucket(storage.as_ref(), bucket));
+        Ok(bucket_delete_response(
+            result,
             storage.as_ref(),
             bucket,
             req,
-            ResponseBuilder::new(StatusCode::NO_CONTENT)
-                .header("x-amz-request-id", &req_id)
-                .header("x-amz-id-2", &header_utils::generate_request_id()),
+            &req_id,
             cors_snapshot.as_deref(),
-        )
-        .empty())
+        ))
     }
 }
 

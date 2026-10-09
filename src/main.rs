@@ -7,7 +7,7 @@ use sqrzl_emulator::error::Result;
 use sqrzl_emulator::mail::{FilesystemMailStore, SmtpServer};
 use sqrzl_emulator::server::Server;
 use sqrzl_emulator::sms::FilesystemSmsStore;
-use sqrzl_emulator::storage::{BucketStore, FilesystemStorage};
+use sqrzl_emulator::storage::{BucketStore, FilesystemStorage, StorageRootWriter};
 use sqrzl_emulator::utils::validation::validate_bucket_name;
 use sqrzl_emulator::{Config, Error};
 
@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
 
     // Initialize storage
     tracing::info!(path = %config.blobs_path, "Using filesystem storage");
+    let _writer = StorageRootWriter::acquire(&config.blobs_path)?;
     let storage = Arc::new(FilesystemStorage::open(&config.blobs_path)?);
     let mail = Arc::new(FilesystemMailStore::open(&config.blobs_path)?);
     let sms = Arc::new(FilesystemSmsStore::open(&config.blobs_path)?);

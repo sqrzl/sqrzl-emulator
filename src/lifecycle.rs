@@ -26,7 +26,7 @@ fn positive_duration_or_invalid(metadata: &HashMap<String, String>, key: &str) -
         .is_some_and(|value| value.parse::<u64>().map_or(true, |value| value > 0))
 }
 
-fn foreign_provider_data_protection_active(
+pub(crate) fn foreign_provider_data_protection_active(
     storage: &dyn Storage,
     bucket: &str,
 ) -> Result<bool, Error> {
@@ -49,7 +49,10 @@ fn parse_lock_timestamp(value: &str) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-fn object_has_active_data_protection(object: &crate::models::Object, now: DateTime<Utc>) -> bool {
+pub(crate) fn object_has_active_data_protection(
+    object: &crate::models::Object,
+    now: DateTime<Utc>,
+) -> bool {
     let s3_legal_hold = object
         .provider_metadata
         .get(S3_OBJECT_LOCK_LEGAL_HOLD_KEY)
@@ -64,6 +67,16 @@ fn object_has_active_data_protection(object: &crate::models::Object, now: DateTi
         && !object
             .provider_metadata
             .contains_key(S3_OBJECT_LOCK_UNTIL_KEY);
+    s3_legal_hold
+        || s3_retention
+        || incomplete_s3_retention
+        || object_has_active_azure_protection(object, now)
+}
+
+pub(crate) fn object_has_active_azure_protection(
+    object: &crate::models::Object,
+    now: DateTime<Utc>,
+) -> bool {
     let azure_legal_hold = object
         .provider_metadata
         .get(AZURE_LEGAL_HOLD_KEY)
@@ -72,8 +85,18 @@ fn object_has_active_data_protection(object: &crate::models::Object, now: DateTi
         .provider_metadata
         .get(AZURE_IMMUTABILITY_UNTIL_KEY)
         .is_some_and(|value| parse_lock_timestamp(value).is_none_or(|until| until > now));
+    let incomplete_azure_retention = object
+        .provider_metadata
+        .contains_key("azure_immutability_mode")
+        && !object
+            .provider_metadata
+            .contains_key(AZURE_IMMUTABILITY_UNTIL_KEY);
+    let azure_lease = object
+        .provider_metadata
+        .get("azure_lease_status")
+        .is_some_and(|status| status != "unlocked");
 
-    s3_legal_hold || s3_retention || incomplete_s3_retention || azure_legal_hold || azure_retention
+    azure_legal_hold || azure_retention || incomplete_azure_retention || azure_lease
 }
 
 /// Check if an object should be deleted due to lifecycle rules
@@ -267,11 +290,22 @@ impl LifecycleExecutor {
             loop {
                 tokio::time::sleep(self.interval).await;
 
-                if let Err(e) = self.execute_lifecycle_rules() {
+                if let Err(e) = self.run_once().await {
                     error!("Failed to execute lifecycle rules: {}", e);
                 }
             }
         })
+    }
+
+    /// Execute one lifecycle pass under the shared storage operation gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when lifecycle state cannot be read or applied.
+    pub async fn run_once(&self) -> Result<(), Error> {
+        let gate = self.storage.operation_gate();
+        let _owner = gate.lock().await;
+        self.execute_lifecycle_rules()
     }
 
     fn execute_lifecycle_rules(&self) -> Result<(), Error> {

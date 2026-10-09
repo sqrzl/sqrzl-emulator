@@ -141,6 +141,9 @@ impl BucketStore for IndexedStorage {
 }
 
 impl ObjectStore for IndexedStorage {
+    fn operation_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner.operation_gate()
+    }
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
         self.inner.put_object(bucket, key.clone(), object)?;
         self.update_index_put(bucket, key);
