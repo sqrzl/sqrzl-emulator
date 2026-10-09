@@ -37,6 +37,24 @@ def _tracked_digest(repo: Path, commit: str, path: str) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _compiler_artifact(output: str) -> dict:
+    records = [json.loads(line) for line in output.splitlines() if line.strip()]
+    binaries = [
+        record
+        for record in records
+        if record.get("reason") == "compiler-artifact"
+        and record.get("target", {}).get("name") == "sqrzl-emulator"
+        and record.get("target", {}).get("kind") == ["bin"]
+        and record.get("target", {}).get("src_path") == str(REPO_ROOT / "src/main.rs")
+        and record.get("executable")
+    ]
+    if len(binaries) != 1:
+        raise RuntimeError(
+            "Cargo must report exactly one sqrzl-emulator executable artifact"
+        )
+    return binaries[0]
+
+
 def build_verified_binary(
     output_dir: Path, *, allow_dirty: bool = False
 ) -> tuple[Path, dict]:
@@ -51,17 +69,27 @@ def build_verified_binary(
         "sqrzl-emulator",
         "--target-dir",
         str(REPO_ROOT / "target"),
+        "--message-format=json-render-diagnostics",
     ]
-    subprocess.run(command, cwd=REPO_ROOT, check=True)
-    after = _snapshot(REPO_ROOT)
+    result = subprocess.run(
+        command, cwd=REPO_ROOT, check=True, stdout=subprocess.PIPE, text=True
+    )
+    artifact = _compiler_artifact(result.stdout)
+    executable = Path(artifact["executable"]).resolve(strict=True)
+    executable_digest = _digest(executable)
     output_dir.mkdir(parents=True, exist_ok=True)
     binary = output_dir / "sqrzl-emulator"
     if binary.exists() or (output_dir / "build-provenance.json").exists():
         raise RuntimeError(
             "qualification build output must be a new immutable artifact"
         )
-    shutil.copyfile(REPO_ROOT / "target/debug/sqrzl-emulator", binary)
+    shutil.copyfile(executable, binary)
     binary.chmod(0o555)
+    if _digest(binary) != executable_digest:
+        raise RuntimeError(
+            "Cargo executable changed while copying the immutable artifact"
+        )
+    after = _snapshot(REPO_ROOT)
     verified = before == after and before["clean"]
     provenance = {
         "schema_version": 1,
@@ -73,6 +101,7 @@ def build_verified_binary(
         "source_verified": verified,
         "build_command": command,
         "build_profile": "debug",
+        "compiler_artifact": artifact,
         "cargo_lock_sha256": _digest(REPO_ROOT / "Cargo.lock"),
         "build_helper_sha256": _digest(Path(__file__)),
         "binary_sha256": _digest(binary),
@@ -131,13 +160,22 @@ def validate_provenance(
             raise ValueError(f"{field} does not match the declared source commit")
     command = provenance.get("build_command", [])
     if (
-        len(command) != 7
+        len(command) != 8
         or command[:6]
         != ["cargo", "build", "--locked", "--bin", "sqrzl-emulator", "--target-dir"]
+        or command[-1] != "--message-format=json-render-diagnostics"
         or provenance.get("build_profile") != "debug"
     ):
         # Keep the builder format explicit; a manually supplied source SHA is insufficient.
         raise ValueError("unexpected qualification build command")
+    artifact = provenance.get("compiler_artifact", {})
+    if (
+        artifact.get("reason") != "compiler-artifact"
+        or artifact.get("target", {}).get("name") != "sqrzl-emulator"
+        or artifact.get("target", {}).get("kind") != ["bin"]
+        or not Path(artifact.get("executable", "")).is_absolute()
+    ):
+        raise ValueError("build provenance lacks the Cargo executable artifact")
     return provenance
 
 

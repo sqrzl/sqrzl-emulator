@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import conftest
+import build_provenance
 from build_provenance import validate_provenance
 
 
@@ -65,8 +66,14 @@ class ProvenanceChecks(unittest.TestCase):
                 "sqrzl-emulator",
                 "--target-dir",
                 str(self.repo / "target"),
+                "--message-format=json-render-diagnostics",
             ],
             "build_profile": "debug",
+            "compiler_artifact": {
+                "reason": "compiler-artifact",
+                "target": {"name": "sqrzl-emulator", "kind": ["bin"]},
+                "executable": str(self.binary),
+            },
             "binary_sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest(),
             "cargo_lock_sha256": hashlib.sha256(
                 (self.repo / "Cargo.lock").read_bytes()
@@ -115,6 +122,43 @@ class ProvenanceChecks(unittest.TestCase):
         self.assertFalse(conftest._BINARY_PROVENANCE["binary_source_verified"])
         self.assertIsNone(conftest._BINARY_PROVENANCE["binary_source_commit"])
         self.assertIsNone(conftest._BINARY_PROVENANCE["build_provenance"])
+
+    def test_target_triple_artifact_wins_over_stale_host_executable(self):
+        host = self.repo / "target/debug/sqrzl-emulator"
+        actual = self.repo / "target/test-triple/debug/sqrzl-emulator"
+        for path, data in [
+            (host, b"stale host executable"),
+            (actual, b"fresh target executable"),
+        ]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        record = {
+            "reason": "compiler-artifact",
+            "target": {
+                "name": "sqrzl-emulator",
+                "kind": ["bin"],
+                "src_path": str(self.repo / "src/main.rs"),
+            },
+            "executable": str(actual),
+            "profile": {"opt_level": "0"},
+        }
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps(record) + "\n")
+        snapshot = self.provenance["source_before"]
+        with (
+            patch.object(build_provenance, "REPO_ROOT", self.repo),
+            patch.object(build_provenance, "_snapshot", return_value=snapshot),
+            patch.object(build_provenance.subprocess, "run", return_value=result),
+            patch.object(
+                build_provenance.subprocess,
+                "check_output",
+                return_value="synthetic compiler",
+            ),
+        ):
+            copied, provenance = build_provenance.build_verified_binary(
+                self.repo / "immutable-target"
+            )
+        self.assertEqual(copied.read_bytes(), b"fresh target executable")
+        self.assertEqual(provenance["compiler_artifact"]["executable"], str(actual))
 
 
 if __name__ == "__main__":
