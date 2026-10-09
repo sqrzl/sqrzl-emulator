@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Collect exact test IDs and report exact-source contract evidence without tier promotion."""
+
 from __future__ import annotations
 
 import argparse
@@ -17,8 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def command(args: list[str], *, env: dict | None = None) -> str:
-    result = subprocess.run(args, cwd=ROOT, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, check=True, env=env)
+    result = subprocess.run(
+        args,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=True,
+        env=env,
+    )
     return result.stdout
 
 
@@ -34,11 +42,22 @@ def rust_records(text: str, *, listing: bool) -> dict[str, str]:
             skip = False
             path = Path(binary[1])
             prefix = f"{path.stem}::" if path.parts[0] == "tests" else ""
-        match = re.fullmatch(r"(\S+): test", line.strip()) if listing else re.fullmatch(
-            r"test (\S+) \.\.\. (ok|FAILED|ignored)(?: .*)?", line.strip())
+        match = (
+            re.fullmatch(r"(\S+): test", line.strip())
+            if listing
+            else re.fullmatch(
+                r"test (\S+) \.\.\. (ok|FAILED|ignored)(?: .*)?", line.strip()
+            )
+        )
         if match and not skip:
             node = prefix + match[1]
-            outcome = "collected" if listing else {"ok": "passed", "FAILED": "failed", "ignored": "skipped"}[match[2]]
+            outcome = (
+                "collected"
+                if listing
+                else {"ok": "passed", "FAILED": "failed", "ignored": "skipped"}[
+                    match[2]
+                ]
+            )
             if node in records and records[node] != outcome:
                 raise ValueError(f"Conflicting outcomes for {node}")
             records[node] = outcome
@@ -51,7 +70,11 @@ def sdk_records(path: Path) -> dict[str, str]:
         # pytest's JUnit classname is the module path. Keep parameter IDs in name.
         module = case.attrib["classname"].replace(".", "/")
         node = module + ".py::" + case.attrib["name"]
-        outcome = "failed" if case.find("failure") is not None or case.find("error") is not None else "skipped" if case.find("skipped") is not None else "passed"
+        outcome = (
+            "failed"
+            if case.find("failure") is not None or case.find("error") is not None
+            else "skipped" if case.find("skipped") is not None else "passed"
+        )
         if node in records:
             raise ValueError(f"Duplicate SDK result {node}")
         records[node] = outcome
@@ -70,14 +93,71 @@ def references(matrix: dict, manifest: dict) -> set[str]:
     return result
 
 
-def evaluate(matrix: dict, manifest: dict, collected: set[str], results: dict[str, str]) -> dict:
+def sdk_result_outcome(result: dict) -> str:
+    """Keep successful preflights distinct from the declared resource scope."""
+    outcome = result["outcome"]
+    if outcome != "passed":
+        return outcome
+    if result.get("qualification_eligible") is False:
+        return "scope-unqualified"
+    if not result["test"].startswith("sdk-tests/test_large_upload_qualification.py::"):
+        return outcome
+    campaign = result.get("properties", {}).get("large_upload_campaign", {})
+    if (
+        campaign.get("payload_bytes") != 1_073_741_824
+        or campaign.get("campaign_kind") != "selected-1GiB-resource-qualification"
+        or campaign.get("completed") is not True
+        or campaign.get("sampler_errors")
+        or campaign.get("sample_count", 0) <= 0
+    ):
+        return "scope-unqualified"
+    for resource in ("client_rss", "service_rss", "owned_disk"):
+        peak = campaign.get(f"{resource}_peak_bytes", 0)
+        budget = campaign.get(f"{resource}_budget_bytes", 0)
+        maximum = 5_368_709_120 if resource == "owned_disk" else 536_870_912
+        if not (0 < peak <= budget <= maximum):
+            return "scope-unqualified"
+    phases = campaign.get("phases", [])
+    names = {phase.get("name") for phase in phases}
+    if (
+        not {
+            "normal-process-restart",
+            "abrupt-process-stop-during-transfer",
+            "abrupt-process-restart",
+            "abort-and-staging-cleanup",
+        }
+        <= names
+    ):
+        return "scope-unqualified"
+    readbacks = [
+        phase for phase in phases if phase.get("name") == "full-range-readback"
+    ]
+    digest = campaign.get("payload_sha256", "")
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or len(readbacks) < 2
+        or any(
+            phase.get("sha256") != digest
+            or phase.get("readback_bytes") != 1_073_741_824
+            for phase in readbacks
+        )
+    ):
+        return "scope-unqualified"
+    return outcome
+
+
+def evaluate(
+    matrix: dict, manifest: dict, collected: set[str], results: dict[str, str]
+) -> dict:
     refs = references(matrix, manifest)
     unknown = sorted(refs - collected)
     if unknown:
         raise ValueError("Uncollected exact test IDs: " + ", ".join(unknown))
     uncollected_results = sorted(set(results) - collected)
     if uncollected_results:
-        raise ValueError("Results do not match collection: " + ", ".join(uncollected_results))
+        raise ValueError(
+            "Results do not match collection: " + ", ".join(uncollected_results)
+        )
     failed = sorted(node for node in refs if results.get(node) == "failed")
     if failed:
         raise ValueError("Referenced tests failed: " + ", ".join(failed))
@@ -87,66 +167,154 @@ def evaluate(matrix: dict, manifest: dict, collected: set[str], results: dict[st
         if entry["id"] in ids:
             raise ValueError(f"Duplicate operation ID {entry['id']}")
         ids.add(entry["id"])
-        if not all(entry.get(field) for field in ("method", "path", "variant", "boundary")):
+        if not all(
+            entry.get(field) for field in ("method", "path", "variant", "boundary")
+        ):
             raise ValueError(f"Incomplete operation boundary {entry['id']}")
         if entry["support_tier"] == "certified":
-            raise ValueError("Tier promotion requires reviewed operation-specific acceptance; this audit runner cannot certify a family")
+            raise ValueError(
+                "Tier promotion requires reviewed operation-specific acceptance; this audit runner cannot certify a family"
+            )
         candidates = set(sum(entry["evidence_candidates"].values(), []))
-        entries.append({"id": entry["id"], "support_tier": entry["support_tier"],
-                        "passed_candidates": sorted(node for node in candidates if results.get(node) == "passed"),
-                        "unproven_candidates": sorted(node for node in candidates if results.get(node) != "passed"),
-                        "acceptance_gates": entry["acceptance_gates"]})
-    scoped_sdk = {node: {**scope, "result": results.get(node, "not-run")}
-                  for node, scope in manifest.get("tests", {}).items()}
-    return {"collected_test_count": len(collected), "reference_count": len(refs),
-            "passed_reference_count": sum(results.get(node) == "passed" for node in refs),
-            "unproven_references": {node: results.get(node, "not-run") for node in sorted(refs) if results.get(node) != "passed"},
-            "operations": entries, "scoped_sdk_assertions": scoped_sdk, "sdk_scope_policy": manifest.get("scope_policy", "No acceptance manifest supplied")}
+        entries.append(
+            {
+                "id": entry["id"],
+                "support_tier": entry["support_tier"],
+                "passed_candidates": sorted(
+                    node for node in candidates if results.get(node) == "passed"
+                ),
+                "unproven_candidates": sorted(
+                    node for node in candidates if results.get(node) != "passed"
+                ),
+                "acceptance_gates": entry["acceptance_gates"],
+            }
+        )
+    scoped_sdk = {
+        node: {**scope, "result": results.get(node, "not-run")}
+        for node, scope in manifest.get("tests", {}).items()
+    }
+    return {
+        "collected_test_count": len(collected),
+        "reference_count": len(refs),
+        "passed_reference_count": sum(results.get(node) == "passed" for node in refs),
+        "unproven_references": {
+            node: results.get(node, "not-run")
+            for node in sorted(refs)
+            if results.get(node) != "passed"
+        },
+        "operations": entries,
+        "scoped_sdk_assertions": scoped_sdk,
+        "sdk_scope_policy": manifest.get(
+            "scope_policy", "No acceptance manifest supplied"
+        ),
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rust-results", type=Path, help="Unedited cargo test stdout/stderr log")
-    parser.add_argument("--sdk-results", type=Path, action="append", default=[], help="pytest JUnit XML; repeat for independent lanes")
-    parser.add_argument("--sdk-evidence", type=Path, action="append", default=[], help="SDK lane JSON with source, auth scope, versions and outcomes")
-    parser.add_argument("--results-source-sha", help="Required with results; must match the checked out HEAD")
+    parser.add_argument(
+        "--rust-results", type=Path, help="Unedited cargo test stdout/stderr log"
+    )
+    parser.add_argument(
+        "--sdk-results",
+        type=Path,
+        action="append",
+        default=[],
+        help="pytest JUnit XML; repeat for independent lanes",
+    )
+    parser.add_argument(
+        "--sdk-evidence",
+        type=Path,
+        action="append",
+        default=[],
+        help="SDK lane JSON with source, auth scope, versions and outcomes",
+    )
+    parser.add_argument(
+        "--results-source-sha",
+        help="Required with results; must match the checked out HEAD",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     head = command(["git", "rev-parse", "HEAD"]).strip()
-    if (args.rust_results or args.sdk_results or args.sdk_evidence) and args.results_source_sha != head:
+    if (
+        args.rust_results or args.sdk_results or args.sdk_evidence
+    ) and args.results_source_sha != head:
         raise ValueError("Results source SHA must equal current HEAD")
     if command(["git", "status", "--porcelain"]).strip():
-        raise ValueError("Commit or isolate all source changes before collecting exact-source evidence")
-    rust = rust_records(command(["cargo", "test", "--lib", "--tests", "--all-features", "--", "--list"]), listing=True)
+        raise ValueError(
+            "Commit or isolate all source changes before collecting exact-source evidence"
+        )
+    rust = rust_records(
+        command(
+            ["cargo", "test", "--lib", "--tests", "--all-features", "--", "--list"]
+        ),
+        listing=True,
+    )
     # Collection hooks also emit artifacts. Never overwrite a completed lane.
     with tempfile.TemporaryDirectory(prefix="sqrzl-contract-collection-") as directory:
-        sdk_text = command([sys.executable, "-m", "pytest", "sdk-tests", "--collect-only", "-q"],
-                           env={**os.environ, "SQRZL_SDK_EVIDENCE": str(Path(directory) / "collection.json")})
-    sdk = {line.strip() for line in sdk_text.splitlines() if line.startswith("sdk-tests/") and "::" in line}
+        sdk_text = command(
+            [sys.executable, "-m", "pytest", "sdk-tests", "--collect-only", "-q"],
+            env={
+                **os.environ,
+                "SQRZL_SDK_EVIDENCE": str(Path(directory) / "collection.json"),
+            },
+        )
+    sdk = {
+        line.strip()
+        for line in sdk_text.splitlines()
+        if line.startswith("sdk-tests/") and "::" in line
+    }
     if not rust or not sdk:
         raise ValueError("Both Rust and SDK collection must succeed and be nonempty")
-    results = rust_records(args.rust_results.read_text(), listing=False) if args.rust_results else {}
+    results = (
+        rust_records(args.rust_results.read_text(), listing=False)
+        if args.rust_results
+        else {}
+    )
     lane_evidence = []
     verified_sdk_results = {}
     sdk_lane_results = {}
     for path in args.sdk_evidence:
         lane = json.loads(path.read_text())
-        if lane.get("source_commit") != head or lane.get("binary_source_commit") != head or lane.get("dirty_worktree") or lane.get("collection_only") or lane.get("exit_status") != 0 or not lane.get("binary_source_verified"):
-            raise ValueError(f"SDK lane is not clean passing exact-head evidence: {path}")
-        lane_evidence.append({key: value for key, value in lane.items() if key != "results"})
+        if (
+            lane.get("source_commit") != head
+            or lane.get("binary_source_commit") != head
+            or lane.get("dirty_worktree")
+            or lane.get("collection_only")
+            or lane.get("exit_status") != 0
+            or not lane.get("binary_source_verified")
+        ):
+            raise ValueError(
+                f"SDK lane is not clean passing exact-head evidence: {path}"
+            )
+        lane_evidence.append(
+            {key: value for key, value in lane.items() if key != "results"}
+        )
         for result in lane["results"]:
-            node, outcome = result["test"], result["outcome"]
+            node, outcome = result["test"], sdk_result_outcome(result)
             sdk_lane_results.setdefault(node, {})[lane["lane"]] = outcome
             prior = verified_sdk_results.get(node)
-            verified_sdk_results[node] = "failed" if "failed" in (prior, outcome) else "passed" if "passed" in (prior, outcome) else outcome
+            verified_sdk_results[node] = (
+                "failed"
+                if "failed" in (prior, outcome)
+                else "passed" if "passed" in (prior, outcome) else outcome
+            )
             old = results.get(node)
-            results[node] = "failed" if "failed" in (old, outcome) else "passed" if "passed" in (old, outcome) else outcome
+            results[node] = (
+                "failed"
+                if "failed" in (old, outcome)
+                else "passed" if "passed" in (old, outcome) else outcome
+            )
     for path in args.sdk_results:
         for node, outcome in sdk_records(path).items():
             # Passing one explicitly scoped lane is evidence for its scope only.
             # A failed lane must never be masked by a pass or skip in another lane.
             old = results.get(node)
-            results[node] = "failed" if "failed" in (old, outcome) else "passed" if "passed" in (old, outcome) else outcome
+            results[node] = (
+                "failed"
+                if "failed" in (old, outcome)
+                else "passed" if "passed" in (old, outcome) else outcome
+            )
     manifest_path = ROOT / "sdk-tests/acceptance-manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     matrix = json.loads((ROOT / "compatibility-matrix.json").read_text())
@@ -154,13 +322,19 @@ def main() -> int:
     for node, assertion in report["scoped_sdk_assertions"].items():
         assertion["result"] = verified_sdk_results.get(node, "no-verified-lane-result")
         assertion["lane_results"] = sdk_lane_results.get(node, {})
-    report.update(schema_version=1, source_sha=head, collected_at=dt.datetime.now(dt.timezone.utc).isoformat(),
-                  sdk_lane_evidence=lane_evidence,
-                  sdk_api_versions=manifest.get("api_versions", {}),
-                  interpretation="Passing evidence candidates do not establish operation acceptance. Skipped, ignored, absent and uncollected tests are never proof. SDK assertions retain their selected scope and auth mode.")
+    report.update(
+        schema_version=1,
+        source_sha=head,
+        collected_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+        sdk_lane_evidence=lane_evidence,
+        sdk_api_versions=manifest.get("api_versions", {}),
+        interpretation="Passing evidence candidates do not establish operation acceptance. Skipped, ignored, absent and uncollected tests are never proof. SDK assertions retain their selected scope and auth mode.",
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
-    print(f"Validated {len(report['operations'])} operations and {report['reference_count']} exact references; {report['passed_reference_count']} references have passing results.")
+    print(
+        f"Validated {len(report['operations'])} operations and {report['reference_count']} exact references; {report['passed_reference_count']} references have passing results."
+    )
     return 0
 
 
