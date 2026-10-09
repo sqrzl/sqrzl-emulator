@@ -2030,16 +2030,17 @@ impl AzureBlobAdapter {
         ))
     }
 
-    fn unsupported_mutation_predicates(req: &Request) -> Option<Response<Body>> {
-        (!matches!(*req.method(), Method::GET | Method::HEAD)
-            && ["if-modified-since", "if-unmodified-since", "x-ms-if-tags"]
-                .iter()
-                .any(|name| req.headers.contains_key(*name)))
+    fn unsupported_operation_predicates(req: &Request) -> Option<Response<Body>> {
+        (req.headers.contains_key("x-ms-if-tags")
+            || (!matches!(*req.method(), Method::GET | Method::HEAD)
+                && ["if-modified-since", "if-unmodified-since"]
+                    .iter()
+                    .any(|name| req.headers.contains_key(*name))))
         .then(|| {
             Self::error_response(
                 StatusCode::NOT_IMPLEMENTED,
                 "FeatureNotSupported",
-                "Date and tag predicates on Azure mutations are not implemented.",
+                "Azure tag predicates and mutation date predicates are not implemented.",
             )
         })
     }
@@ -2076,7 +2077,7 @@ impl AzureBlobAdapter {
         if let Err(response) = Self::authorize(req, auth_config, &resource) {
             return Ok(response);
         }
-        if let Some(response) = Self::unsupported_mutation_predicates(req) {
+        if let Some(response) = Self::unsupported_operation_predicates(req) {
             return Ok(response);
         }
 
@@ -4794,6 +4795,47 @@ mod tests {
                 assert!(adapter.block_sessions.lock().unwrap().is_empty());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn should_reject_unimplemented_azure_tag_predicates_on_block_lists() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("conditions".to_string()).unwrap();
+        storage
+            .put_object(
+                "conditions",
+                "item".to_string(),
+                crate::models::Object::new(
+                    "item".to_string(),
+                    b"original".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let request = parsed_request(
+            "GET",
+            "http://localhost/devstoreaccount1/conditions/item?comp=blocklist&blocklisttype=all",
+            &[
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-if-tags", "\"tag\" = 'value'"),
+            ],
+            b"",
+        )
+        .await;
+        let response = adapter
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(
+            header_value(&response, "x-ms-error-code"),
+            Some("FeatureNotSupported")
+        );
+        assert_eq!(
+            storage.get_object("conditions", "item").unwrap().data,
+            b"original"
+        );
+        assert!(adapter.block_sessions.lock().unwrap().is_empty());
     }
 
     fn auth_disabled() -> Arc<AuthConfig> {

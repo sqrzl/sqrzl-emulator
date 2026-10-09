@@ -73,10 +73,11 @@ def test_azure_conditional_current_snapshot_and_version_reads(sqrzl_server):
     assert blob.download_blob().readall() == b"new"
     assert blob.get_blob_properties(lease=lease).size == 3
     lease.release()
-    with pytest.raises(HttpResponseError) as error:
-        blob.download_blob(if_tags_match_condition='"tag" = \'value\'')
-    assert error.value.status_code == 501
-    assert error.value.error_code == "FeatureNotSupported"
+    for operation in [blob.download_blob, blob.get_block_list]:
+        with pytest.raises(HttpResponseError) as error:
+            operation(if_tags_match_condition='"tag" = \'value\'')
+        assert error.value.status_code == 501
+        assert error.value.error_code == "FeatureNotSupported"
     for operation in [
         lambda: blob.upload_blob(b"bad", overwrite=True, if_unmodified_since=datetime.now(timezone.utc)),
         lambda: blob.set_blob_metadata({"changed": "bad"}, if_modified_since=datetime.now(timezone.utc)),
