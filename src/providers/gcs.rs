@@ -1956,6 +1956,23 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn should_reject_unimplemented_gcs_xml_bucket_create_controls_without_mutation() {
+        let storage = temp_storage();
+        for (headers, body) in [
+            (vec![], b"<CreateBucketConfiguration><LocationConstraint>EU</LocationConstraint></CreateBucketConfiguration>".as_slice()),
+            (vec![("x-goog-acl", "public-read")], b"".as_slice()),
+            (vec![("x-goog-bucket-object-lock-enabled", "true")], b"".as_slice()),
+            (vec![("x-goog-bucket-retention-period", "3600")], b"".as_slice()),
+        ] {
+            let request = parsed_request("PUT", "http://localhost/xml-config", &headers, body).await;
+            let response = GcsAdapter::new().handle_request(&storage, &auth_disabled(), &request).unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+            assert!(String::from_utf8(read_test_body(response).await).unwrap().contains("<Code>NotImplemented</Code>"));
+            assert!(!storage.bucket_exists("xml-config").unwrap());
+        }
+    }
+
     fn temp_storage() -> Arc<dyn Storage> {
         let dir = std::env::temp_dir().join(format!("sqrzl-gcs-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
@@ -5975,6 +5992,17 @@ impl GcsAdapter {
 
         match *req.method() {
             Method::PUT => {
+                if !req.body.is_empty()
+                    || [
+                        "x-goog-acl",
+                        "x-goog-bucket-object-lock-enabled",
+                        "x-goog-bucket-retention-period",
+                    ]
+                    .iter()
+                    .any(|header| req.header(header).is_some())
+                {
+                    return Self::error_response(StatusCode::NOT_IMPLEMENTED, "NotImplemented", "GCS XML bucket configuration bodies, ACLs, and retention headers are not supported; use the supported JSON data-protection fields instead.");
+                }
                 if !Self::valid_bucket_name(bucket) {
                     return Self::error_response(
                         StatusCode::BAD_REQUEST,
