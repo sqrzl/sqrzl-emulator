@@ -1,0 +1,68 @@
+name: Measured large upload qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      providers:
+        description: Comma-separated selected providers (s3,azure,gcs,oci)
+        required: true
+        default: s3,azure,gcs,oci
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  measured-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: "2"
+      SQRZL_RUN_LARGE_UPLOAD_QUALIFICATION: "1"
+      SQRZL_LARGE_UPLOAD_BYTES: "1073741824"
+      SQRZL_LARGE_CLIENT_RSS_BYTES: "536870912"
+      SQRZL_LARGE_SERVICE_RSS_BYTES: "536870912"
+      SQRZL_LARGE_DISK_BYTES: "5368709120"
+      SQRZL_LARGE_SAMPLE_SECONDS: "0.05"
+      SQRZL_MAX_REQUEST_BYTES: "134217728"
+      SQRZL_SDK_ENFORCE_AUTH: "1"
+      SQRZL_SDK_LANE: measured-upload
+      SQRZL_SDK_PROVIDERS: ${{ inputs.providers }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: rustup update stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: measured-upload
+      - name: Validate selected provider scope
+        run: |
+          python - <<'PY'
+          import os
+          selected = {p.strip() for p in os.environ['SQRZL_SDK_PROVIDERS'].split(',')}
+          assert selected and selected <= {'s3', 'azure', 'gcs', 'oci'}, selected
+          PY
+      - name: Install pinned official SDKs
+        run: |
+          python -m pip install -r sdk-tests/requirements.lock
+          python -m pip check
+      - name: Check checksum and interruption oracle
+        run: python sdk-tests/campaign_checks.py
+      - name: Build immutable binary with clean source provenance
+        run: |
+          python sdk-tests/build_provenance.py --output-dir target/measured-binary
+          echo "SQRZL_BINARY=$PWD/target/measured-binary/sqrzl-emulator" >> "$GITHUB_ENV"
+          echo "SQRZL_BINARY_PROVENANCE=$PWD/target/measured-binary/build-provenance.json" >> "$GITHUB_ENV"
+      - name: Measure selected 1 GiB workflows, readback and process recovery
+        run: python -m pytest -q sdk-tests/test_large_upload_qualification.py
+      - name: Preserve measured resource and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: measured-upload-${{ github.sha }}
+          path: |
+            target/sdk-evidence/measured-upload.json
+            target/measured-binary/build-provenance.json
+          retention-days: 30

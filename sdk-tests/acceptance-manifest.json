@@ -477,64 +477,271 @@
     "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification": {
       "provider": "azure",
       "operations": [
-        "large-upload"
+        "PutContainer",
+        "PutBlock",
+        "PutBlockList",
+        "GetBlobProperties",
+        "GetBlob(range)",
+        "GetBlockList",
+        "DeleteBlob",
+        "ListBlobs",
+        "DeleteContainer",
+        "PutBlob"
       ],
       "checks": [
-        "resource-smoke"
+        "positive",
+        "range",
+        "restart",
+        "resource",
+        "interrupted-transfer",
+        "cleanup"
       ],
-      "auth_mode": "functional",
-      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "auth_mode": "native-shared-key",
+      "scope": "selected measured payload only: dense 1GiB, 64MiB parts/chunks, 8MiB range SHA256 readback before/after normal restart, interrupted next-part transfer, acknowledged-part/session recovery, abort/cancel cleanup; sampled RSS and logical disk budgets; smaller payloads are preflight only",
       "operation_checks": {
-        "large-upload": [
-          "resource-smoke"
+        "PutContainer": [
+          "positive"
+        ],
+        "PutBlock": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ],
+        "PutBlockList": [
+          "positive",
+          "resource"
+        ],
+        "GetBlobProperties": [
+          "positive",
+          "restart"
+        ],
+        "GetBlob(range)": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "GetBlockList": [
+          "positive",
+          "restart",
+          "interrupted-transfer"
+        ],
+        "DeleteBlob": [
+          "positive",
+          "cleanup"
+        ],
+        "ListBlobs": [
+          "positive",
+          "cleanup"
+        ],
+        "DeleteContainer": [
+          "positive",
+          "cleanup"
+        ],
+        "PutBlob": [
+          "positive",
+          "cleanup"
         ]
       }
     },
     "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification": {
       "provider": "gcs",
       "operations": [
-        "large-upload"
+        "Bucket.insert",
+        "Object.resumable-start",
+        "Object.resumable-chunk",
+        "Object.get(metadata)",
+        "Object.get(media-range)",
+        "Object.resumable-status",
+        "Object.resumable-cancel",
+        "Object.delete",
+        "Bucket.delete"
       ],
       "checks": [
-        "resource-smoke"
+        "positive",
+        "range",
+        "restart",
+        "resource",
+        "interrupted-transfer",
+        "cleanup"
       ],
       "auth_mode": "local-bearer-convenience",
-      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "scope": "selected measured payload only: dense 1GiB, 64MiB parts/chunks, 8MiB range SHA256 readback before/after normal restart, interrupted next-part transfer, acknowledged-part/session recovery, abort/cancel cleanup; sampled RSS and logical disk budgets; smaller payloads are preflight only",
       "operation_checks": {
-        "large-upload": [
-          "resource-smoke"
+        "Bucket.insert": [
+          "positive"
+        ],
+        "Object.resumable-start": [
+          "positive"
+        ],
+        "Object.resumable-chunk": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ],
+        "Object.get(metadata)": [
+          "positive",
+          "restart"
+        ],
+        "Object.get(media-range)": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "Object.resumable-status": [
+          "positive",
+          "restart",
+          "interrupted-transfer"
+        ],
+        "Object.resumable-cancel": [
+          "positive",
+          "cleanup"
+        ],
+        "Object.delete": [
+          "positive",
+          "cleanup"
+        ],
+        "Bucket.delete": [
+          "positive",
+          "cleanup"
         ]
       }
     },
     "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification": {
       "provider": "oci",
       "operations": [
-        "large-upload"
+        "CreateBucket",
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CommitMultipartUpload",
+        "HeadObject",
+        "GetObject(range)",
+        "AbortMultipartUpload",
+        "DeleteObject",
+        "DeleteBucket"
       ],
       "checks": [
-        "resource-smoke"
+        "positive",
+        "range",
+        "restart",
+        "resource",
+        "interrupted-transfer",
+        "cleanup"
       ],
-      "auth_mode": "functional",
-      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "auth_mode": "native-rsa",
+      "scope": "selected measured payload only: dense 1GiB, 64MiB parts/chunks, 8MiB range SHA256 readback before/after normal restart, interrupted next-part transfer, acknowledged-part/session recovery, abort/cancel cleanup; sampled RSS and logical disk budgets; smaller payloads are preflight only; OCI acknowledged-part recovery is verified through owned filesystem records, not native list APIs",
       "operation_checks": {
-        "large-upload": [
-          "resource-smoke"
+        "CreateBucket": [
+          "positive"
+        ],
+        "CreateMultipartUpload": [
+          "positive"
+        ],
+        "UploadPart": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ],
+        "CommitMultipartUpload": [
+          "positive",
+          "resource"
+        ],
+        "HeadObject": [
+          "positive",
+          "restart"
+        ],
+        "GetObject(range)": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "AbortMultipartUpload": [
+          "positive",
+          "cleanup"
+        ],
+        "DeleteObject": [
+          "positive",
+          "cleanup"
+        ],
+        "DeleteBucket": [
+          "positive",
+          "cleanup"
         ]
       }
     },
     "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification": {
       "provider": "s3",
       "operations": [
-        "large-upload"
+        "CreateBucket",
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CompleteMultipartUpload",
+        "HeadObject",
+        "GetObject(range)",
+        "ListParts",
+        "AbortMultipartUpload",
+        "ListMultipartUploads",
+        "DeleteObject",
+        "DeleteBucket"
       ],
       "checks": [
-        "resource-smoke"
+        "positive",
+        "range",
+        "restart",
+        "resource",
+        "interrupted-transfer",
+        "cleanup"
       ],
-      "auth_mode": "functional",
-      "scope": "Opt-in size smoke checks only; no RSS/disk/interruption qualification is asserted.",
+      "auth_mode": "native-sigv4",
+      "scope": "selected measured payload only: dense 1GiB, 64MiB parts/chunks, 8MiB range SHA256 readback before/after normal restart, interrupted next-part transfer, acknowledged-part/session recovery, abort/cancel cleanup; sampled RSS and logical disk budgets; smaller payloads are preflight only",
       "operation_checks": {
-        "large-upload": [
-          "resource-smoke"
+        "CreateBucket": [
+          "positive"
+        ],
+        "CreateMultipartUpload": [
+          "positive"
+        ],
+        "UploadPart": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ],
+        "CompleteMultipartUpload": [
+          "positive",
+          "resource"
+        ],
+        "HeadObject": [
+          "positive",
+          "restart"
+        ],
+        "GetObject(range)": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "ListParts": [
+          "positive",
+          "restart",
+          "interrupted-transfer"
+        ],
+        "AbortMultipartUpload": [
+          "positive",
+          "cleanup"
+        ],
+        "ListMultipartUploads": [
+          "positive",
+          "cleanup"
+        ],
+        "DeleteObject": [
+          "positive",
+          "cleanup"
+        ],
+        "DeleteBucket": [
+          "positive",
+          "cleanup"
         ]
       }
     },

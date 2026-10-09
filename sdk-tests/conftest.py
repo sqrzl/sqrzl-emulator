@@ -551,6 +551,28 @@ def pytest_sessionfinish(session, exitstatus):
         result["acceptance"] = manifest.get("tests", {}).get(
             result["test"], {"scope": "unmapped"}
         )
+        campaign = result["properties"].get("large_upload_campaign")
+        result["qualification_eligible"] = result["outcome"] == "passed"
+        result["qualification_rejection_reason"] = (
+            None
+            if result["qualification_eligible"]
+            else f"test outcome is {result['outcome']}"
+        )
+        if "resource" in result["acceptance"].get("checks", []):
+            if not isinstance(campaign, dict) or not campaign.get("completed"):
+                result["qualification_eligible"] = False
+                result["qualification_rejection_reason"] = (
+                    "measured campaign did not complete"
+                )
+            elif (
+                campaign.get("payload_bytes") != 1073741824
+                or campaign.get("campaign_kind")
+                != "selected-1GiB-resource-qualification"
+            ):
+                result["qualification_eligible"] = False
+                result["qualification_rejection_reason"] = (
+                    "smaller payload preflight does not qualify the declared 1GiB scope"
+                )
     source = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
     ).strip()

@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sqrzl.dev/schemas/large-upload-campaign-v1.json",
+  "title": "Sqrzl measured upload campaign property v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider",
+    "auth_mode",
+    "campaign_kind",
+    "payload_bytes",
+    "payload_sha256",
+    "payload_generator",
+    "part_bytes",
+    "range_bytes",
+    "configured_request_cap_bytes",
+    "client_rss_budget_bytes",
+    "service_rss_budget_bytes",
+    "owned_disk_budget_bytes",
+    "sample_count",
+    "client_rss_peak_bytes",
+    "service_rss_peak_bytes",
+    "owned_disk_peak_bytes",
+    "rss_sample_interval_seconds",
+    "disk_sample_interval_seconds",
+    "measurement_kind",
+    "elapsed_seconds",
+    "completed",
+    "sampler_errors",
+    "phases",
+    "samples",
+    "recovery_inspection_mode"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "provider": {
+      "enum": [
+        "s3",
+        "azure",
+        "gcs",
+        "oci"
+      ]
+    },
+    "auth_mode": {
+      "enum": [
+        "native-sigv4",
+        "native-shared-key",
+        "local-bearer-convenience",
+        "native-rsa"
+      ]
+    },
+    "campaign_kind": {
+      "enum": [
+        "selected-1GiB-resource-qualification",
+        "smaller-payload-preflight"
+      ]
+    },
+    "payload_bytes": {
+      "type": "integer",
+      "minimum": 268435456,
+      "multipleOf": 67108864
+    },
+    "payload_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "payload_generator": {
+      "type": "string"
+    },
+    "part_bytes": {
+      "const": 67108864
+    },
+    "range_bytes": {
+      "const": 8388608
+    },
+    "configured_request_cap_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "client_rss_budget_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "service_rss_budget_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "owned_disk_budget_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sample_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "client_rss_peak_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "service_rss_peak_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "owned_disk_peak_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rss_sample_interval_seconds": {
+      "type": "number",
+      "minimum": 0.01,
+      "maximum": 0.1
+    },
+    "disk_sample_interval_seconds": {
+      "const": 0.25
+    },
+    "measurement_kind": {
+      "type": "string"
+    },
+    "elapsed_seconds": {
+      "type": "number",
+      "minimum": 0
+    },
+    "completed": {
+      "type": "boolean"
+    },
+    "sampler_errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "elapsed_seconds",
+          "pid"
+        ],
+        "properties": {
+          "name": {
+            "enum": [
+              "payload-generated",
+              "multipart-completed",
+              "block-list-committed",
+              "resumable-completed",
+              "full-range-readback",
+              "normal-process-restart",
+              "abrupt-process-stop-during-transfer",
+              "interrupted-client-error",
+              "abrupt-process-restart",
+              "acknowledged-part-recovered",
+              "acknowledged-block-recovered",
+              "acknowledged-chunk-recovered",
+              "abort-and-staging-cleanup"
+            ]
+          },
+          "elapsed_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "pid": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "samples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "elapsed_seconds",
+          "phase",
+          "client_rss_bytes",
+          "service_pid",
+          "service_rss_bytes",
+          "owned_disk_bytes"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "elapsed_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "phase": {
+            "type": "string"
+          },
+          "client_rss_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "service_pid": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "service_rss_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "owned_disk_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "recovery_inspection_mode": {
+      "enum": [
+        "owned-filesystem-records",
+        "native-session-or-parts-query"
+      ]
+    }
+  }
+}
