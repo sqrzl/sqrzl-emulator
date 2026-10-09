@@ -1837,7 +1837,7 @@ impl AzureBlobAdapter {
                         && !attribute.value.contains(&b'<')
                         && attribute
                             .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
-                            .is_ok()
+                            .is_ok_and(|value| Self::valid_xml_characters(&value))
                 })
             })
     }
@@ -1888,6 +1888,28 @@ impl AzureBlobAdapter {
             b"Uncommitted" => Ok(AzureBlockSelector::Uncommitted),
             _ => Err(AzureBlockListError::InvalidBlockList),
         }
+    }
+
+    fn xml_space(value: &str) -> bool {
+        value
+            .chars()
+            .all(|character| matches!(character, ' ' | '\t' | '\n' | '\r'))
+    }
+
+    fn append_block_text(
+        value: &str,
+        selecting_block: bool,
+        block_id: &mut String,
+    ) -> Result<(), AzureBlockListError> {
+        if !Self::valid_xml_characters(value) {
+            return Err(AzureBlockListError::InvalidXmlDocument);
+        }
+        if selecting_block {
+            block_id.push_str(value);
+        } else if !Self::xml_space(value) {
+            return Err(AzureBlockListError::InvalidBlockList);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)] // One state machine validates XML grammar and block selection before publication.
@@ -1959,13 +1981,46 @@ impl AzureBlobAdapter {
                     let decoded = text
                         .decode()
                         .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
-                    if current_element.is_some() {
+                    if !root_seen || root_closed {
+                        // Outside the root, XML Misc admits literal S only;
+                        // character references and Unicode trim characters are not S.
+                        if !Self::xml_space(&decoded) {
+                            return Err(AzureBlockListError::InvalidXmlDocument);
+                        }
+                    } else {
                         let value = unescape(&decoded)
                             .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
-                        current_block_id.push_str(&value);
-                    } else if !decoded.trim().is_empty() {
-                        return Err(AzureBlockListError::InvalidBlockList);
+                        Self::append_block_text(
+                            &value,
+                            current_element.is_some(),
+                            &mut current_block_id,
+                        )?;
                     }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    if !root_seen || root_closed {
+                        return Err(AzureBlockListError::InvalidXmlDocument);
+                    }
+                    let character = match reference
+                        .resolve_char_ref()
+                        .map_err(|_| AzureBlockListError::InvalidXmlDocument)?
+                    {
+                        Some(character) => character,
+                        None => match reference.as_ref() {
+                            b"lt" => '<',
+                            b"gt" => '>',
+                            b"amp" => '&',
+                            b"apos" => '\'',
+                            b"quot" => '"',
+                            _ => return Err(AzureBlockListError::InvalidXmlDocument),
+                        },
+                    };
+                    let mut encoded = [0; 4];
+                    Self::append_block_text(
+                        character.encode_utf8(&mut encoded),
+                        current_element.is_some(),
+                        &mut current_block_id,
+                    )?;
                 }
                 Ok(Event::CData(text)) if current_element.is_some() => {
                     let decoded = text
@@ -6247,6 +6302,17 @@ mod tests {
             "<?bo@gus allowed?><BlockList/>",
             "<BlockList \u{b7}note='x'/>",
             "<BlockList bogus='\u{fffe}'/>",
+            "<BlockList bogus='&#x1;'/>",
+            "<BlockList bogus='&#xB;'/>",
+            "<BlockList bogus='&#xFFFE;'/>",
+            "<BlockList bogus='&#65535;'/>",
+            "<BlockList>&#x1;</BlockList>",
+            "\u{a0}<BlockList/>",
+            "<BlockList/>\u{a0}",
+            "<BlockList/>\u{85}",
+            "<BlockList/>\u{2000}",
+            "&#x20;<BlockList/>",
+            "<BlockList/>&#x20;",
         ] {
             // Act with malformed XML and the correct lease, so protection cannot mask parsing defects.
             let response = adapter
@@ -6308,7 +6374,7 @@ mod tests {
                     "PUT",
                     &format!("{uri}?comp=blocklist"),
                     &headers,
-                    "\u{feff}<?xml version='1.0' encoding='utf-8' standalone='yes'?><!--valid--><?fixture allowed?><BlockList xmlns='urn:fixture' note='a&amp;b' éxtra='valid\u{fffd}' n·1='value'/>".as_bytes(),
+                    "\u{feff}<?xml version='1.0' encoding='utf-8' standalone='yes'?><!--valid--><?fixture allowed?><BlockList xmlns='urn:fixture' note='a&amp;b' éxtra='valid\u{fffd}' n·1='value' refs='&#x9;&#xFFFD;'>&#x9;&#x20;</BlockList>".as_bytes(),
                 )
                 .await,
             )
@@ -6323,7 +6389,7 @@ mod tests {
                     "PUT",
                     &format!("{uri}?comp=blocklist"),
                     &headers,
-                    b"<BlockList><Uncommitted>YQ==</Uncommitted></BlockList>",
+                    b"<BlockList><Uncommitted>&#x59;Q==</Uncommitted></BlockList>",
                 )
                 .await,
             )
