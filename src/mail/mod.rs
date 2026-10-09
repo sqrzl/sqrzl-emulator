@@ -77,6 +77,27 @@ pub trait MailStore: Send + Sync {
     /// error when the underlying emulator operation fails.
     fn get_message(&self, mailbox: &str, message_id: &str) -> Result<StoredMessage>;
 
+    /// Looks up an existing provider operation without depending on GUID case.
+    ///
+    /// # Errors
+    /// Returns [`Error::MessageNotFound`] when no matching message exists, or a
+    /// storage error when the mailbox cannot be read.
+    fn get_message_case_insensitive(
+        &self,
+        mailbox: &str,
+        message_id: &str,
+    ) -> Result<StoredMessage> {
+        match self.get_message(mailbox, message_id) {
+            Err(Error::MessageNotFound) => {}
+            result => return result,
+        }
+        self.list_messages(mailbox, ListMessagesParams::default())?
+            .messages
+            .into_iter()
+            .find(|stored| stored.message_id.eq_ignore_ascii_case(message_id))
+            .ok_or(Error::MessageNotFound)
+    }
+
     ///
     /// # Errors
     ///
