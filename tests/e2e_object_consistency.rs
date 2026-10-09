@@ -205,7 +205,9 @@ async fn should_return_coherent_object_generations_during_native_http_overwrites
         .collect();
 
     // Assert
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    // Each replacement now syncs a durable publication decision. Allow slow
+    // local filesystems while retaining a finite deadlock/progress deadline.
+    tokio::time::timeout(std::time::Duration::from_secs(90), async {
         writer.await.unwrap();
         for reader in readers {
             reader.await.unwrap();
