@@ -46,16 +46,8 @@ pub(crate) fn verify_sigv4_signature(
                 secret_key: secret_key.to_string(),
             };
             presigned
-                .validate_request(req, &config)
-                .map_err(|message| {
-                    warn!("Presigned URL signature verification failed: {message}");
-                    xml_error_response(
-                        StatusCode::FORBIDDEN,
-                        "SignatureDoesNotMatch",
-                        "The provided signature does not match",
-                        &req_id,
-                    )
-                })?;
+                .validate_request_contract(req, &config)
+                .map_err(|error| presigned_validation_failure(&error, &req_id))?;
             SignatureVerifier::validate_payload(req, "s3")
                 .map_err(|error| request_validation_failure(error, &req_id))?;
             return Ok(true);
@@ -177,6 +169,21 @@ pub(crate) fn verify_sigv4_signature(
     Ok(true)
 }
 
+pub(super) fn presigned_validation_failure(
+    error: &crate::auth::presigned::PresignedValidationError,
+    req_id: &str,
+) -> Response<Body> {
+    use crate::auth::presigned::PresignedValidationError;
+    let (status, code) = match error {
+        PresignedValidationError::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "InvalidRequest"),
+        PresignedValidationError::ClockSkew => (StatusCode::FORBIDDEN, "RequestTimeTooSkewed"),
+        PresignedValidationError::SignatureMismatch(_) => {
+            (StatusCode::FORBIDDEN, "SignatureDoesNotMatch")
+        }
+    };
+    xml_error_response(status, code, &error.to_string(), req_id)
+}
+
 fn request_validation_failure(error: RequestValidationError, req_id: &str) -> Response<Body> {
     let (status, code, message) = match error {
         RequestValidationError::InvalidDate => (
@@ -193,6 +200,11 @@ fn request_validation_failure(error: RequestValidationError, req_id: &str) -> Re
             StatusCode::BAD_REQUEST,
             "XAmzContentSHA256Mismatch",
             "The provided x-amz-content-sha256 does not match the request body",
+        ),
+        RequestValidationError::InvalidPayloadHash => (
+            StatusCode::BAD_REQUEST,
+            "InvalidArgument",
+            "The x-amz-content-sha256 header must be a valid SHA-256 hash or a supported payload signing mode",
         ),
         RequestValidationError::UnsupportedPayload => (
             StatusCode::NOT_IMPLEMENTED,
@@ -242,11 +254,7 @@ pub(crate) fn extract_signed_headers(auth_header: &str) -> Option<Vec<String>> {
     for part in auth_header.split(',') {
         let part = part.trim();
         if let Some(headers) = part.strip_prefix("SignedHeaders=") {
-            let parsed: Vec<String> = headers
-                .split(';')
-                .map(|h| h.trim().to_lowercase())
-                .filter(|h| !h.is_empty())
-                .collect();
+            let parsed: Vec<String> = headers.split(';').map(str::to_string).collect();
             return Some(parsed);
         }
     }

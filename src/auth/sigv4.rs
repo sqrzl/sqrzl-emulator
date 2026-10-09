@@ -20,7 +20,21 @@ pub(crate) enum RequestValidationError {
     InvalidScope,
     InvalidSignedHeaders,
     PayloadMismatch,
+    InvalidPayloadHash,
     UnsupportedPayload,
+}
+
+pub(crate) fn valid_signed_header_names<T: AsRef<str>>(names: &[T]) -> bool {
+    !names.is_empty()
+        && names.iter().all(|name| {
+            let name = name.as_ref();
+            !name.is_empty()
+                && !name.bytes().any(|byte| byte.is_ascii_uppercase())
+                && http::header::HeaderName::from_bytes(name.as_bytes()).is_ok()
+        })
+        && names
+            .windows(2)
+            .all(|pair| pair[0].as_ref() < pair[1].as_ref())
 }
 
 impl SignatureVerifier {
@@ -53,17 +67,11 @@ impl SignatureVerifier {
             .map(|value| ("x-amz-date", value))
             .or_else(|| request.header("date").map(|value| ("date", value)))
             .ok_or(RequestValidationError::InvalidDate)?;
-        let date = if date_header == "x-amz-date" {
-            NaiveDateTime::parse_from_str(raw_date, "%Y%m%dT%H%M%SZ")
-                .ok()
-                .filter(|parsed| parsed.format("%Y%m%dT%H%M%SZ").to_string() == raw_date)
-                .map(|parsed| parsed.and_utc())
-        } else {
-            DateTime::parse_from_rfc2822(raw_date)
-                .ok()
-                .map(|parsed| parsed.with_timezone(&Utc))
-        }
-        .ok_or(RequestValidationError::InvalidDate)?;
+        let date = NaiveDateTime::parse_from_str(raw_date, "%Y%m%dT%H%M%SZ")
+            .ok()
+            .filter(|parsed| parsed.format("%Y%m%dT%H%M%SZ").to_string() == raw_date)
+            .map(|parsed| parsed.and_utc())
+            .ok_or(RequestValidationError::InvalidDate)?;
         // S3 documents a fifteen-minute signing window; other supported AWS
         // services use the general five-minute SigV4 window.
         let window = TimeDelta::minutes(if service == "s3" { 15 } else { 5 });
@@ -81,7 +89,7 @@ impl SignatureVerifier {
         }
         if !signed_headers.iter().any(|name| name == "host")
             || !signed_headers.iter().any(|name| name == date_header)
-            || signed_headers.windows(2).any(|pair| pair[0] >= pair[1])
+            || !valid_signed_header_names(signed_headers)
             || signed_headers
                 .iter()
                 .any(|name| request.header(name).is_none())
@@ -105,7 +113,19 @@ impl SignatureVerifier {
                 return Ok(());
             }
             if provided.len() != 64 || !provided.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Err(RequestValidationError::UnsupportedPayload);
+                return Err(
+                    if matches!(
+                        provided,
+                        "UNSIGNED-PAYLOAD"
+                            | "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+                            | "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+                            | "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+                    ) {
+                        RequestValidationError::UnsupportedPayload
+                    } else {
+                        RequestValidationError::InvalidPayloadHash
+                    },
+                );
             }
             let actual = request
                 .content_sha256_hint()

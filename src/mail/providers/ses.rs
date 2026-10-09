@@ -549,13 +549,8 @@ fn parse_sigv4_credential(auth_header: &str) -> Option<(String, String)> {
 fn parse_sigv4_signed_headers(auth_header: &str) -> Option<Vec<String>> {
     auth_header.split(',').find_map(|part| {
         let part = part.trim();
-        part.strip_prefix("SignedHeaders=").map(|headers| {
-            headers
-                .split(';')
-                .map(|header| header.trim().to_lowercase())
-                .filter(|header| !header.is_empty())
-                .collect()
-        })
+        part.strip_prefix("SignedHeaders=")
+            .map(|headers| headers.split(';').map(str::to_string).collect())
     })
 }
 

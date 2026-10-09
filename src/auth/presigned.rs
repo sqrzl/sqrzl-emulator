@@ -4,6 +4,36 @@ use std::collections::HashMap;
 const REGION: &str = "us-east-1";
 const SERVICE: &str = "s3";
 
+#[derive(Debug)]
+pub(crate) enum PresignedValidationError {
+    InvalidRequest(String),
+    ClockSkew,
+    SignatureMismatch(String),
+}
+
+impl std::fmt::Display for PresignedValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRequest(message) | Self::SignatureMismatch(message) => {
+                formatter.write_str(message)
+            }
+            Self::ClockSkew => formatter.write_str("Presigned URL date is too far in the future"),
+        }
+    }
+}
+
+impl From<String> for PresignedValidationError {
+    fn from(message: String) -> Self {
+        Self::SignatureMismatch(message)
+    }
+}
+
+impl From<&str> for PresignedValidationError {
+    fn from(message: &str) -> Self {
+        Self::SignatureMismatch(message.to_string())
+    }
+}
+
 /// Configuration for presigned URL generation
 #[derive(Clone)]
 pub struct PresignedUrlConfig {
@@ -146,6 +176,9 @@ impl PresignedUrl {
         // Parse date from X-Amz-Date (format: 20240101T120000Z)
         let naive = NaiveDateTime::parse_from_str(amz_date, "%Y%m%dT%H%M%SZ")
             .map_err(|_| "Invalid X-Amz-Date format")?;
+        if naive.format("%Y%m%dT%H%M%SZ").to_string() != *amz_date {
+            return Err("Invalid X-Amz-Date format".to_string());
+        }
         let date = naive.and_utc();
 
         Ok(PresignedUrl {
@@ -169,6 +202,7 @@ impl PresignedUrl {
         let path = format!("/{}/{}", self.bucket, self.key);
         let headers = HashMap::from([("host".to_string(), host.to_string())]);
         self.validate_components(&self.method, &path, &headers, config)
+            .map_err(|error| error.to_string())
     }
 
     /// Validate this presign against the request that carried it.
@@ -182,6 +216,15 @@ impl PresignedUrl {
         request: &dyn crate::auth::HttpRequestLike,
         config: &PresignedUrlConfig,
     ) -> Result<(), String> {
+        self.validate_request_contract(request, config)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn validate_request_contract(
+        &self,
+        request: &dyn crate::auth::HttpRequestLike,
+        config: &PresignedUrlConfig,
+    ) -> Result<(), PresignedValidationError> {
         let headers = request
             .headers()
             .into_iter()
@@ -196,30 +239,34 @@ impl PresignedUrl {
         path: &str,
         headers: &HashMap<String, String>,
         config: &PresignedUrlConfig,
-    ) -> Result<(), String> {
+    ) -> Result<(), PresignedValidationError> {
         if self.query_params.get("X-Amz-Algorithm").map(String::as_str) != Some("AWS4-HMAC-SHA256")
         {
-            return Err("Unsupported or missing X-Amz-Algorithm".to_string());
+            return Err("Unsupported or missing X-Amz-Algorithm".into());
         }
         if !(1..=604_800).contains(&self.expires_in) {
-            return Err("X-Amz-Expires must be between 1 and 604800 seconds".to_string());
+            return Err("X-Amz-Expires must be between 1 and 604800 seconds".into());
         }
 
         let expires_at = self.date + Duration::seconds(self.expires_in);
-        if Utc::now() > expires_at {
-            return Err("Presigned URL has expired".to_string());
+        let now = Utc::now();
+        if self.date > now + Duration::minutes(15) {
+            return Err(PresignedValidationError::ClockSkew);
+        }
+        if now > expires_at {
+            return Err("Presigned URL has expired".into());
         }
 
         let scope = parse_credential_scope(&self.credential)?;
         if scope.access_key != config.access_key {
-            return Err("Presigned URL access key does not match".to_string());
+            return Err("Presigned URL access key does not match".into());
         }
         let date_stamp = self.date.format("%Y%m%d").to_string();
         if scope.date != date_stamp
             || scope.service != SERVICE
             || scope.terminator != "aws4_request"
         {
-            return Err("Invalid credential scope".to_string());
+            return Err("Invalid credential scope".into());
         }
         let amz_date = self.date.format("%Y%m%dT%H%M%SZ").to_string();
         let credential_scope = format!(
@@ -234,18 +281,31 @@ impl PresignedUrl {
             .query_params
             .get("X-Amz-SignedHeaders")
             .ok_or("Missing X-Amz-SignedHeaders")?;
-        let signed_header_names = signed_headers
-            .split(';')
-            .map(|name| name.trim().to_ascii_lowercase())
-            .filter(|name| !name.is_empty())
-            .collect::<Vec<_>>();
-        if !signed_header_names.iter().any(|name| name == "host") {
-            return Err("X-Amz-SignedHeaders must include host".to_string());
+        let signed_header_names = signed_headers.split(';').collect::<Vec<_>>();
+        if !crate::auth::sigv4::valid_signed_header_names(&signed_header_names)
+            || !signed_header_names.contains(&"host")
+            || headers.keys().any(|name| {
+                name.starts_with("x-amz-") && !signed_header_names.contains(&name.as_str())
+            })
+        {
+            return Err("X-Amz-SignedHeaders must contain sorted unique lowercase names including host and every x-amz header".into());
+        }
+        for (query_name, query_value) in &self.query_params {
+            let header_name = query_name.to_ascii_lowercase();
+            if signed_header_names.contains(&header_name.as_str())
+                && headers
+                    .get(&header_name)
+                    .is_some_and(|value| value != query_value)
+            {
+                return Err(PresignedValidationError::InvalidRequest(format!(
+                    "Conflicting signed query parameter and header: {query_name}"
+                )));
+            }
         }
         let mut canonical_headers = String::new();
         for name in &signed_header_names {
             let value = headers
-                .get(name)
+                .get(*name)
                 .ok_or_else(|| format!("Missing signed header: {name}"))?;
             canonical_headers.push_str(name);
             canonical_headers.push(':');
@@ -267,7 +327,7 @@ impl PresignedUrl {
         let expected_sig = hmac_sha256_hex(&signing_key, string_to_sign.as_bytes());
 
         if self.signature != expected_sig {
-            return Err("Invalid signature".to_string());
+            return Err("Invalid signature".into());
         }
 
         Ok(())
