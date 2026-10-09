@@ -27,6 +27,35 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 
 const AZURE_VERSION: &str = "2023-11-03";
+// The partial adapter accepts only these modern wire versions. Their accepted
+// operations share the post-2019-12-12 upload limits and post-2020-12-06 SAS format.
+const AZURE_SUPPORTED_VERSIONS: &[&str] = &[
+    "2023-11-03",
+    "2025-01-05",
+    "2026-04-06",
+    "2026-06-06",
+    "2026-10-06",
+];
+const AZURE_CONTENT_PROPERTIES: &[(&str, &str, &str)] = &[
+    ("cache-control", "azure_cache_control", "Cache-Control"),
+    (
+        "content-encoding",
+        "azure_content_encoding",
+        "Content-Encoding",
+    ),
+    (
+        "content-language",
+        "azure_content_language",
+        "Content-Language",
+    ),
+    (
+        "content-disposition",
+        "azure_content_disposition",
+        "Content-Disposition",
+    ),
+];
+const AZURE_MAX_MATERIALIZED_MUTATION_BYTES: u64 = 64 * 1024 * 1024;
+const AZURE_NATIVE_MAX_PAGE_BLOB_BYTES: u64 = 8 * 1024 * 1024 * 1024 * 1024;
 const AZURE_BLOB_TYPE_KEY: &str = "azure_blob_type";
 const AZURE_LEASE_ID_KEY: &str = "azure_lease_id";
 const AZURE_LEASE_STATE_KEY: &str = "azure_lease_state";
@@ -358,6 +387,42 @@ impl AzureBlobAdapter {
             .to_string()
     }
 
+    fn set_content_properties(req: &Request, object: &mut crate::models::Object) {
+        for (header, key, _) in AZURE_CONTENT_PROPERTIES {
+            let custom_header = if *header == "cache-control" {
+                "x-ms-blob-cache-control".to_string()
+            } else {
+                format!("x-ms-blob-{header}")
+            };
+            if let Some(value) = req.header(&custom_header).or_else(|| req.header(header)) {
+                object
+                    .provider_metadata
+                    .insert((*key).to_string(), value.to_string());
+            }
+        }
+    }
+
+    fn upload_checksum_response(
+        req: &Request,
+        response: ResponseBuilder,
+        block_blob: bool,
+    ) -> ResponseBuilder {
+        let mut response = response;
+        let has_md5 = req.header("content-md5").is_some();
+        if block_blob || has_md5 {
+            response = response.header("content-md5", &BASE64.encode(req.payload_md5()));
+        }
+        let new_block_version = req.query_param("comp") == Some("block")
+            && Self::service_version(req).is_ok_and(|version| version >= "2026-10-06");
+        if block_blob || !has_md5 || new_block_version {
+            response = response.header(
+                "x-ms-content-crc64",
+                &BASE64.encode(req.payload_crc64_nvme().to_be_bytes()),
+            );
+        }
+        response
+    }
+
     fn namespace_etag(namespace: &crate::blob::Namespace) -> String {
         format!(
             "\"{}\"",
@@ -585,7 +650,15 @@ impl AzureBlobAdapter {
             write!(&mut xml, "{}", blob.size).unwrap();
             xml.push_str("</Content-Length><Content-Type>");
             push_escaped_xml(&mut xml, &blob.content_type);
-            xml.push_str("</Content-Type><Etag>\"");
+            xml.push_str("</Content-Type>");
+            for (_, key, element) in AZURE_CONTENT_PROPERTIES {
+                if let Some(value) = blob.provider_metadata.get(*key) {
+                    write!(&mut xml, "<{element}>").unwrap();
+                    push_escaped_xml(&mut xml, value);
+                    write!(&mut xml, "</{element}>").unwrap();
+                }
+            }
+            xml.push_str("<Etag>\"");
             push_escaped_xml(&mut xml, &blob.etag);
             xml.push_str("\"</Etag><BlobType>");
             push_escaped_xml(&mut xml, blob_type);
@@ -1147,6 +1220,11 @@ impl AzureBlobAdapter {
         if let Some(duration) = Self::lease_duration(blob) {
             builder = builder.header("x-ms-lease-duration", duration);
         }
+        for (header, key, _) in AZURE_CONTENT_PROPERTIES {
+            if let Some(value) = blob.provider_metadata.get(*key) {
+                builder = builder.header(header, value);
+            }
+        }
         for (key, value) in &blob.metadata {
             builder = builder.header(&format!("x-ms-meta-{key}"), value);
         }
@@ -1330,6 +1408,7 @@ impl AzureBlobAdapter {
         }
     }
 
+    #[cfg(test)]
     fn sas_string_to_sign(
         resource: &str,
         permissions: &str,
@@ -1359,11 +1438,31 @@ impl AzureBlobAdapter {
         .join("\n")
     }
 
+    #[allow(clippy::too_many_lines)]
     fn validate_sas(
         req: &Request,
         config: &AuthConfig,
         resource: &AzureResource,
     ) -> Result<(), String> {
+        if config.azure_account() != Some(resource.account.as_str()) {
+            return Err("Azure storage account does not match configured credentials".to_string());
+        }
+        // Without trusted peer-IP, access-policy, encryption-scope, or override
+        // implementations these signed constraints must fail closed, not vanish.
+        for field in [
+            "sip", "si", "ses", "rscc", "rscd", "rsce", "rscl", "rsct", "sdd", "ss", "srt",
+            "skoid", "sktid", "skt", "ske", "sks", "skv", "saoid", "suoid", "scid", "skdutid",
+            "sduoid", "srh", "srq",
+        ] {
+            if req
+                .query_param(field)
+                .is_some_and(|value| !value.is_empty())
+            {
+                return Err(format!(
+                    "The SAS field {field} is not supported by this emulator"
+                ));
+            }
+        }
         let signature = req
             .query_param("sig")
             .ok_or_else(|| "Missing SAS signature".to_string())?;
@@ -1374,79 +1473,188 @@ impl AzureBlobAdapter {
         let starts_on = req.query_param("st").unwrap_or("");
         let version = req.query_param("sv").unwrap_or("");
         let resource_type = req.query_param("sr").unwrap_or("");
-
+        let protocol = req.query_param("spr").unwrap_or("");
+        if !AZURE_SUPPORTED_VERSIONS.contains(&version) {
+            return Err("The SAS signing version is not supported by this emulator".to_string());
+        }
+        let mut previous_permission = None;
+        if permissions.is_empty()
+            || permissions.chars().any(|permission| {
+                let Some(index) = "racwdxyltfmeopi".find(permission) else {
+                    return true;
+                };
+                if previous_permission.is_some_and(|previous| index <= previous) {
+                    return true;
+                }
+                previous_permission = Some(index);
+                false
+            })
+        {
+            return Err("Invalid SAS permissions".to_string());
+        }
         let expiry = DateTime::parse_from_rfc3339(expires_on)
-            .or_else(|_| DateTime::parse_from_str(expires_on, "%Y-%m-%dT%H:%M:%SZ"))
             .map_err(|_| "Invalid SAS expiry".to_string())?
             .with_timezone(&Utc);
-
         if Utc::now() > expiry {
             return Err("SAS token has expired".to_string());
         }
         if !starts_on.is_empty() {
             let start = DateTime::parse_from_rfc3339(starts_on)
-                .or_else(|_| DateTime::parse_from_str(starts_on, "%Y-%m-%dT%H:%M:%SZ"))
                 .map_err(|_| "Invalid SAS start time".to_string())?
                 .with_timezone(&Utc);
-            if Utc::now() < start {
-                return Err("SAS token is not valid yet".to_string());
+            if start >= expiry || Utc::now() < start {
+                return Err(
+                    "SAS token is not valid yet or has an invalid time interval".to_string()
+                );
             }
         }
-        if req.query_param("spr") == Some("https")
-            && req.uri.scheme_str().is_some_and(|scheme| scheme != "https")
-        {
-            return Err("SAS token requires HTTPS".to_string());
-        }
-
-        let required_permissions: &[char] = match *req.method() {
-            Method::GET | Method::HEAD => &['r'],
-            Method::DELETE => &['d'],
-            Method::PUT | Method::POST => &['w', 'c'],
-            _ => return Err("SAS token does not permit this method".to_string()),
-        };
-        if !required_permissions
-            .iter()
-            .any(|permission| permissions.contains(*permission))
-        {
-            return Err(format!(
-                "SAS token lacks one of the required permissions: {}",
-                required_permissions.iter().collect::<String>()
-            ));
-        }
-        let expected_resource_type = if resource.blob.is_some() { "b" } else { "c" };
-        if resource_type != expected_resource_type {
-            return Err("SAS resource scope does not match the request".to_string());
-        }
-
-        let canonical_resource = if let Some(container) = &resource.container {
-            if let Some(blob) = &resource.blob {
-                format!("/blob/{}/{}/{}", resource.account, container, blob)
-            } else {
-                format!("/blob/{}/{}", resource.account, container)
+        match protocol {
+            "" | "https,http" => {}
+            "https" => {
+                return Err(
+                    "HTTPS-only SAS tokens are not supported by this HTTP emulator".to_string(),
+                )
             }
+            _ => return Err("Invalid SAS protocol".to_string()),
+        }
+        if !matches!(resource_type, "b" | "c")
+            || resource.container.is_none()
+            || (resource_type == "b" && resource.blob.is_none())
+        {
+            return Err("SAS resource scope is not supported for this request".to_string());
+        }
+        let container = resource
+            .container
+            .as_deref()
+            .expect("SAS container scope validated");
+        let canonical_resource = if resource_type == "b" {
+            format!(
+                "/blob/{}/{}/{}",
+                resource.account,
+                container,
+                resource.blob.as_deref().expect("SAS blob scope validated")
+            )
         } else {
-            format!("/blob/{}", resource.account)
+            format!("/blob/{}/{}", resource.account, container)
         };
-
+        // All accepted versions use the 2020-12-06 format. Rejected optional
+        // fields stay empty; the accepted protocol is signed exactly as supplied.
+        let string_to_sign = [
+            permissions,
+            starts_on,
+            expires_on,
+            &canonical_resource,
+            "",
+            "",
+            protocol,
+            version,
+            resource_type,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+        .join("\n");
         let key = Self::shared_key_secret(config)
             .ok_or_else(|| "Missing Azure shared key".to_string())?;
-        let expected = sign_hmac_base64(
-            &key,
-            &Self::sas_string_to_sign(
-                &canonical_resource,
-                permissions,
-                starts_on,
-                expires_on,
-                version,
-                resource_type,
-            ),
-        )?;
-
+        let expected = sign_hmac_base64(&key, &string_to_sign)?;
         if expected == signature {
             Ok(())
         } else {
             Err("Azure SAS signature mismatch".to_string())
         }
+    }
+
+    fn create_only_sas(req: &Request) -> bool {
+        req.query_param("sig").is_some()
+            && req
+                .query_param("sp")
+                .is_some_and(|permissions| permissions.contains('c') && !permissions.contains('w'))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn authorize_sas_operation(
+        storage: &Arc<dyn Storage>,
+        req: &Request,
+        resource: &AzureResource,
+    ) -> Result<(), Response<Body>> {
+        if req.query_param("sig").is_none() {
+            return Ok(());
+        }
+        let permissions = req.query_param("sp").unwrap_or("");
+        let comp = req.query_param("comp");
+        let required: &[char] =
+            if resource.blob.is_none() || req.query_param("restype") == Some("container") {
+                if req.method() == Method::GET
+                    && comp == Some("list")
+                    && req.query_param("sr") == Some("c")
+                {
+                    &['l']
+                } else {
+                    return Err(Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "AuthorizationPermissionMismatch",
+                    "A service SAS cannot authorize container management or container properties.",
+                ));
+                }
+            } else {
+                let exists = storage
+                    .object_exists(
+                        resource.container.as_deref().unwrap_or_default(),
+                        resource.blob.as_deref().unwrap_or_default(),
+                    )
+                    .map_err(|error| {
+                        Self::error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "InternalError",
+                            &error.to_string(),
+                        )
+                    })?;
+                match (req.method(), comp) {
+                    (&Method::GET | &Method::HEAD, _) => &['r'],
+                    (&Method::DELETE, _) if req.query_param("versionid").is_some() => &['x'],
+                    (&Method::DELETE, Some("immutabilityPolicies"))
+                    | (&Method::PUT, Some("immutabilityPolicies" | "legalhold")) => &['i'],
+                    (&Method::DELETE, _) => &['d'],
+                    (&Method::PUT, Some("snapshot")) => &['c', 'w'],
+                    (&Method::PUT, Some("appendblock")) => &['a', 'w'],
+                    (&Method::PUT, Some("lease"))
+                        if req.header("x-ms-lease-action") == Some("break") =>
+                    {
+                        &['d', 'w']
+                    }
+                    (&Method::PUT, None) if !exists => &['c', 'w'],
+                    (&Method::PUT, Some("block" | "blocklist"))
+                        if !exists
+                            && Self::service_version(req)
+                                .is_ok_and(|version| version >= "2026-04-06") =>
+                    {
+                        &['c', 'w']
+                    }
+                    (&Method::PUT, _) => &['w'],
+                    _ => {
+                        return Err(Self::error_response(
+                            StatusCode::FORBIDDEN,
+                            "AuthorizationPermissionMismatch",
+                            "SAS token does not permit this operation.",
+                        ))
+                    }
+                }
+            };
+        if required
+            .iter()
+            .any(|permission| permissions.contains(*permission))
+        {
+            return Ok(());
+        }
+        Err(Self::error_response(
+            StatusCode::FORBIDDEN,
+            "AuthorizationPermissionMismatch",
+            "SAS token does not grant the permission required by this operation.",
+        ))
     }
 
     #[allow(clippy::result_large_err)]
@@ -1676,20 +1884,67 @@ impl ProviderAdapter for AzureBlobAdapter {
         req: Request,
     ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, String>> + Send + 'a>> {
         let client_request_id = req.header("x-ms-client-request-id").map(str::to_string);
-        let result = self
-            .handle_request(&storage, &auth_config, &req)
-            .map(|response| Self::with_client_request_id(client_request_id.as_deref(), response));
+        let result = match Self::service_version(&req) {
+            Ok(version) => self
+                .handle_request(&storage, &auth_config, &req)
+                .map(|mut response| {
+                    response
+                        .headers_mut()
+                        .insert("x-ms-version", HeaderValue::from_static(version));
+                    Self::with_client_request_id(client_request_id.as_deref(), response)
+                }),
+            Err(response) => Ok(Self::with_client_request_id(
+                client_request_id.as_deref(),
+                response,
+            )),
+        };
         Box::pin(std::future::ready(result))
     }
 }
 
 impl AzureBlobAdapter {
+    #[allow(clippy::result_large_err)]
+    fn service_version(req: &Request) -> Result<&'static str, Response<Body>> {
+        let version = if req.query_param("sig").is_some() {
+            req.query_param("api-version")
+                .or_else(|| req.query_param("sv"))
+        } else {
+            req.header("x-ms-version")
+        }
+        .unwrap_or(AZURE_VERSION);
+        if let Some(version) = AZURE_SUPPORTED_VERSIONS
+            .iter()
+            .find(|supported| **supported == version)
+        {
+            return Ok(version);
+        }
+        let valid_date =
+            version.len() == 10 && chrono::NaiveDate::parse_from_str(version, "%Y-%m-%d").is_ok();
+        Err(Self::error_response(
+            if valid_date { StatusCode::NOT_IMPLEMENTED } else { StatusCode::BAD_REQUEST },
+            if valid_date { "FeatureNotSupported" } else { "InvalidHeaderValue" },
+            "This emulator accepts Azure service versions 2023-11-03, 2025-01-05, 2026-04-06, 2026-06-06 and 2026-10-06.",
+        ))
+    }
+
     fn handle_request(
         &self,
         storage: &Arc<dyn Storage>,
         auth_config: &Arc<AuthConfig>,
         req: &Request,
     ) -> Result<Response<Body>, String> {
+        if let Err(response) = Self::service_version(req) {
+            return Ok(response);
+        }
+        if req.header("x-ms-structured-body").is_some()
+            || req.header("x-ms-structured-content-length").is_some()
+        {
+            return Ok(Self::error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "FeatureNotSupported",
+                "Structured Azure upload bodies are not implemented by this emulator.",
+            ));
+        }
         let resource = match Self::parse_resource(req) {
             Ok(resource) => resource,
             Err(msg) => {
@@ -1726,6 +1981,9 @@ impl AzureBlobAdapter {
             return Ok(response);
         }
         if req.query_param("restype") == Some("container") {
+            if let Err(response) = Self::authorize_sas_operation(storage, req, &resource) {
+                return Ok(response);
+            }
             let mut claims_data_protection = false;
             if req.method() == Method::PUT {
                 let (versioning, soft_delete_days) =
@@ -1873,8 +2131,13 @@ impl AzureBlobAdapter {
             }
             Err(error) => return Err(error.to_string()),
         };
-        if versioning || soft_delete_days.is_some() {
-            if let Err(error) = storage.enable_versioning(container) {
+        let requested_metadata = Self::metadata_from_headers(req);
+        if versioning || soft_delete_days.is_some() || !requested_metadata.is_empty() {
+            if let Err(error) = if versioning || soft_delete_days.is_some() {
+                storage.enable_versioning(container)
+            } else {
+                Ok(())
+            } {
                 return Err(Self::rollback_created_container(
                     storage,
                     container,
@@ -1891,6 +2154,7 @@ impl AzureBlobAdapter {
                     ));
                 }
             };
+            metadata.extend(requested_metadata);
             if versioning {
                 metadata.insert(AZURE_VERSIONING_KEY.to_string(), "true".to_string());
             }
@@ -1967,7 +2231,7 @@ impl AzureBlobAdapter {
                 )?;
                 Ok(Self::empty_response(StatusCode::ACCEPTED))
             }
-            Method::GET => Self::get_container(storage, req, container),
+            Method::GET | Method::HEAD => Self::get_container(storage, req, container),
             _ => Ok(Self::error_response(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "UnsupportedHttpVerb",
@@ -2006,7 +2270,15 @@ impl AzureBlobAdapter {
             Err(crate::error::Error::BucketNotFound) => return Ok(Self::container_not_found()),
             Err(error) => return Err(error.to_string()),
         };
-        Ok(Self::namespace_response(StatusCode::OK, &namespace).empty())
+        let mut response = Self::namespace_response(StatusCode::OK, &namespace)
+            .header("x-ms-lease-status", "unlocked")
+            .header("x-ms-lease-state", "available");
+        for (key, value) in &namespace.metadata {
+            if !key.starts_with("azure_") && !key.starts_with("s3_") && !key.starts_with("gcs_") {
+                response = response.header(&format!("x-ms-meta-{key}"), value);
+            }
+        }
+        Ok(response.empty())
     }
 
     fn azure_list_entries(
@@ -2192,6 +2464,9 @@ impl AzureBlobAdapter {
                     .map_err(|_| "Failed to lock Azure blob mutation".to_string())
             })
             .transpose()?;
+        if let Err(response) = Self::authorize_sas_operation(storage, req, resource) {
+            return Ok(response);
+        }
         let comp = req.query_param("comp");
         if req.method() == Method::PUT && comp == Some("lease") {
             return Self::handle_lease(storage, req, container, blob_key);
@@ -2687,14 +2962,7 @@ impl AzureBlobAdapter {
             .map_err(|_| "Failed to lock Azure block session state".to_string())?
             .insert(session_key, session);
 
-        let mut response = Self::response(StatusCode::CREATED);
-        if let Some(value) = req.header("content-md5") {
-            response = response.header("content-md5", value);
-        }
-        if let Some(value) = req.header("x-ms-content-crc64") {
-            response = response.header("x-ms-content-crc64", value);
-        }
-        Ok(response.empty())
+        Ok(Self::upload_checksum_response(req, Self::response(StatusCode::CREATED), false).empty())
     }
 
     fn validate_transactional_checksum(req: &Request) -> Option<Response<Body>> {
@@ -2755,6 +3023,9 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
+        if let Some(response) = Self::validate_transactional_checksum(req) {
+            return Ok(response);
+        }
         let Ok(xml) = std::str::from_utf8(&req.body) else {
             return Ok(Self::invalid_block_list_response(
                 AzureBlockListError::InvalidXmlDocument,
@@ -2883,10 +3154,15 @@ impl AzureBlobAdapter {
         );
         object.size = total_size;
         Self::set_blob_type(&mut object, "BlockBlob");
+        Self::set_content_properties(req, &mut object);
         if let Some(existing) = existing_blob.as_ref() {
             Self::preserve_active_lease(existing, &mut object);
         }
-        let condition = request_condition.unwrap_or(observed_condition);
+        let condition = if Self::create_only_sas(req) {
+            ObjectCondition::Missing
+        } else {
+            request_condition.unwrap_or(observed_condition)
+        };
         let items = resolved_blocks
             .iter()
             .map(|block| block.item.clone())
@@ -2903,7 +3179,15 @@ impl AzureBlobAdapter {
             )
             .map_err(|error| error.to_string())?
         {
-            return Ok(Self::condition_failed());
+            return Ok(if Self::create_only_sas(req) {
+                Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "AuthorizationPermissionMismatch",
+                    "Create-only SAS cannot overwrite an existing blob.",
+                )
+            } else {
+                Self::condition_failed()
+            });
         }
         for block_id in used_uncommitted {
             session.blocks.remove(&block_id);
@@ -2921,7 +3205,7 @@ impl AzureBlobAdapter {
         if let Some(version_id) = stored.version_id.as_deref() {
             response = response.header("x-ms-version-id", version_id);
         }
-        Ok(response.empty())
+        Ok(Self::upload_checksum_response(req, response, false).empty())
     }
 
     fn load_block_session(
@@ -3189,23 +3473,79 @@ impl AzureBlobAdapter {
         Ok(response.body(body.into_bytes()).build())
     }
 
+    fn materialized_extent_unsupported() -> Response<Body> {
+        Self::error_response(StatusCode::NOT_IMPLEMENTED, "FeatureNotSupported",
+            "This emulator supports page blob extents and materialized append/page mutations up to 64 MiB. Large BlockBlob uploads remain streamed.")
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn bounded_mutation_blob(
+        storage: &Arc<dyn Storage>,
+        container: &str,
+        blob_key: &str,
+        extra_len: u64,
+    ) -> Result<crate::models::Object, Response<Body>> {
+        let map_error = |error: crate::error::Error| match error {
+            crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound => {
+                Self::blob_not_found()
+            }
+            error => Self::error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "InternalError",
+                &error.to_string(),
+            ),
+        };
+        let metadata = storage
+            .get_object_metadata(container, blob_key)
+            .map_err(map_error)?;
+        let within_limit = |size: u64| {
+            size.checked_add(extra_len)
+                .is_some_and(|total| total <= AZURE_MAX_MATERIALIZED_MUTATION_BYTES)
+        };
+        if !within_limit(metadata.size) {
+            return Err(Self::materialized_extent_unsupported());
+        }
+        if metadata.size == 0 {
+            return Ok(metadata);
+        }
+        // A different front door can replace the object after the metadata read.
+        // Cap the coherent range read itself, then recheck its returned identity.
+        let (mut blob, data) = storage
+            .get_object_range(
+                container,
+                blob_key,
+                0,
+                Some(AZURE_MAX_MATERIALIZED_MUTATION_BYTES - 1),
+            )
+            .map_err(map_error)?;
+        if !within_limit(blob.size) {
+            return Err(Self::materialized_extent_unsupported());
+        }
+        blob.data = data;
+        Ok(blob)
+    }
+
     fn append_block(
         storage: &Arc<dyn Storage>,
         req: &Request,
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
-            Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ))
-            }
-            Err(error) => return Err(error.to_string()),
-        };
+        if req.payload_len() > 100 * 1024 * 1024 {
+            return Ok(Self::error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "RequestBodyTooLarge",
+                "Append blocks cannot exceed 100 MiB.",
+            ));
+        }
+        if let Some(response) = Self::validate_transactional_checksum(req) {
+            return Ok(response);
+        }
+        let mut blob =
+            match Self::bounded_mutation_blob(storage, container, blob_key, req.payload_len()) {
+                Ok(blob) => blob,
+                Err(response) => return Ok(response),
+            };
         if let Err(response) = Self::ensure_mutation_allowed(req, &blob) {
             return Ok(response);
         }
@@ -3238,7 +3578,7 @@ impl AzureBlobAdapter {
         }
 
         let stored = storage
-            .get_object(container, blob_key)
+            .get_object_metadata(container, blob_key)
             .map_err(|err| err.to_string())?;
         Ok(Self::response(StatusCode::CREATED)
             .header("etag", &format!("\"{}\"", stored.etag))
@@ -3280,7 +3620,11 @@ impl AzureBlobAdapter {
         let Some((start, end)) = Self::parse_write_range_header(range_header) else {
             return Ok(Self::page_range_error());
         };
-        if start % 512 != 0 || (end + 1) % 512 != 0 {
+        if start % 512 != 0
+            || end
+                .checked_add(1)
+                .is_none_or(|exclusive| exclusive % 512 != 0)
+        {
             return Ok(Self::error_response(
                 StatusCode::BAD_REQUEST,
                 "InvalidPageRange",
@@ -3288,16 +3632,19 @@ impl AzureBlobAdapter {
             ));
         }
 
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        if req.payload_len() > 4 * 1024 * 1024 {
+            return Ok(Self::error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "RequestBodyTooLarge",
+                "Page updates cannot exceed 4 MiB.",
+            ));
+        }
+        if let Some(response) = Self::validate_transactional_checksum(req) {
+            return Ok(response);
+        }
+        let mut blob = match Self::bounded_mutation_blob(storage, container, blob_key, 0) {
             Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ))
-            }
-            Err(error) => return Err(error.to_string()),
+            Err(response) => return Ok(response),
         };
         if let Err(response) = Self::ensure_mutation_allowed(req, &blob) {
             return Ok(response);
@@ -3337,7 +3684,7 @@ impl AzureBlobAdapter {
             return Ok(Self::condition_failed());
         }
         let stored = storage
-            .get_object(container, blob_key)
+            .get_object_metadata(container, blob_key)
             .map_err(|err| err.to_string())?;
         Ok(Self::response(StatusCode::CREATED)
             .header("etag", &format!("\"{}\"", stored.etag))
@@ -3427,6 +3774,7 @@ impl AzureBlobAdapter {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn put_blob(
         &self,
         storage: &Arc<dyn Storage>,
@@ -3483,11 +3831,18 @@ impl AzureBlobAdapter {
         if let Some(existing) = existing_blob.as_ref() {
             Self::preserve_active_lease(existing, &mut object);
         }
-        let condition = match Self::write_condition(req) {
+        let mut condition = match Self::write_condition(req) {
             Ok(condition) => condition,
             Err(response) => return Ok(response),
         };
-        let written = if let Some(payload) = &req.spooled_body {
+        if Self::create_only_sas(req) {
+            condition = Some(ObjectCondition::Missing);
+        }
+        let streamed_payload = req
+            .spooled_body
+            .as_ref()
+            .filter(|_| req.header("x-ms-blob-type") == Some("BlockBlob"));
+        let written = if let Some(payload) = streamed_payload {
             if let Some(condition) = condition.as_ref() {
                 storage
                     .put_object_streamed_if(
@@ -3515,7 +3870,15 @@ impl AzureBlobAdapter {
             true
         };
         if !written {
-            return Ok(Self::condition_failed());
+            return Ok(if Self::create_only_sas(req) {
+                Self::error_response(
+                    StatusCode::FORBIDDEN,
+                    "AuthorizationPermissionMismatch",
+                    "Create-only SAS cannot overwrite an existing blob.",
+                )
+            } else {
+                Self::condition_failed()
+            });
         }
         self.clear_block_upload_state(
             storage,
@@ -3534,7 +3897,11 @@ impl AzureBlobAdapter {
         if let Some(version_id) = stored.version_id.as_deref() {
             response = response.header("x-ms-version-id", version_id);
         }
-        Ok(response.empty())
+        Ok(if Self::blob_type(&stored) == "BlockBlob" {
+            Self::upload_checksum_response(req, response, true).empty()
+        } else {
+            response.empty()
+        })
     }
 
     fn blob_for_type(req: &Request, blob_key: &str) -> crate::models::Object {
@@ -3564,6 +3931,7 @@ impl AzureBlobAdapter {
             )
         };
         Self::set_blob_type(&mut object, blob_type);
+        Self::set_content_properties(req, &mut object);
         object
     }
 
@@ -3613,6 +3981,16 @@ impl AzureBlobAdapter {
                 "The x-ms-blob-content-length header value is invalid.",
             ));
         };
+        if length as u64 > AZURE_NATIVE_MAX_PAGE_BLOB_BYTES {
+            return Some(Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidHeaderValue",
+                "Page blob extent exceeds the native 8 TiB maximum.",
+            ));
+        }
+        if length as u64 > AZURE_MAX_MATERIALIZED_MUTATION_BYTES {
+            return Some(Self::materialized_extent_unsupported());
+        }
         (!length.is_multiple_of(512)).then(|| {
             Self::error_response(
                 StatusCode::BAD_REQUEST,
@@ -4957,9 +5335,9 @@ mod tests {
         storage.create_bucket("sas-blocks".to_string()).unwrap();
         let expiry = "2035-01-01T00:00:00Z";
         let resource = "/blob/devstoreaccount1/sas-blocks/large.bin";
-        let signature = sas_signature(resource, &azure_auth(), "wc", expiry);
+        let signature = sas_signature(resource, &azure_auth(), "cw", expiry);
         let sas = format!(
-            "sp=wc&se={}&sv=2023-11-03&sr=b&sig={}",
+            "sp=cw&se={}&sv=2023-11-03&sr=b&sig={}",
             urlencoding::encode(expiry),
             urlencoding::encode(&signature)
         );
@@ -7422,6 +7800,604 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+
+    #[tokio::test]
+    async fn should_reject_azure_structured_uploads_without_publication() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        for (suffix, headers, body) in [
+            (
+                "",
+                vec![("x-ms-blob-type", "BlockBlob")],
+                b"unframed".as_slice(),
+            ),
+            ("?comp=block&blockid=YQ==", vec![], b"unframed".as_slice()),
+            (
+                "?comp=blocklist",
+                vec![],
+                b"<BlockList></BlockList>".as_slice(),
+            ),
+        ] {
+            let mut headers = headers;
+            headers.extend([
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-structured-body", "XSM/1.0; properties=crc64"),
+                ("x-ms-structured-content-length", "3"),
+            ]);
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("/devstoreaccount1/contracts/blob{suffix}"),
+                        &headers,
+                        body,
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{suffix}");
+            assert_eq!(
+                header_value(&response, "x-ms-error-code"),
+                Some("FeatureNotSupported")
+            );
+            assert!(!storage.object_exists("contracts", "blob").unwrap());
+        }
+        let session = AzureBlobAdapter::blob_state_key("devstoreaccount1", "contracts", "blob");
+        assert!(adapter
+            .load_block_session(&storage, &session)
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn should_validate_azure_service_versions_before_mutation() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        for (version, status) in [
+            ("not-a-version", StatusCode::BAD_REQUEST),
+            ("2026-02-30", StatusCode::BAD_REQUEST),
+            ("2011-08-18", StatusCode::NOT_IMPLEMENTED),
+            ("2099-01-01", StatusCode::NOT_IMPLEMENTED),
+        ] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        "/devstoreaccount1/contracts/blob",
+                        &[("x-ms-version", version), ("x-ms-blob-type", "BlockBlob")],
+                        b"bad",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{version}");
+            assert!(!storage.object_exists("contracts", "blob").unwrap());
+        }
+        let response = adapter
+            .handle(
+                storage,
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    "/devstoreaccount1/contracts/blob",
+                    &[
+                        ("x-ms-version", "2026-10-06"),
+                        ("x-ms-blob-type", "BlockBlob"),
+                    ],
+                    b"good",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(header_value(&response, "x-ms-version"), Some("2026-10-06"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn should_round_trip_azure_content_properties_through_restart_and_block_commit() {
+        let root =
+            std::env::temp_dir().join(format!("sqrzl-azure-properties-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&root));
+        storage.create_bucket("contracts".to_string()).unwrap();
+        let adapter = AzureBlobAdapter::new();
+        let headers = [
+            ("x-ms-version", AZURE_VERSION),
+            ("x-ms-blob-type", "BlockBlob"),
+            ("cache-control", "standard"),
+            ("x-ms-blob-cache-control", "max-age=60"),
+            ("x-ms-blob-content-encoding", "gzip"),
+            ("x-ms-blob-content-language", "en-US"),
+            (
+                "x-ms-blob-content-disposition",
+                "attachment; filename=report.txt",
+            ),
+        ];
+        let response = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    "/devstoreaccount1/contracts/blob",
+                    &headers,
+                    b"hello",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&root));
+        for method in ["HEAD", "GET"] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        method,
+                        "/devstoreaccount1/contracts/blob",
+                        &[("x-ms-version", AZURE_VERSION)],
+                        b"",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            for (key, value) in [
+                ("cache-control", "max-age=60"),
+                ("content-encoding", "gzip"),
+                ("content-language", "en-US"),
+                ("content-disposition", "attachment; filename=report.txt"),
+            ] {
+                assert_eq!(header_value(&response, key), Some(value), "{method}: {key}");
+            }
+        }
+        let response = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    "/devstoreaccount1/contracts/blob?comp=metadata",
+                    &[("x-ms-version", AZURE_VERSION), ("x-ms-meta-owner", "bob")],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    "/devstoreaccount1/contracts/blob?comp=block&blockid=YQ==",
+                    &[("x-ms-version", AZURE_VERSION)],
+                    b"new",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    "/devstoreaccount1/contracts/blob?comp=blocklist",
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-cache-control", "no-cache"),
+                    ],
+                    b"<BlockList><Latest>YQ==</Latest></BlockList>",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response = adapter
+            .handle(
+                storage,
+                auth_disabled(),
+                parsed_request(
+                    "HEAD",
+                    "/devstoreaccount1/contracts/blob",
+                    &[("x-ms-version", AZURE_VERSION)],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(header_value(&response, "cache-control"), Some("no-cache"));
+        assert!(response.headers().get("content-encoding").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_return_server_calculated_azure_upload_checksums() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        for (suffix, body, md5_returned) in [
+            ("", b"hello".as_slice(), true),
+            ("?comp=block&blockid=YQ==", b"hello".as_slice(), false),
+            (
+                "?comp=blocklist",
+                b"<BlockList><Latest>YQ==</Latest></BlockList>".as_slice(),
+                false,
+            ),
+        ] {
+            let req = parsed_request(
+                "PUT",
+                &format!("/devstoreaccount1/contracts/blob{suffix}"),
+                &[
+                    ("x-ms-version", AZURE_VERSION),
+                    ("x-ms-blob-type", "BlockBlob"),
+                ],
+                body,
+            )
+            .await;
+            let md5 = BASE64.encode(req.payload_md5());
+            let crc = BASE64.encode(req.payload_crc64_nvme().to_be_bytes());
+            let response = adapter
+                .handle(storage.clone(), auth_disabled(), req)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            assert_eq!(
+                header_value(&response, "x-ms-content-crc64"),
+                Some(crc.as_str()),
+                "{suffix}"
+            );
+            assert_eq!(
+                header_value(&response, "content-md5"),
+                md5_returned.then_some(md5.as_str()),
+                "{suffix}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn should_serve_azure_container_properties_on_head() {
+        let storage = temp_storage();
+        let created = AzureBlobAdapter::new()
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    "/devstoreaccount1/contracts?restype=container",
+                    &[("x-ms-version", AZURE_VERSION), ("x-ms-meta-owner", "bob")],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let response = AzureBlobAdapter::new()
+            .handle(
+                storage,
+                auth_disabled(),
+                parsed_request(
+                    "HEAD",
+                    "/devstoreaccount1/contracts?restype=container",
+                    &[("x-ms-version", AZURE_VERSION)],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("etag").is_some());
+        assert!(response.headers().get("last-modified").is_some());
+        assert_eq!(header_value(&response, "x-ms-meta-owner"), Some("bob"));
+        assert_eq!(read_test_body(response).await, Vec::<u8>::new());
+    }
+
+    #[tokio::test]
+    async fn should_deny_azure_create_only_sas_overwrites_and_mutation_subresources() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        let auth = azure_auth();
+        let expires = "2035-01-01T00:00:00Z";
+        let signature = sas_signature("/blob/devstoreaccount1/contracts/blob", &auth, "c", expires);
+        let token = format!(
+            "sv={AZURE_VERSION}&sr=b&sp=c&se={}&sig={}",
+            urlencoding::encode(expires),
+            urlencoding::encode(&signature)
+        );
+        let uri = format!("/devstoreaccount1/contracts/blob?{token}");
+        let response = adapter
+            .handle(
+                storage.clone(),
+                auth.clone(),
+                parsed_request(
+                    "PUT",
+                    &uri,
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "BlockBlob"),
+                    ],
+                    b"original",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        for suffix in [
+            "",
+            "&comp=metadata",
+            "&comp=lease",
+            "&comp=block&blockid=YQ==",
+            "&comp=blocklist",
+            "&comp=appendblock",
+            "&comp=page",
+            "&comp=legalhold",
+            "&comp=immutabilityPolicies",
+        ] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth.clone(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}{suffix}"),
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                        ],
+                        b"replacement",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{suffix}");
+            assert_eq!(
+                storage.get_object("contracts", "blob").unwrap().data,
+                b"original"
+            );
+        }
+        let response = adapter
+            .handle(
+                storage,
+                auth,
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}&comp=snapshot"),
+                    &[("x-ms-version", AZURE_VERSION)],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn should_reject_unsupported_azure_sas_constraints_instead_of_ignoring_them() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        let auth = azure_auth();
+        let expires = "2035-01-01T00:00:00Z";
+        let signature = sas_signature("/blob/devstoreaccount1/contracts/blob", &auth, "w", expires);
+        let token = format!(
+            "sv={AZURE_VERSION}&sr=b&sp=w&se={}&sig={}",
+            urlencoding::encode(expires),
+            urlencoding::encode(&signature)
+        );
+        for field in [
+            "sip=192.0.2.1",
+            "si=policy",
+            "ses=scope",
+            "rscc=no-cache",
+            "spr=https",
+        ] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth.clone(),
+                    parsed_request(
+                        "PUT",
+                        &format!("/devstoreaccount1/contracts/blob?{token}&{field}"),
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                        ],
+                        b"bad",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{field}");
+            assert!(!storage.object_exists("contracts", "blob").unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn should_bound_azure_page_extent_before_allocation() {
+        for length in [64 * 1024 * 1024 + 512_u64, 8 * 1024_u64.pow(4) + 512] {
+            let req = parsed_request(
+                "PUT",
+                "/devstoreaccount1/contracts/page",
+                &[
+                    ("x-ms-version", AZURE_VERSION),
+                    ("x-ms-blob-type", "PageBlob"),
+                    ("x-ms-blob-content-length", &length.to_string()),
+                ],
+                b"",
+            )
+            .await;
+            let response = AzureBlobAdapter::validate_blob_create_request(&req).expect(
+                "Oversize extent must be rejected before constructing a zero-filled vector",
+            );
+            assert_eq!(
+                response.status(),
+                if length > 8 * 1024_u64.pow(4) {
+                    StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::NOT_IMPLEMENTED
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn should_bound_azure_existing_mutation_extent_before_loading_bytes() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        for (blob_type, comp) in [("AppendBlob", "appendblock"), ("PageBlob", "page")] {
+            // Admission uses declared metadata before loading body. Keep the test
+            // payload tiny so a regression can never allocate or OOM the runner.
+            let mut object = crate::models::Object::new(
+                "blob".to_string(),
+                vec![0; 512],
+                "application/octet-stream".to_string(),
+            );
+            object.size = 64 * 1024 * 1024 + 512;
+            AzureBlobAdapter::set_blob_type(&mut object, blob_type);
+            storage
+                .put_object("contracts", "blob".to_string(), object.clone())
+                .unwrap();
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("/devstoreaccount1/contracts/blob?comp={comp}"),
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-range", "bytes=0-511"),
+                            ("x-ms-page-write", "update"),
+                        ],
+                        &[1; 512],
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_IMPLEMENTED,
+                "{blob_type}"
+            );
+            let after = storage.get_object_metadata("contracts", "blob").unwrap();
+            assert_eq!(after.etag, object.etag);
+            assert_eq!(after.size, object.size);
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_out_of_order_azure_sas_permissions() {
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        storage
+            .put_object(
+                "contracts",
+                "blob".to_string(),
+                crate::models::Object::new(
+                    "blob".to_string(),
+                    b"original".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let auth = azure_auth();
+        let expires = "2035-01-01T00:00:00Z";
+        let signature = sas_signature(
+            "/blob/devstoreaccount1/contracts/blob",
+            &auth,
+            "wr",
+            expires,
+        );
+        let response = AzureBlobAdapter::new().handle(storage, auth, parsed_request("GET", &format!("/devstoreaccount1/contracts/blob?sv={AZURE_VERSION}&sr=b&sp=wr&se={}&sig={}", urlencoding::encode(expires), urlencoding::encode(&signature)), &[("x-ms-version", AZURE_VERSION)], b"").await).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn should_select_azure_checksum_headers_by_version_and_operation() {
+        let storage = temp_storage();
+        storage.create_bucket("contracts".to_string()).unwrap();
+        let adapter = AzureBlobAdapter::new();
+        for version in ["2023-11-03", "2026-10-06"] {
+            for (suffix, body) in [
+                ("?comp=block&blockid=YQ==", b"checked".as_slice()),
+                (
+                    "?comp=blocklist",
+                    b"<BlockList><Latest>YQ==</Latest></BlockList>".as_slice(),
+                ),
+            ] {
+                let md5 = BASE64.encode(md5::compute(body).0);
+                let request = parsed_request(
+                    "PUT",
+                    &format!("/devstoreaccount1/contracts/blob{suffix}"),
+                    &[("x-ms-version", version), ("content-md5", &md5)],
+                    body,
+                )
+                .await;
+                let crc = BASE64.encode(request.payload_crc64_nvme().to_be_bytes());
+                let response = adapter
+                    .handle(storage.clone(), auth_disabled(), request)
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED);
+                assert_eq!(header_value(&response, "content-md5"), Some(md5.as_str()));
+                assert_eq!(
+                    header_value(&response, "x-ms-content-crc64"),
+                    (version == "2026-10-06" && suffix.starts_with("?comp=block&"))
+                        .then_some(crc.as_str())
+                );
+            }
+        }
+        let response = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    "/devstoreaccount1/contracts/blob?comp=blocklist",
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("content-md5", "AAAAAAAAAAAAAAAAAAAAAA=="),
+                    ],
+                    b"<BlockList><Latest>YQ==</Latest></BlockList>",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            storage.get_object("contracts", "blob").unwrap().data,
+            b"checked"
+        );
     }
 
     async fn read_test_body(response: Response<Body>) -> Vec<u8> {
