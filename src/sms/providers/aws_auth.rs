@@ -49,6 +49,9 @@ pub(super) fn authorized(request: &RequestExt, config: &AuthConfig, service: &st
     else {
         return false;
     };
+    if SignatureVerifier::validate_request(request, &scope, &signed_headers, service).is_err() {
+        return false;
+    }
     let canonical = canonical_request(request, &signed_headers);
     SignatureVerifier::verify(
         &signature,

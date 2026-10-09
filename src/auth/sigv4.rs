@@ -1,3 +1,5 @@
+use crate::auth::HttpRequestLike;
+use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
@@ -11,8 +13,115 @@ pub struct SigV4Config {
 /// AWS Signature Version 4 verifier
 pub struct SignatureVerifier;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestValidationError {
+    InvalidDate,
+    ClockSkew,
+    InvalidScope,
+    InvalidSignedHeaders,
+    PayloadMismatch,
+    UnsupportedPayload,
+}
+
 impl SignatureVerifier {
-    /// Verify an AWS `SigV4` signature
+    /// Validate the request contract before verifying its HMAC. Cryptographic
+    /// verification alone does not establish freshness or payload integrity.
+    pub(crate) fn validate_request(
+        request: &dyn HttpRequestLike,
+        credential_scope: &str,
+        signed_headers: &[String],
+        service: &str,
+    ) -> Result<(), RequestValidationError> {
+        Self::validate_request_at(
+            request,
+            credential_scope,
+            signed_headers,
+            service,
+            Utc::now(),
+        )
+    }
+
+    fn validate_request_at(
+        request: &dyn HttpRequestLike,
+        credential_scope: &str,
+        signed_headers: &[String],
+        service: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), RequestValidationError> {
+        let (date_header, raw_date) = request
+            .header("x-amz-date")
+            .map(|value| ("x-amz-date", value))
+            .or_else(|| request.header("date").map(|value| ("date", value)))
+            .ok_or(RequestValidationError::InvalidDate)?;
+        let date = if date_header == "x-amz-date" {
+            NaiveDateTime::parse_from_str(raw_date, "%Y%m%dT%H%M%SZ")
+                .ok()
+                .filter(|parsed| parsed.format("%Y%m%dT%H%M%SZ").to_string() == raw_date)
+                .map(|parsed| parsed.and_utc())
+        } else {
+            DateTime::parse_from_rfc2822(raw_date)
+                .ok()
+                .map(|parsed| parsed.with_timezone(&Utc))
+        }
+        .ok_or(RequestValidationError::InvalidDate)?;
+        // S3 documents a fifteen-minute signing window; other supported AWS
+        // services use the general five-minute SigV4 window.
+        let window = TimeDelta::minutes(if service == "s3" { 15 } else { 5 });
+        if date < now - window || date > now + window {
+            return Err(RequestValidationError::ClockSkew);
+        }
+        let scope = credential_scope.split('/').collect::<Vec<_>>();
+        if scope.len() != 4
+            || scope[0] != date.format("%Y%m%d").to_string()
+            || scope[1].is_empty()
+            || scope[2] != service
+            || scope[3] != "aws4_request"
+        {
+            return Err(RequestValidationError::InvalidScope);
+        }
+        if !signed_headers.iter().any(|name| name == "host")
+            || !signed_headers.iter().any(|name| name == date_header)
+            || signed_headers.windows(2).any(|pair| pair[0] >= pair[1])
+            || signed_headers
+                .iter()
+                .any(|name| request.header(name).is_none())
+            || request.headers().iter().any(|(name, _)| {
+                name.starts_with("x-amz-")
+                    && name != "x-amz-content-sha256"
+                    && !signed_headers.iter().any(|signed| signed == name)
+            })
+        {
+            return Err(RequestValidationError::InvalidSignedHeaders);
+        }
+        Self::validate_payload(request, service)
+    }
+
+    pub(crate) fn validate_payload(
+        request: &dyn HttpRequestLike,
+        service: &str,
+    ) -> Result<(), RequestValidationError> {
+        if let Some(provided) = request.header("x-amz-content-sha256") {
+            if provided == "UNSIGNED-PAYLOAD" && service == "s3" {
+                return Ok(());
+            }
+            if provided.len() != 64 || !provided.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(RequestValidationError::UnsupportedPayload);
+            }
+            let actual = request
+                .content_sha256_hint()
+                .map_or_else(|| Self::sha256_hex(request.body()), str::to_string);
+            if !Self::constant_time_compare(
+                provided.to_ascii_lowercase().as_bytes(),
+                actual.as_bytes(),
+            ) {
+                return Err(RequestValidationError::PayloadMismatch);
+            }
+        }
+        Ok(())
+    }
+
+    /// Verify the cryptographic AWS `SigV4` signature. Request callers must
+    /// separately validate timestamp, credential scope, headers and body.
     #[must_use]
     pub fn verify(
         signature: &str,

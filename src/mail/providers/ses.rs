@@ -201,6 +201,11 @@ impl SesEmailAdapter {
         if amz_date.is_empty() || !signed_headers.iter().any(|name| name == "host") {
             return false;
         }
+        if SignatureVerifier::validate_request(req, &credential_scope, &signed_headers, "ses")
+            .is_err()
+        {
+            return false;
+        }
 
         let canonical_request = build_canonical_request(req, &signed_headers);
         let sigv4_config = SigV4Config {
@@ -690,7 +695,10 @@ mod tests {
 
     async fn request_with_signature(body: &str, access_key: &str, secret_key: &str) -> MailRequest {
         let body_payload = body.as_bytes().to_vec();
-        let amz_date = "20260101T120000Z";
+        let now = chrono::Utc::now();
+        let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let stamp = now.format("%Y%m%d").to_string();
+        let payload_hash = sha256_hex(&body_payload);
         let canonical_headers = vec![
             "host".to_string(),
             "x-amz-content-sha256".to_string(),
@@ -703,8 +711,8 @@ mod tests {
                     .uri("http://localhost/v2/email/outbound-emails")
                     .header("authorization", "placeholder")
                     .header("host", "localhost:9000")
-                    .header("x-amz-date", amz_date)
-                    .header("x-amz-content-sha256", "UNSIGNED-PAYLOAD")
+                    .header("x-amz-date", &amz_date)
+                    .header("x-amz-content-sha256", &payload_hash)
                     .body(Body::from(body_payload.clone()))
                     .expect("request should build"),
             )
@@ -712,10 +720,10 @@ mod tests {
             .expect("request should parse"),
             &canonical_headers,
         );
-        let signature = sign_signature(secret_key, &canonical_request, "20260101", amz_date);
+        let signature = sign_signature(secret_key, &canonical_request, &stamp, &amz_date);
 
         let auth_header = format!(
-            "AWS4-HMAC-SHA256 Credential={access_key}/20260101/us-east-1/ses/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}"
+            "AWS4-HMAC-SHA256 Credential={access_key}/{stamp}/us-east-1/ses/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}"
         );
 
         crate::server::RequestExt::from_hyper(
@@ -724,8 +732,8 @@ mod tests {
                 .uri("http://localhost/v2/email/outbound-emails")
                 .header("authorization", auth_header)
                 .header("host", "localhost:9000")
-                .header("x-amz-date", amz_date)
-                .header("x-amz-content-sha256", "UNSIGNED-PAYLOAD")
+                .header("x-amz-date", &amz_date)
+                .header("x-amz-content-sha256", &payload_hash)
                 .header("content-type", "application/json")
                 .body(Body::from(body_payload))
                 .expect("request should build"),

@@ -124,7 +124,9 @@ impl AcsEmailAdapter {
         ) else {
             return false;
         };
-        if content_hash != acs_hmac::content_hash(&req.body) {
+        if !acs_hmac::timestamp_is_current(date)
+            || content_hash != acs_hmac::content_hash(&req.body)
+        {
             return false;
         }
 
@@ -739,7 +741,7 @@ mod tests {
         body: &str,
         access_key: &str,
     ) -> MailRequest {
-        let date = "Thu, 07 Aug 2026 12:00:00 GMT";
+        let date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
         let host = "localhost";
         let content_hash = acs_hmac::content_hash(body.as_bytes());
         let parsed_uri: Uri = uri.parse().expect("ACS test URI should parse");
@@ -759,7 +761,7 @@ mod tests {
                 .method(method)
                 .uri(uri)
                 .header("host", host)
-                .header("x-ms-date", date)
+                .header("x-ms-date", &date)
                 .header("x-ms-content-sha256", content_hash)
                 .header("content-type", "application/json")
                 .header(

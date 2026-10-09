@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use chrono::{DateTime, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
@@ -37,6 +38,24 @@ pub fn parse_connection_string(value: &str) -> Option<ConnectionString> {
 #[must_use]
 pub fn content_hash(value: &[u8]) -> String {
     BASE64.encode(Sha256::digest(value))
+}
+
+/// Validate the signed RFC1123 timestamp. The local ACS HMAC contract uses a
+/// fifteen-minute clock-skew limit independently of the five-minute request
+/// repeatability window; this does not claim native OAuth/RBAC equivalence.
+#[must_use]
+pub fn timestamp_is_current(value: &str) -> bool {
+    timestamp_is_current_at(value, Utc::now())
+}
+
+fn timestamp_is_current_at(value: &str, now: DateTime<Utc>) -> bool {
+    let Ok(date) = DateTime::parse_from_rfc2822(value) else {
+        return false;
+    };
+    let date = date.with_timezone(&Utc);
+    date.format("%a, %d %b %Y %H:%M:%S GMT").to_string() == value
+        && date >= now - TimeDelta::minutes(15)
+        && date <= now + TimeDelta::minutes(15)
 }
 
 /// Sign an ACS canonical request using the base64-decoded connection-string key.
