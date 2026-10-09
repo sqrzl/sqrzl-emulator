@@ -32,6 +32,8 @@ const OCI_CONTENT_ENCODING_KEY: &str = "oci-content-encoding";
 const OCI_CACHE_CONTROL_KEY: &str = "oci-cache-control";
 const OCI_CONTENT_DISPOSITION_KEY: &str = "oci-content-disposition";
 const OCI_BUCKET_STORAGE_TIER_KEY: &str = "oci-storage-tier";
+const OCI_BUCKET_COMPARTMENT_KEY: &str = "oci-compartment-id";
+const OCI_BUCKET_METADATA_KEY: &str = "oci-bucket-user-metadata";
 const OCI_NAMESPACE: &str = "sqrzl-emulator";
 const OCI_MAX_OBJECT_SIZE: u64 = 10 * 1024 * 1024 * 1024 * 1024;
 const OCI_MAX_PART_SIZE: u64 = 50 * 1024 * 1024 * 1024;
@@ -42,6 +44,14 @@ const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
 const S3_OBJECT_LOCK_ENABLED_KEY: &str = "s3_object_lock_enabled";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
 const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
+
+#[derive(Clone, Copy)]
+enum JsonFieldKind {
+    String,
+    Boolean,
+    StringMap,
+    NestedObjectMap,
+}
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct OciPreauthenticatedRequest {
@@ -200,6 +210,146 @@ impl OciAdapter {
         Self::error_response(StatusCode::BAD_REQUEST, "InvalidParameter", message)
     }
 
+    fn validate_document(
+        payload: &serde_json::Value,
+        schema: &[(&str, JsonFieldKind)],
+    ) -> Option<Response<Body>> {
+        let Some(fields) = payload.as_object() else {
+            return Some(Self::invalid_parameter(
+                "The request body must be a JSON object.",
+            ));
+        };
+        for (name, value) in fields {
+            let Some((_, kind)) = schema.iter().find(|(field, _)| name == field) else {
+                return Some(Self::invalid_parameter(&format!(
+                    "Unknown request field: {name}."
+                )));
+            };
+            let valid = match kind {
+                JsonFieldKind::String => value.is_string(),
+                JsonFieldKind::Boolean => value.is_boolean(),
+                JsonFieldKind::StringMap => value
+                    .as_object()
+                    .is_some_and(|map| map.values().all(serde_json::Value::is_string)),
+                JsonFieldKind::NestedObjectMap => value
+                    .as_object()
+                    .is_some_and(|map| map.values().all(serde_json::Value::is_object)),
+            };
+            if !valid {
+                return Some(Self::invalid_parameter(&format!(
+                    "Invalid JSON type for field {name}."
+                )));
+            }
+        }
+        None
+    }
+
+    fn validate_bucket_document(payload: &serde_json::Value) -> Option<Response<Body>> {
+        use JsonFieldKind::{Boolean, NestedObjectMap, String, StringMap};
+        // CreateBucketDetails native fields. Controls lacking local semantics
+        // remain explicit errors, including requests for their default values.
+        let schema = [
+            ("name", String),
+            ("compartmentId", String),
+            ("storageTier", String),
+            ("metadata", StringMap),
+            ("publicAccessType", String),
+            ("objectEventsEnabled", Boolean),
+            ("freeformTags", StringMap),
+            ("definedTags", NestedObjectMap),
+            ("kmsKeyId", String),
+            ("isBucketKeyEnabled", Boolean),
+            ("versioning", String),
+            ("autoTiering", String),
+            ("bucketScope", String),
+        ];
+        if let Some(response) = Self::validate_document(payload, &schema) {
+            return Some(response);
+        }
+        if let Some(field) = payload.as_object().unwrap().keys().find(|field| {
+            !matches!(
+                field.as_str(),
+                "name" | "compartmentId" | "storageTier" | "metadata"
+            )
+        }) {
+            return Some(Self::error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "NotImplemented",
+                &format!("Bucket field {field} is not supported by this emulator."),
+            ));
+        }
+        if payload
+            .get("compartmentId")
+            .is_some_and(|value| value.as_str() == Some(""))
+        {
+            return Some(Self::invalid_parameter(
+                "The compartmentId cannot be empty.",
+            ));
+        }
+        if payload
+            .get("metadata")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|map| {
+                map.iter()
+                    .map(|(key, value)| key.len() + value.as_str().unwrap().len())
+                    .sum::<usize>()
+                    > 4096
+            })
+        {
+            return Some(Self::invalid_parameter(
+                "Bucket user metadata may not exceed 4096 bytes.",
+            ));
+        }
+        None
+    }
+
+    fn validate_multipart_document(payload: &serde_json::Value) -> Option<Response<Body>> {
+        use JsonFieldKind::{String, StringMap};
+        let schema = [
+            ("object", String),
+            ("storageTier", String),
+            ("contentType", String),
+            ("metadata", StringMap),
+            ("cacheControl", String),
+            ("contentDisposition", String),
+            ("contentEncoding", String),
+            ("contentLanguage", String),
+        ];
+        if let Some(response) = Self::validate_document(payload, &schema) {
+            return Some(response);
+        }
+        for (field, value) in payload.as_object().unwrap() {
+            if matches!(
+                field.as_str(),
+                "contentType"
+                    | "cacheControl"
+                    | "contentDisposition"
+                    | "contentEncoding"
+                    | "contentLanguage"
+            ) && http::HeaderValue::from_str(value.as_str().unwrap()).is_err()
+            {
+                return Some(Self::invalid_parameter(&format!(
+                    "Field {field} must be a valid HTTP header value."
+                )));
+            }
+        }
+        if let Some(metadata) = payload
+            .get("metadata")
+            .and_then(serde_json::Value::as_object)
+        {
+            for (key, value) in metadata {
+                if http::HeaderName::from_bytes(format!("opc-meta-{key}").as_bytes()).is_err()
+                    || http::HeaderValue::from_str(value.as_str().unwrap()).is_err()
+                {
+                    return Some(Self::invalid_parameter(
+                        "Multipart metadata must contain valid HTTP metadata names and values.",
+                    ));
+                }
+            }
+        }
+        None
+    }
+
     fn valid_bucket_name(name: &str) -> bool {
         !name.is_empty()
             && name.len() <= 256
@@ -302,15 +452,29 @@ impl OciAdapter {
         storage: &Arc<dyn Storage>,
         bucket: &str,
         storage_tier: &str,
+        payload: &serde_json::Value,
     ) -> Result<(), crate::error::Error> {
         storage.create_namespace(bucket.to_string())?;
-        if let Err(error) = storage.update_bucket_metadata(
-            bucket,
-            HashMap::from([(
-                OCI_BUCKET_STORAGE_TIER_KEY.to_string(),
-                storage_tier.to_string(),
-            )]),
-        ) {
+        let mut metadata = HashMap::from([(
+            OCI_BUCKET_STORAGE_TIER_KEY.to_string(),
+            storage_tier.to_string(),
+        )]);
+        if let Some(compartment) = payload
+            .get("compartmentId")
+            .and_then(serde_json::Value::as_str)
+        {
+            metadata.insert(
+                OCI_BUCKET_COMPARTMENT_KEY.to_string(),
+                compartment.to_string(),
+            );
+        }
+        if let Some(user_metadata) = payload.get("metadata") {
+            metadata.insert(
+                OCI_BUCKET_METADATA_KEY.to_string(),
+                user_metadata.to_string(),
+            );
+        }
+        if let Err(error) = storage.update_bucket_metadata(bucket, metadata) {
             let rollback = storage.delete_namespace(bucket);
             return Err(crate::error::Error::InternalError(match rollback {
                 Ok(()) => error.to_string(),
@@ -378,19 +542,6 @@ impl OciAdapter {
                     .map(|key| (key.to_string(), value))
             })
             .collect()
-    }
-
-    fn metadata_from_json(value: Option<&serde_json::Value>) -> HashMap<String, String> {
-        value
-            .and_then(|value| value.as_object())
-            .map(|map| {
-                map.iter()
-                    .filter_map(|(key, value)| {
-                        value.as_str().map(|value| (key.clone(), value.to_string()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     fn normalize_etag(value: &str) -> &str {
@@ -1176,6 +1327,9 @@ impl OciAdapter {
                 ))
             }
         };
+        if let Some(response) = Self::validate_bucket_document(&payload) {
+            return Ok(response);
+        }
         let Some(bucket) = payload.get("name").and_then(|value| value.as_str()) else {
             return Ok(Self::invalid_parameter("The bucket name is required."));
         };
@@ -1193,7 +1347,7 @@ impl OciAdapter {
                 "The storageTier value must be Standard or Archive.",
             ));
         }
-        if let Err(error) = Self::create_bucket(storage, bucket, storage_tier) {
+        if let Err(error) = Self::create_bucket(storage, bucket, storage_tier, &payload) {
             if matches!(error, crate::error::Error::BucketAlreadyExists) {
                 return Ok(Self::error_response(
                     StatusCode::CONFLICT,
@@ -1209,6 +1363,8 @@ impl OciAdapter {
                 "name": bucket,
                 "namespace": namespace,
                 "storageTier": storage_tier,
+                "compartmentId": payload.get("compartmentId"),
+                "metadata": payload.get("metadata").cloned().unwrap_or_else(|| serde_json::json!({})),
             })
             .to_string(),
         ))
@@ -1262,6 +1418,8 @@ impl OciAdapter {
                         "namespace": namespace,
                         "storageTier": storage_tier,
                         "timeCreated": namespace_record.created_at.to_rfc3339(),
+                        "compartmentId": namespace_record.metadata.get(OCI_BUCKET_COMPARTMENT_KEY),
+                        "metadata": namespace_record.metadata.get(OCI_BUCKET_METADATA_KEY).map(|value| serde_json::from_str::<serde_json::Value>(value)).transpose().map_err(|error| error.to_string())?.unwrap_or_else(|| serde_json::json!({})),
                     })
                     .to_string(),
                 ))
@@ -1336,6 +1494,9 @@ impl OciAdapter {
                 ))
             }
         };
+        if let Some(response) = Self::validate_multipart_document(&payload) {
+            return Ok(response);
+        }
         let Some(object) = payload.get("object").and_then(|value| value.as_str()) else {
             return Ok(Self::invalid_parameter("The object name is required."));
         };
@@ -1381,7 +1542,23 @@ impl OciAdapter {
             .get("contentType")
             .and_then(|value| value.as_str())
             .map(std::string::ToString::to_string);
-        let metadata = Self::metadata_from_json(payload.get("metadata"));
+        let metadata = payload
+            .get("metadata")
+            .map(|value| serde_json::from_value::<HashMap<String, String>>(value.clone()))
+            .transpose()
+            .map_err(|error| crate::error::Error::InvalidRequest(error.to_string()))?
+            .unwrap_or_default();
+        let mut provider_metadata = Self::multipart_provider_metadata(storage_tier);
+        for (field, key) in [
+            ("cacheControl", OCI_CACHE_CONTROL_KEY),
+            ("contentDisposition", OCI_CONTENT_DISPOSITION_KEY),
+            ("contentEncoding", OCI_CONTENT_ENCODING_KEY),
+            ("contentLanguage", OCI_CONTENT_LANGUAGE_KEY),
+        ] {
+            if let Some(value) = payload.get(field).and_then(serde_json::Value::as_str) {
+                provider_metadata.insert(key.to_string(), value.to_string());
+            }
+        }
         storage
             .as_ref()
             .create_upload_session(CreateUploadSessionRequest {
@@ -1389,7 +1566,7 @@ impl OciAdapter {
                 key: object.to_string(),
                 content_type,
                 metadata,
-                provider_metadata: Self::multipart_provider_metadata(storage_tier),
+                provider_metadata,
             })
     }
 
@@ -2279,6 +2456,292 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(storage.get_namespace("bad bucket!").is_err());
+    }
+
+    #[tokio::test]
+    async fn should_reject_unsupported_oci_bucket_configuration_before_mutation() {
+        let storage = temp_storage();
+        for (field, value) in [
+            ("versioning", serde_json::json!("Enabled")),
+            ("kmsKeyId", serde_json::json!("key")),
+            ("isBucketKeyEnabled", serde_json::json!(true)),
+            ("publicAccessType", serde_json::json!("ObjectRead")),
+            ("freeformTags", serde_json::json!({"owner": "test"})),
+            (
+                "definedTags",
+                serde_json::json!({"operations": {"owner": "test"}}),
+            ),
+            ("objectEventsEnabled", serde_json::json!(true)),
+            ("autoTiering", serde_json::json!("InfrequentAccess")),
+            ("bucketScope", serde_json::json!("REGION")),
+            ("lifecycle", serde_json::json!({})),
+            ("retentionRules", serde_json::json!([])),
+        ] {
+            let mut payload = serde_json::json!({"name": "unsupported-config", "compartmentId": "local-compartment"});
+            payload[field] = value;
+            let request = parsed_request(
+                "POST",
+                "http://localhost/n/sqrzl-emulator/b",
+                &[],
+                &serde_json::to_vec(&payload).unwrap(),
+            )
+            .await;
+            let response = OciAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            let unknown = matches!(field, "lifecycle" | "retentionRules");
+            assert_oci_error_response(
+                response,
+                if unknown {
+                    StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::NOT_IMPLEMENTED
+                },
+                if unknown {
+                    "InvalidParameter"
+                } else {
+                    "NotImplemented"
+                },
+            )
+            .await;
+            assert!(
+                !storage.bucket_exists("unsupported-config").unwrap(),
+                "{field}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_malformed_oci_bucket_documents_before_defaults_or_mutation() {
+        let storage = temp_storage();
+        for field in ["storageTier", "compartmentId", "metadata"] {
+            for value in [
+                serde_json::Value::Null,
+                serde_json::json!(123),
+                serde_json::json!([]),
+            ] {
+                let mut payload = serde_json::json!({"name": "invalid-config"});
+                payload[field] = value;
+                let request = parsed_request(
+                    "POST",
+                    "http://localhost/n/sqrzl-emulator/b",
+                    &[],
+                    &serde_json::to_vec(&payload).unwrap(),
+                )
+                .await;
+                let response = OciAdapter::new()
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap();
+                assert_oci_error_response(response, StatusCode::BAD_REQUEST, "InvalidParameter")
+                    .await;
+                assert!(!storage.bucket_exists("invalid-config").unwrap());
+            }
+        }
+        for payload in [
+            serde_json::json!([]),
+            serde_json::json!({"name": "invalid-config", "unexpected": true}),
+            serde_json::json!({"name": "invalid-config", "metadata": {"valid": "yes", "invalid": 123}}),
+        ] {
+            let request = parsed_request(
+                "POST",
+                "http://localhost/n/sqrzl-emulator/b",
+                &[],
+                &serde_json::to_vec(&payload).unwrap(),
+            )
+            .await;
+            let response = OciAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_oci_error_response(response, StatusCode::BAD_REQUEST, "InvalidParameter").await;
+            assert!(!storage.bucket_exists("invalid-config").unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_malformed_oci_multipart_documents_before_sessions() {
+        let storage = temp_storage();
+        storage
+            .create_bucket("typed-multipart".to_string())
+            .unwrap();
+        for field in [
+            "contentType",
+            "storageTier",
+            "metadata",
+            "cacheControl",
+            "contentDisposition",
+            "contentEncoding",
+            "contentLanguage",
+        ] {
+            for value in [
+                serde_json::Value::Null,
+                serde_json::json!(123),
+                serde_json::json!([]),
+            ] {
+                let mut payload = serde_json::json!({"object": "test.bin"});
+                payload[field] = value;
+                let request = parsed_request(
+                    "POST",
+                    "http://localhost/n/sqrzl-emulator/b/typed-multipart/u",
+                    &[],
+                    &serde_json::to_vec(&payload).unwrap(),
+                )
+                .await;
+                let response = OciAdapter::new()
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap();
+                assert_oci_error_response(response, StatusCode::BAD_REQUEST, "InvalidParameter")
+                    .await;
+                assert!(storage
+                    .list_multipart_uploads("typed-multipart")
+                    .unwrap()
+                    .is_empty());
+            }
+        }
+        for payload in [
+            serde_json::json!({"object":"test.bin", "metadata":{"valid":"yes", "invalid":123}}),
+            serde_json::json!({"object":"test.bin", "unexpected":true}),
+        ] {
+            let request = parsed_request(
+                "POST",
+                "http://localhost/n/sqrzl-emulator/b/typed-multipart/u",
+                &[],
+                &serde_json::to_vec(&payload).unwrap(),
+            )
+            .await;
+            let response = OciAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_oci_error_response(response, StatusCode::BAD_REQUEST, "InvalidParameter").await;
+            assert!(storage
+                .list_multipart_uploads("typed-multipart")
+                .unwrap()
+                .is_empty());
+        }
+        for payload in [
+            serde_json::json!({"object":"test.bin", "contentType":"text/plain\r\nInjected: yes"}),
+            serde_json::json!({"object":"test.bin", "metadata":{"owner":"test\r\nInjected: yes"}}),
+            serde_json::json!({"object":"test.bin", "metadata":{"bad key":"test"}}),
+        ] {
+            let request = parsed_request(
+                "POST",
+                "http://localhost/n/sqrzl-emulator/b/typed-multipart/u",
+                &[],
+                &serde_json::to_vec(&payload).unwrap(),
+            )
+            .await;
+            let response = OciAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_oci_error_response(response, StatusCode::BAD_REQUEST, "InvalidParameter").await;
+            assert!(storage
+                .list_multipart_uploads("typed-multipart")
+                .unwrap()
+                .is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn should_preserve_oci_multipart_content_properties_through_completion_and_restart() {
+        let base =
+            std::env::temp_dir().join(format!("sqrzl-oci-properties-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        storage
+            .create_bucket("property-bucket".to_string())
+            .unwrap();
+        let request = parsed_request("POST", "http://localhost/n/sqrzl-emulator/b/property-bucket/u", &[], br#"{"object":"test.bin","contentType":"text/plain","cacheControl":"no-cache","contentDisposition":"inline","contentEncoding":"gzip","contentLanguage":"en","metadata":{"owner":"sdk"}}"#).await;
+        let response = OciAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&read_test_body(response).await).unwrap();
+        let id = body["uploadId"].as_str().unwrap();
+        let etag = storage
+            .upload_part("property-bucket", id, 1, b"data".to_vec())
+            .unwrap();
+        // Restart both before and after completion; properties are session state,
+        // then durable object metadata, never inferred from the completion request.
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let commit = serde_json::json!({"partsToCommit":[{"partNum":1,"etag":etag}]});
+        let request = parsed_request(
+            "POST",
+            &format!(
+                "http://localhost/n/sqrzl-emulator/b/property-bucket/u/test.bin?uploadId={id}"
+            ),
+            &[],
+            &serde_json::to_vec(&commit).unwrap(),
+        )
+        .await;
+        let response = OciAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        for method in ["GET", "HEAD"] {
+            let request = parsed_request(
+                method,
+                "http://localhost/n/sqrzl-emulator/b/property-bucket/o/test.bin",
+                &[],
+                b"",
+            )
+            .await;
+            let response = OciAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            for (header, value) in [
+                ("content-type", "text/plain"),
+                ("cache-control", "no-cache"),
+                ("content-disposition", "inline"),
+                ("content-encoding", "gzip"),
+                ("content-language", "en"),
+                ("opc-meta-owner", "sdk"),
+            ] {
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(header)
+                        .and_then(|value| value.to_str().ok()),
+                    Some(value)
+                );
+            }
+        }
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_round_trip_typed_oci_bucket_metadata_and_compartment_after_restart() {
+        let base =
+            std::env::temp_dir().join(format!("sqrzl-oci-bucket-fields-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let request = parsed_request("POST", "http://localhost/n/sqrzl-emulator/b", &[], br#"{"name":"roundtrip-bucket","compartmentId":"local-compartment","metadata":{"owner":"sdk"},"storageTier":"Archive"}"#).await;
+        let response = OciAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let request = parsed_request(
+            "GET",
+            "http://localhost/n/sqrzl-emulator/b/roundtrip-bucket",
+            &[],
+            b"",
+        )
+        .await;
+        let response = OciAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&read_test_body(response).await).unwrap();
+        assert_eq!(body["compartmentId"], "local-compartment");
+        assert_eq!(body["metadata"], serde_json::json!({"owner":"sdk"}));
+        assert_eq!(body["storageTier"], "Archive");
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
     }
 
     fn temp_storage() -> Arc<dyn Storage> {
