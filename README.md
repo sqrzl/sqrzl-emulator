@@ -242,9 +242,12 @@ sessions reclaim their staged files. This is a local emulator contract, not a
 claim that a single Sqrzl instance has enough disk for every theoretical vendor
 maximum.
 
-The official-SDK harness includes an opt-in 8 GiB-per-provider qualification.
-It creates a sparse source file, uploads with 64 MiB parts/chunks, verifies the
-stored size, and deletes the object:
+The historical opt-in harness defaults to 8 GiB per provider. That size is a
+requested workload, not passing resource evidence. The separate measured
+campaign records payload size, service/client RSS and disk budgets, complete
+bounded-range digest readback, restart/interruption and staging cleanup. See
+[large-upload qualification](docs/large-upload-qualification.md). Run the
+selected harness with:
 
 ```bash
 SQRZL_RUN_LARGE_UPLOAD_QUALIFICATION=1 \
@@ -254,6 +257,14 @@ python -m pytest sdk-tests/test_large_upload_qualification.py
 
 Set `SQRZL_LARGE_UPLOAD_BYTES` to a smaller byte count for a quick harness
 smoke. Keep it above 64 MiB to exercise multipart behavior on every provider.
+
+S3 direct PUT accepts the selected additional checksum algorithms. Plain S3
+multipart uploads require boto3's `request_checksum_calculation="when_required"`
+configuration; the SDK-default CRC32 UploadPart variant is explicitly rejected.
+Whole materialized S3/Azure reads, copies and selected payload-rewriting Azure
+operations have a 64 MiB local cap; metadata-only HEAD and bounded ranges can
+inspect larger objects. Azure page/append extents share that local cap. Native
+admission constants above do not establish cloud-capacity qualification.
 
 For lease and compare-and-swap qualification, the GCS JSON endpoint supports
 `ifGenerationMatch` (including create-only value `0`) on uploads and conditional
@@ -371,7 +382,8 @@ OCI list paging treats `start` as inclusive and `startAfter` as exclusive,
 counts common prefixes toward `limit`, and returns the next unreturned name in
 `nextStartWith`. OCI request correlation echoes a valid
 `opc-client-request-id`, while malformed Signature authorization is rejected as
-`401 NotAuthenticated` and a valid RSA-SHA256 shape is explicitly unsupported.
+`401 NotAuthenticated`. Configured tenancy/user/fingerprint identity and the RSA
+public key verify the selected native RSA-SHA256 request signature contract.
 Object and multipart paths are decoded exactly once without collapsing empty
 key components. Version-scoped object requests, conditional multipart
 completion, and selective multipart commits are rejected explicitly without

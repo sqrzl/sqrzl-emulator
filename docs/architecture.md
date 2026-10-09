@@ -79,7 +79,7 @@ flowchart TB
 ```mermaid
 flowchart TD
     Request["HTTP request on API port"]
-    Streamable{"S3 object PUT or UploadPart?"}
+    Streamable{"Selected S3, Azure, GCS or OCI data upload?"}
     Stream["spool_request<br/>stream to disk + hash"]
     Parse["Request::from_hyper_with_max_body<br/>buffer control payload"]
     BodyLimit{"Body exceeds<br/>SQRZL_MAX_REQUEST_BYTES?"}
@@ -269,7 +269,7 @@ flowchart TB
 
     Root["SQRZL_BLOBS_PATH"]
     BucketDir["bucket directory"]
-    BucketControl["bucket sidecars<br/>.bucket.meta.json<br/>.versioning-enabled<br/>.lifecycle.json<br/>.policy.json<br/>bucket.acl.json"]
+    BucketControl["bucket sidecars<br/>.bucket.identity.json<br/>.bucket.meta.json<br/>.versioning-enabled<br/>.lifecycle.json<br/>.policy.json<br/>bucket.acl.json"]
     ObjectDir["hashed object_id directory"]
     ObjectBlob["object.blob"]
     ObjectMeta["object.meta.json"]
@@ -277,6 +277,8 @@ flowchart TB
     Multipart[".multipart/{upload_id}<br/>upload.json + part files"]
     ProviderState[".provider-state/{provider}<br/>restart-safe sidecars"]
     RequestSpool[".spool<br/>in-flight request files"]
+    RootWriter[".sqrzl-writer.lock<br/>exclusive cooperative owner"]
+    Publication["object publication journal<br/>staged generation + commit decision"]
     ProviderUploads[".provider-uploads/{provider}/{session}<br/>staged blocks, chunks, and parts"]
 
     StorageAggregate --> CapabilityTraits --> FS
@@ -289,6 +291,8 @@ flowchart TB
     FS --> StreamSpool
     FS --> UploadCompose
     FS --> Root
+    Root --> RootWriter
+    ObjectDir --> Publication
     Root --> BucketDir
     BucketDir --> BucketControl
     BucketDir --> ObjectDir
@@ -302,13 +306,21 @@ flowchart TB
 ```
 
 Large data-plane request bodies are streamed into root-level spool files while
-MD5, SHA-256, SHA-384, CRC32C, and Azure-compatible CRC64 are calculated
+MD5, SHA-1, SHA-256, SHA-384, CRC32, CRC32C, and CRC64-NVME are calculated
 incrementally. Provider adapters keep only session metadata in memory and in
 `.provider-state`; durable payload bytes live in `.provider-uploads`. Azure
 block lists, GCS resumable chunks, and OCI multipart parts are assembled through
-ordered disk-to-disk copies, and the final file is atomically moved into the
-object layout. S3 multipart completion follows the same no-whole-object-read
+ordered disk-to-disk copies. A staged generation and durable publication decision
+couple visible object bytes with metadata; recovery completes committed decisions
+before reads or index reconstruction. S3 multipart completion follows the same no-whole-object-read
 rule through its existing `.multipart` layout.
+
+Startup claims the root writer lock, recovers publication decisions, then purges
+abandoned request spools. Native dispatch, admin mutations and lifecycle passes
+share one operation gate so protection checks and their commits cannot interleave
+through another front door. Metadata-only admission and bounded range APIs avoid
+loading payloads for HEAD and protection decisions. Whole materialized S3/Azure
+reads/copies and Azure page/append extents have an explicit 64 MiB local cap.
 
 Startup purges abandoned request spools. Request cancellation, provider
 rejection, abort, completion, overwrite, expired GCS sessions, and obsolete

@@ -1,311 +1,161 @@
-# Sqrzl Support Certification
+# Sqrzl support and qualification
 
-Sqrzl support certification names the local storage and messaging workflows we
-expect to stay reliable, repeatable, and supportable for development and CI.
+`compatibility-matrix.json` is the source of truth for the selected local model.
+Its family entries provide navigation; `operation_contracts.entries` gives each
+operation, HTTP method or SMTP command, route, variant and explicit boundary.
+All implemented families remain **partial**. Gmail is **deferred**.
 
-Certification is about local supportability, not production cloud parity. Sqrzl
-focuses on the documented bucket/container and object/blob workflows across
-S3-compatible APIs, Azure Blob Storage, Google Cloud Storage, and OCI Object
-Storage, plus the explicitly listed SMTP, email-provider, and text-provider
-submission paths.
+Partial breadth does not relax the contract of an accepted request. Typed fields,
+conditions, checksums, authentication, status codes and provider error envelopes
+must be validated before mutation. Unsupported variants receive an explicit
+provider-shaped failure. Cloud control planes, IAM/RBAC/OAuth issuance, key
+management, replication, archive restoration, real mail delivery and automatic
+carrier delivery are outside the local model.
 
-## Source Of Truth
+## Evidence and support tiers
 
-`compatibility-matrix.json` is the checked-in source of truth for support tiers
-and operation-level status. When the matrix and prose disagree, the matrix wins.
+- `certified` requires reviewed, operation-specific evidence at an exact source
+  revision and selected SDK/API versions. A passing smoke test is insufficient.
+- `partial` implements a documented subset with explicit limitations and gaps.
+- `unsupported` intentionally rejects the operation or variant.
+- `deferred` has no current support contract.
 
-## Support Tiers
+Qualification separates positive requests, validation negatives, boundaries,
+conditions, pagination, native error parsing, native authentication, normal
+process restart, process interruption, and measured resource campaigns. A gate
+marked `pending` is an outstanding qualification requirement. `not-applicable`
+is not passing evidence. Candidate references in the matrix identify useful
+tests; they do not prove every method or variant in their family.
 
-Allowed support tiers:
+The exact-ID validator collects Rust tests from compiled binaries and pytest
+node IDs, then compares references and supplied results. Failed references or
+uncollected IDs fail validation. Missing, skipped and ignored tests remain
+unproven. Results must name the checked-out source SHA; all source changes must be
+committed or isolated. SDK assertion scopes and authentication modes remain visible in the
+acceptance artifact. The runner never promotes a support tier automatically.
 
-- `certified`: covered by official SDK smoke tests and Sqrzl contract/interop
-  tests.
-- `partial`: implemented or contract-tested, but not part of the SDK
-  certification gate.
-- `unsupported`: intentionally not implemented.
-- `deferred`: planned or under evaluation, but not supportable yet.
-
-No workflow family is currently certified. Previous claims relied partly on
-auth-disabled functional smoke tests and are demoted to `partial` while
-authenticated positive and negative contracts, pagination, restart durability,
-and provider error responses are remediated.
-
-`partial` limits the breadth of an operation family; it does not permit a
-different wire contract for the subset Sqrzl accepts. Every accepted request in
-that subset must preserve the provider's validation, status, headers, response
-shape, conditional-mutation atomicity, and documented failure semantics.
-Unsupported variants must receive an explicit provider-shaped error without a
-local mutation. The emulator must not report success after substituting default
-fields, ignoring a condition, or normalizing one provider into another.
-
-Certification requires an official SDK request using the provider's documented
-authentication scheme. Auth-disabled SDK runs are functional smoke tests, not
-certification evidence. GCS JSON SDK coverage remains explicitly auth-disabled;
-enforced GCS authentication is covered separately by negative and
-signed-request contract tests.
-
-AWS header-based SigV4 checks the signed timestamp, credential date/service,
-required signed headers, configured access ID, and body hash before mutation.
-Signing accepts ISO8601 basic dates in `x-amz-date` or, when absent, `Date`.
-Presigned URLs reject creation dates more than fifteen minutes ahead, and remain
-valid until their signed expiry (up to seven days). Signed header names must be
-sorted, unique, and lowercase; presigned requests must sign every supplied
-`x-amz-*` header. Conflicting signed query/header copies fail with
-`400 InvalidRequest`. Malformed SHA-256 header values fail with
-`400 InvalidArgument`; named unsupported streaming modes fail with
-`501 NotImplemented`.
-The accepted clock skew is fifteen minutes for S3 and five minutes for SES,
-SNS, and SMS Voice v2. S3 alone accepts `UNSIGNED-PAYLOAD`; streaming signature
-chains and checksum trailers remain unsupported. A supplied S3 SHA-256 body
-hash is checked against buffered or spooled bytes, including presigned uploads.
-
-Configured ACS Email and SMS HMAC authentication requires an IMF-fixdate
-`x-ms-date`, the matching body hash, and the matching signature. The local ACS
-clock-skew policy is fifteen minutes; this is separate from the five-minute
-repeatability interval and is not a native OAuth/RBAC qualification. Request
-freshness checks are covered by adapter regressions independently of SDK smoke
-tests.
-
-## Health And Diagnostics
-
-Both the API and UI ports expose:
-
-```text
-GET /healthz
-```
-
-The response is JSON. When storage is healthy, the handler returns `200 OK`; if
-storage cannot be read, it returns `503 Service Unavailable` with
-`status: degraded`.
-
-The response includes:
-
-- `status`: `ok` or `degraded`.
-- `version`: Sqrzl package version.
-- `api_port` and `ui_port`: configured listener ports.
-- `auth_enforced` and `admin_auth_enforced`: current auth mode.
-- `auth_enforced_providers`: provider contracts protected by configured
-  credentials.
-- `max_request_bytes`: current request body cap.
-- `storage_ready`: whether the configured storage path is readable.
-- `enabled_providers`: provider adapters compiled into this Sqrzl build
-  (`s3-family`, `azure-blob`, `gcs`, `oci-object`).
-
-For support tickets, collect:
-
-- Sqrzl version and Git commit.
-- Full `/healthz` response from the API port.
-- Container image digest, if running in Docker.
-- `compatibility-matrix.json` entry for the failing operation.
-- SDK name and version.
-- Minimal reproduction code and exact request or exception output.
-- Whether the issue reproduces after restarting Sqrzl with the same `SQRZL_BLOBS_PATH`.
-
-## SDK Certification Harness
-
-Create a Python 3.12+ virtual environment and install the SDK test extra:
+Use the pinned environment and three lane commands in
+[SDK qualification](sdk-qualification.md), retaining their JSON artifacts. Then
+validate the combined evidence from the same clean commit:
 
 ```bash
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e ".[sdk-tests]"
+SOURCE_SHA=$(git rev-parse HEAD)
+cargo test --lib --tests --all-features > /tmp/sqrzl-rust-results.log 2>&1
+python scripts/validate_contract_evidence.py \
+  --rust-results /tmp/sqrzl-rust-results.log \
+  --sdk-evidence target/sdk-evidence/functional.json \
+  --sdk-evidence target/sdk-evidence/storage-auth.json \
+  --sdk-evidence target/sdk-evidence/messaging-auth.json \
+  --results-source-sha "$SOURCE_SHA" \
+  --output /tmp/sqrzl-contract-acceptance.json
 ```
 
-Run Sqrzl through the pytest harness:
+Verified SDK evidence requires an immutable executable built from that source
+commit, a clean worktree and a successful lane. An external binary without a
+verified build manifest or a remote smoke endpoint cannot establish exact-source
+acceptance. JUnit input remains available for candidate-result inspection; it
+does not qualify the manifest's scoped SDK assertions. Separate lane artifacts
+retain the selected provider and authentication scope.
 
-```bash
-python -m pytest
-```
+## Authentication lanes
 
-By default the harness builds and starts `target/debug/sqrzl-emulator` with
-temporary storage and authentication disabled. This is functional smoke
-coverage, not authenticated certification. To target an existing Sqrzl process:
+The default SDK lane uses authentication-disabled storage for functional
+coverage. The native storage lane configures S3 SigV4, Azure SharedKey/service
+SAS, GCS XML HMAC signed URLs and OCI RSA-SHA256. It runs accepted requests and
+credential negatives through official SDKs.
 
-```bash
-SQRZL_API_URL=http://127.0.0.1:9000 python -m pytest
-```
+GCS JSON client requests can use a configured local secret bearer token. This
+is a convenience mode, not native OAuth qualification. An HMAC access identifier
+alone is rejected as bearer authority. Native GCS HMAC coverage uses official
+signed-URL generation and is reported separately from JSON convenience tests.
 
-To run a subset:
+The configured messaging lane exercises SendGrid tokens, Twilio credentials,
+AWS SigV4 and ACS HMAC. A storage-auth pass does not establish messaging-auth
+coverage. ACS signing uses an explicitly local 15-minute freshness policy; the
+emulator does not claim ACS OAuth or RBAC parity.
 
-```bash
-SQRZL_SDK_PROVIDERS=s3,azure python -m pytest
-```
+Azure accepts service versions `2023-11-03`, `2025-01-05`, `2026-04-06`,
+`2026-06-06` and `2026-10-06`. Other well-formed versions receive an unsupported
+error; malformed versions are rejected. Service SAS uses HTTP localhost.
+HTTPS-only, account/user-delegation SAS, signed IP constraints, stored access
+policies and response overrides are rejected. Create-only SAS cannot overwrite
+an existing blob, including at block-list commit.
 
-Run the currently supported authenticated SDK subset with:
+## Request and memory boundaries
 
-```bash
-SQRZL_SDK_ENFORCE_AUTH=1 SQRZL_SDK_PROVIDERS=s3,azure python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py
-```
-
-The CI gate runs all SDK tests against a live Sqrzl process, then separately
-runs authenticated S3 and Azure tests. The container smoke gate builds the
-Docker image, verifies `/healthz`, and runs the complete SDK suite—including
-SMTP and messaging—against the running container.
-
-## Request Size Boundary
-
-Sqrzl buffers request bodies today. Configure the guardrail with:
+Data-plane uploads for S3, Azure BlockBlob/PutBlock, GCS media/resumable, and OCI
+objects/parts spool to disk while digests are computed. Control documents and
+other selected request forms remain buffered. `SQRZL_MAX_REQUEST_BYTES` limits
+each HTTP request, including streamed requests. Its default is 128 MiB:
 
 ```bash
 SQRZL_MAX_REQUEST_BYTES=134217728
 ```
 
-Requests above the configured limit are rejected before provider handling with
-stable provider-compatible `413 Payload Too Large` responses. Streaming uploads
-can be certified later, but oversized buffered uploads are not accepted by
-design.
+An oversized or incomplete body fails before publication. Multipart/resumable
+assembly uses disk-to-disk composition, so the completed object can exceed the
+per-request limit. S3 additional checksums are accepted for direct PUT and
+selected transactional control bodies; additional-checksum multipart/copy and
+checksum trailers are explicitly unsupported. The pinned boto3 default
+UploadPart checksum must be opted out for the plain multipart subset. A default
+SDK request is tested separately from that opt-out workflow.
 
-## Restart And Durability Expectations
+Whole materialized S3/Azure reads and copies, Azure snapshot creation and
+payload-rewriting metadata operations have an explicit 64 MiB local limit.
+Metadata-only HEAD/admission and bounded ranges can inspect larger objects.
+Azure page extents and final append/page mutation extents are limited to 64 MiB;
+native page alignment and per-update limits are checked independently. These
+limits do not restrict streamed BlockBlob uploads. Other provider paths and
+native cloud maximum capacities are not inferred from this local qualification.
 
-Any workflow proposed for certification must survive a normal Sqrzl restart
-when `SQRZL_BLOBS_PATH` points to the same filesystem path.
+Measured large-upload campaigns have separate payload sizes, service/client
+RSS budgets, disk budgets, digest readback, restart/interruption and staging
+cleanup evidence. Routine functional or SDK smoke runs do not establish those
+resource bounds. See [large-upload qualification](large-upload-qualification.md).
 
-Sqrzl uses storage format v2. An empty root receives a
-`.sqrzl-storage-format-v2` marker. A nonempty root without that marker is
-treated as legacy storage: startup fails without modifying or deleting data.
-Archive the root or clear `SQRZL_BLOBS_PATH` before restarting.
+## Ownership and durability
 
-Durability hardening covers:
+Production startup claims an exclusive cooperative filesystem writer lock before
+opening any store or running recovery. Two active processes cannot own the same
+root. Independent roots can run concurrently. Format-v2 roots without the new
+bucket identity sidecar derive creation time once from the bucket name marker
+and persist it. Object changes do not invent a new bucket creation timestamp.
+A nonempty root without the format-v2 marker fails startup without modification.
 
-- Atomic temp-file-then-rename writes for object data, object metadata, bucket
-  metadata, upload records, and provider sidecars.
-- Per-object write coordination for same-object mutations.
-- Atomic GCS generation and Azure ETag create/update/delete preconditions for
-  deterministic lease and compare-and-swap races.
-- Atomic S3 `If-Match` PUT/DELETE and `If-None-Match: *` PUT preconditions,
-  including S3-specific `404` versus `412` outcomes. A deterministic
-  `conditional-request-conflict` failpoint supplies the provider-shaped `409`
-  race outcome for conditional PUT or multipart completion; the in-process
-  filesystem scheduler does not claim to recreate the corresponding real-cloud
-  timing race organically.
-- Provider-specific zero-byte request framing, including required
-  `Content-Length` on Azure Put Blob and accepted GCS JSON/XML uploads, GCS's
-  explicit chunked-transfer exception, mutation status codes, quoted S3/Azure
-  ETags, and GCS metadata document sizing and metadata-update identity changes.
-- Pre-commit GCS JSON CRC32C validation for multipart object metadata and
-  `X-Goog-Hash` on media and final resumable requests, including native JSON
-  `400` checksum mismatch responses, explicit rejection of unsupported hash
-  tokens, server-calculated response metadata, and resumable retry after a
-  failed final checksum.
-- Deterministic pre-commit and post-commit HTTP failpoints for redirects,
-  throttling, transient failures, timeouts, response loss, truncation, and
-  pagination-token faults. The conformance matrix exercises S3, Azure Blob, GCS
-  JSON, GCS XML, and OCI independently; redirect and transient status families
-  are table-driven across every front door rather than inferred from one
-  provider adapter.
-- OCI PutObject empty-body responses with ETag, last-modified, and
-  `opc-content-md5` identity headers, strong current-view reads, provider-tier
-  validation, checksum rejection before mutation, and request-ID correlation.
-- Durable S3 delete markers, GCS soft-delete/retention modes, and opt-in local
-  Azure version retention. These provider-owned data-protection families are
-  mutually exclusive per bucket/container: cross-front-door activation or
-  protected mutation returns a provider-shaped `409` without changing data or
-  mode metadata. Enabling S3 cannot adopt or clear a foreign protected bucket.
-- Persisted Azure staged and committed block bytes, including exact
-  `Committed`, `Uncommitted`, and `Latest` selection, real block sizes, and
-  required `Content-Length` framing on the accepted block/append/page writes.
-- Azure Locked immutability policies reject shortening, unlocking, and deletion;
-  malformed legal-hold values and unsupported version-scoped policy operations
-  fail before metadata or blob bytes change. Lease and WORM metadata updates use
-  an in-place atomic CAS, preserving the blob's ETag, timestamp, version ID,
-  bytes, and version-history cardinality.
-- Azure asynchronous container deletion state, inclusive continuation markers,
-  prefix-aware pagination, historical-version range reads, and atomic
-  conditions on supported blob subresource mutations.
-- Persisted GCS resumable upload sessions.
-- Hidden provider-state directories that are excluded from bucket listings.
+Native storage dispatch, admin mutations and lifecycle passes share the same
+operation gate across storage wrappers. Protection decisions and commits are
+serialized, including cross-provider leases, holds, retention, bucket deletion,
+copy and multipart completion. An embedding that calls low-level storage APIs
+must hold the operation gate and root ownership itself. These are cooperative
+local contracts; raw filesystem writers and arbitrary custom backends are not
+qualified. See [writer ownership](storage-writer-ownership.md).
 
-## Known Limitations
+Object publication stages a generation and persists its commit decision before
+replacing visible body and metadata files. Recovery rolls committed decisions
+forward before indexing or reading. Predecision staged data does not become a
+visible object. Invalid or ambiguous publication records fail closed. Stored
+history snapshots and current-version promotion link/copy stored files without
+loading the complete object into memory.
 
-These are support boundaries, not bugs unless `compatibility-matrix.json` marks
-the operation as `certified`.
+Messaging capture uses a durable batch decision across recipient records,
+indexes, attachments/media and repeatability state. Matching ACS retries across
+restart do not recapture; conflicts fail without replacing a prior batch.
+See [messaging capture durability](messaging-capture-durability.md).
 
-- Lifecycle configuration can be stored and returned, but production lifecycle
-  execution parity is not certified.
-- ACL and policy behavior is simplified for common local workflows.
-- S3 requester-pays billing, static website hosting behavior, advanced SSE key
-  management, bucket-default Object Lock retention, IAM-authorized governance
-  bypass, version-scoped tagging, Object Lock parameters on multipart
-  initiation, and full governance/compliance control-plane parity are not
-  certified; modeled unsupported variants fail before mutation.
-- Azure append blob, page blob, lease, snapshot, and immutability edge cases are
-  partial. Unsupported container/blob subresources return
-  `501 FeatureNotSupported` before ordinary namespace or blob mutation.
-- Azure container deletion uses a documented local timing control and lazy
-  purge to model the deleting-name interval; it does not emulate account-wide
-  service-property administration or provider garbage-collection timing.
-- OCI RSA-SHA256 signature verification remains unsupported. A malformed
-  Signature is rejected with the native authentication error shape and a
-  syntactically complete RSA-SHA256 request is rejected explicitly rather than
-  accepted through an HMAC approximation.
-- OCI current-object paths are decoded exactly once and preserve empty key
-  components. Version-scoped object requests, conditional multipart completion,
-  and selective commits are unsupported and fail explicitly without changing
-  current bytes or consuming the multipart session.
-- GCS signed URL V2 and GOOG1 HMAC validation are contract-tested, including
-  canonicalized `x-goog-*` extension headers: lowercased and sorted names,
-  request-order duplicate merging, required trailing newlines, and exclusion of
-  customer-supplied encryption key headers. Official SDK positive signed-auth
-  qualification is not in the certification gate.
-- GCS historical-generation retrieval is not emulated. GCS soft-deleted bytes and
-  Azure local versions are retained through the shared version store, but this
-  is not full provider recovery/control-plane parity.
-- GCS bucket retention is limited to unlocked policies with validated provider
-  duration ranges. Retention-policy locking, per-object retention, writable
-  server-owned policy fields, and disabling an enabled soft-delete policy return
-  an explicit `501 UNIMPLEMENTED` response.
-- Storage-provider control-plane behavior outside the named object/blob
-  workflows is out of scope.
-- Email support is submission-and-capture only. Each HTTP front door accepts
-  only the fields listed in the matrix: SendGrid v3 personalizations/content/
-  attachments, SES v2 `Content.Simple`, and ACS Email recipients/content/
-  attachments/headers/reply/tracking. Unsupported variants are rejected before
-  fan-out. ACS repeatability and caller operation IDs are durable; mail fan-out
-  is all-or-nothing across recipient mailboxes. Domain/sender verification,
-  reputation, suppression lists, unlisted templates, remote delivery, and
-  provider event systems remain out of scope.
-- Text support is submission-and-simulation only. The accepted outbound subsets
-  are listed in the matrix: Twilio's core SMS/MMS-reference form fields, direct
-  SNS PhoneNumber Publish, AWS SMS Voice v2 SendTextMessage/SendMediaMessage,
-  and ACS SMS one-to-many sends with the documented local options. Unknown
-  fields are rejected unless the real provider explicitly ignores them (for
-  example, irrelevant SNS structured-message protocol keys). Number
-  registration, carrier/compliance policy, billing, automatic delivery timing,
-  and provider management APIs remain outside scope.
+The interruption tests qualify process exits on a single-owner local filesystem.
+They do not claim physical power-loss, arbitrary disk corruption, network
+filesystem, multiprocess embedding or custom-backend durability. Normal restart,
+process interruption and HTTP response-loss ambiguity are separate evidence.
 
-## Qualification boundary
+## Diagnostics
 
-Sqrzl qualification is protocol evidence, not full production-provider
-qualification. A client conformance run should cover non-empty and zero-byte
-PUT/GET/HEAD/DELETE, exact mutation statuses, conditional create/update/delete,
-metadata size and identity tokens, pagination, missing objects, redirect
-rejection, committed-but-response-lost ambiguity, and restart/cache-loss
-recovery. Sqrzl exercises raw WAL-, SST-, and catalog-shaped objects through all
-five storage front doors: it reopens the filesystem backend, verifies bytes,
-publishes a replacement catalog, and deletes the retired catalog and WAL while
-the SST and replacement catalog remain. This is protocol CRUD/durability
-evidence only. Storage engines must still use those front doors to prove WAL
-replay, SST coverage, catalog interpretation/retirement, and safe remote-WAL
-deletion; those engine-specific assertions belong to the client suite, not
-Sqrzl.
+Both listeners expose `GET /healthz`: 200 when storage is readable, 503 when it is
+degraded. Collect the exact source SHA/image digest, health response, selected
+operation ID, SDK/API versions, request or parsed native error, configured auth
+mode, request/resource limits and same-root restart result for a reproduction.
 
-Real-cloud tests remain required for IAM and workload identity, DNS/TLS,
-quotas, service availability, provider policy configuration, verified email
-identities/domains, registered sending numbers, carrier filtering, and messaging
-compliance controls.
-
-## Reproducible Issue Template
-
-```text
-Sqrzl version:
-Commit or image digest:
-Runtime: local binary / Docker / Compose
-API /healthz response:
-Provider and SDK:
-SDK version:
-compatibility-matrix operation:
-Expected behavior:
-Actual behavior:
-Minimal reproduction:
-Does it reproduce after Sqrzl restart with the same SQRZL_BLOBS_PATH? yes/no
-```
+Lifecycle scheduling, ACL/policy evaluation, requester-pays billing, SSE/KMS,
+WORM administration, provider-owned history and recovery, delivery/event timing
+and callback networks remain selected local models. The operation matrix lists
+the accepted and rejected variants; an unsupported cloud feature is not by
+itself an emulator defect.
