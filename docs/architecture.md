@@ -13,6 +13,9 @@ flowchart LR
         AzureSDK[Azure Blob SDKs]
         GCSSDK[Google Cloud Storage SDKs]
         OCISDK[OCI Object Storage SDKs]
+        EmailSDK[SendGrid, SES and ACS Email clients]
+        SmsSDK[Twilio, SNS, AWS SMS Voice and ACS SMS clients]
+        SmtpClient[SMTP clients]
         Browser[Browser admin UI]
         DevOps[Local dev, CI, Docker Compose]
     end
@@ -20,11 +23,14 @@ flowchart LR
     subgraph Sqrzl["sqrzl-emulator process"]
         ApiPort["Provider API listener<br/>0.0.0.0:9000"]
         UiPort["UI and admin listener<br/>0.0.0.0:9001"]
+        SmtpPort["SMTP capture listener<br/>0.0.0.0:2525"]
         SharedStorage["Shared Storage trait object<br/>focused capability traits + FilesystemStorage"]
+        MailStore["MailStore<br/>FilesystemMailStore"]
+        SmsStore["SmsStore<br/>FilesystemSmsStore"]
         Lifecycle["LifecycleExecutor<br/>background task"]
     end
 
-    Disk[Filesystem blob root<br/>SQRZL_BLOBS_PATH]
+    Disk[Filesystem storage and capture root<br/>SQRZL_BLOBS_PATH]
     OpenApi[Admin OpenAPI contract<br/>public/openapi.yml]
     StaticUi[Built SPA assets<br/>./static or /app/ui/dist]
 
@@ -32,14 +38,24 @@ flowchart LR
     AzureSDK --> ApiPort
     GCSSDK --> ApiPort
     OCISDK --> ApiPort
+    EmailSDK --> ApiPort
+    SmsSDK --> ApiPort
+    SmtpClient --> SmtpPort
     Browser --> UiPort
     DevOps --> ApiPort
     DevOps --> UiPort
 
     ApiPort --> SharedStorage
+    ApiPort --> MailStore
+    ApiPort --> SmsStore
     UiPort --> SharedStorage
+    UiPort --> MailStore
+    UiPort --> SmsStore
+    SmtpPort --> MailStore
     Lifecycle --> SharedStorage
     SharedStorage --> Disk
+    MailStore --> Disk
+    SmsStore --> Disk
     UiPort --> StaticUi
     OpenApi --> Browser
 ```
@@ -51,27 +67,41 @@ flowchart TB
     Main["src/main.rs"]
     Config["Config::from_env<br/>src/config.rs"]
     Logging["tracing subscriber<br/>text or json"]
+    RootWriter["StorageRootWriter<br/>exclusive root owner through runtime shutdown"]
     StartupBuckets["SQRZL_BUCKET_LIST validation<br/>ensure_startup_buckets"]
     Storage["Arc&lt;FilesystemStorage&gt;<br/>src/storage/filesystem.rs"]
+    Mail["Arc&lt;FilesystemMailStore&gt;<br/>src/mail/filesystem.rs"]
+    Sms["Arc&lt;FilesystemSmsStore&gt;<br/>src/sms/filesystem.rs"]
     Lifecycle["LifecycleExecutor::start<br/>src/lifecycle.rs"]
-    ProviderServer["Server::new(...).start<br/>src/server/mod.rs"]
-    UiServer["start_ui_server<br/>src/api/server.rs"]
+    ProviderServer["Server::new_with_sms(...).start<br/>src/server/mod.rs"]
+    UiServer["start_ui_server_with_sms<br/>src/api/server.rs"]
+    SmtpServer["SmtpServer::start<br/>src/mail/smtp.rs"]
 
     Main --> Config
     Main --> Logging
-    Main --> Storage
+    Main --> RootWriter
+    RootWriter --> Storage
+    RootWriter --> Mail
+    RootWriter --> Sms
     Main --> StartupBuckets
     StartupBuckets --> Storage
     Main --> Lifecycle
     Main --> ProviderServer
     Main --> UiServer
+    Main --> SmtpServer
 
     Config --> ProviderServer
     Config --> UiServer
     Config --> Lifecycle
+    Config --> SmtpServer
     Storage --> ProviderServer
     Storage --> UiServer
     Storage --> Lifecycle
+    Mail --> ProviderServer
+    Mail --> UiServer
+    Mail --> SmtpServer
+    Sms --> ProviderServer
+    Sms --> UiServer
 ```
 
 ## Provider API Request Path
@@ -84,6 +114,8 @@ flowchart TD
     Parse["Request::from_hyper_with_max_body<br/>buffer control payload"]
     BodyLimit{"Body exceeds<br/>SQRZL_MAX_REQUEST_BYTES?"}
     Health{"GET /healthz?"}
+    SmsRegistry{"SmsAdapterRegistry::route<br/>src/sms/providers/mod.rs"}
+    MailRegistry{"MailAdapterRegistry::route<br/>src/mail/providers/mod.rs"}
     Registry["AdapterRegistry::handle<br/>src/providers/mod.rs"]
     Azure{"AzureBlobAdapter.matches"}
     GCS{"GcsAdapter.matches"}
@@ -94,6 +126,10 @@ flowchart TD
     GcsHandle["GCS handler<br/>JSON XML APIs, signed URLs, resumable sessions"]
     OciHandle["OCI handler<br/>/n namespace paths and Signature auth"]
     S3Handle["S3 handlers<br/>Router, bucket/object handlers"]
+    SmsHandle["Twilio, SNS, AWS SMS Voice and ACS SMS<br/>native auth + selected request validation"]
+    MailHandle["SendGrid, SES and ACS Email<br/>native auth + selected request validation"]
+    SmsCapture["SmsStore<br/>FilesystemSmsStore capture batch"]
+    MailCapture["MailStore<br/>FilesystemMailStore recipient fan-out"]
 
     ProviderAuth["Provider-specific auth<br/>SharedKey, GOOG1, OCI Signature"]
     S3Auth["S3 auth facade<br/>check_authorization"]
@@ -103,7 +139,7 @@ flowchart TD
     Services["S3 service helpers<br/>src/services/bucket.rs<br/>src/services/object.rs"]
     Storage["Storage trait<br/>src/storage/mod.rs"]
     Response["Provider-compatible response<br/>XML, JSON, headers"]
-    TooLarge["AdapterRegistry::render_payload_too_large<br/>provider-shaped 413 response"]
+    TooLarge["SMS, mail or storage registry<br/>provider-shaped 413 response"]
     HealthResponse["health::response"]
 
     Request --> Streamable
@@ -114,7 +150,11 @@ flowchart TD
     BodyLimit -- yes --> TooLarge
     BodyLimit -- no --> Health
     Health -- yes --> HealthResponse
-    Health -- no --> Registry
+    Health -- no --> SmsRegistry
+    SmsRegistry -- match --> SmsHandle
+    SmsRegistry -- no --> MailRegistry
+    MailRegistry -- match --> MailHandle
+    MailRegistry -- no --> Registry
     Registry --> Azure
     Azure -- match --> AzureHandle
     Azure -- no --> GCS
@@ -136,7 +176,22 @@ flowchart TD
     BlobBackend --> Storage
     Services --> Storage
     Storage --> Response
+    SmsHandle --> SmsCapture --> Response
+    MailHandle --> MailCapture --> Response
 ```
+
+SMS and mail registries match before the storage registry. Their native provider
+responses represent local captures. Mail and SMS have separate store contracts
+under `_mail` and `_sms` in the shared filesystem root; the UI listener uses those
+same stores for captured-message inspection and local simulation. SMTP reaches
+the mail store through its own bounded command and DATA listener.
+
+Capture admission checks a projected 64 MiB aggregate budget before fan-out
+copies and filesystem publication. Backend enforcement includes serialized
+records, raw mail or inline media, and retained results. A durable capture-batch
+decision controls visibility of message files, indexes, media and repeatability
+records, and each capture store recovers that journal when it opens. This
+projected admission limit does not establish measured RSS qualification.
 
 ## S3 Handler Breakdown
 
