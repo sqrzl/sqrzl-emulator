@@ -32,6 +32,22 @@ recipient field contract. Messages from older stores, which have no capture
 transaction ID, remain readable, and legacy message metadata remains a lookup
 fallback for earlier ACS operations.
 
+New captures have a **64 MiB projected aggregate materialization limit**. The
+borrowed admission pass counts rendered JSON, raw MIME and inline media,
+retained payload/result copies, replay buffers and envelope reserves before
+fan-out or filesystem mutation. SendGrid plans personalizations before cloning
+shared content; ACS SMS admits each recipient before cloning its payload.
+An over-limit request creates no capture, journal or repeatability reservation.
+Below-limit batches retain the same atomic publication and replay behavior.
+
+The adapters return provider-shaped HTTP 413 responses identifying the local
+constraint; SMTP returns 552 and accepts a later valid transaction on the same
+connection. SMTP also bounds necessarily oversized raw DATA before constructing
+MIME/body copies. These are conservative local admission limits, separate from
+the configured per-request cap and provider capacities. They do not establish
+a measured process RSS bound. `tests/contract_capture_resources.rs` and selected
+official email SDK tests cover rejected fan-out, no mutation and smaller retries.
+
 The qualification boundary is process termination on a local filesystem with a
 single owning emulator process. It does not establish correctness for two
 processes opening the same persistence root, network filesystems, disk corruption,
