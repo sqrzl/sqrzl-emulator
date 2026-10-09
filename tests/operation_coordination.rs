@@ -11,6 +11,75 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn should_reject_foreign_overwrite_given_stale_wrapper_when_inner_claims_azure_lease() {
+    // Arrange
+    let inner = temp_storage();
+    inner.create_bucket("coordinated".to_string()).unwrap();
+    let wrapper: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
+    let registry = AdapterRegistry::default();
+    for (uri, headers, body) in [
+        (
+            "http://localhost/devstoreaccount1/coordinated/target",
+            vec![("x-ms-blob-type", "BlockBlob")],
+            b"old".as_slice(),
+        ),
+        (
+            "http://localhost/devstoreaccount1/coordinated/target?comp=lease",
+            vec![
+                ("x-ms-lease-action", "acquire"),
+                ("x-ms-lease-duration", "-1"),
+            ],
+            b"".as_slice(),
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("PUT")
+            .uri(uri)
+            .header("x-ms-version", "2023-11-03")
+            .header("content-length", body.len());
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let request = RequestExt::from_hyper(
+            request
+                .body(Full::new(bytes::Bytes::copy_from_slice(body)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(registry
+            .handle(inner.clone(), auth_disabled(), request)
+            .await
+            .unwrap()
+            .status()
+            .is_success());
+    }
+    let request = Request::builder()
+        .method("PUT")
+        .uri("http://localhost/coordinated/target")
+        .header("content-length", 3)
+        .body(Full::new(bytes::Bytes::from_static(b"new")))
+        .unwrap();
+
+    // Act
+    let response = registry
+        .handle(
+            wrapper,
+            auth_disabled(),
+            RequestExt::from_hyper(request).await.unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Assert
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        inner.get_object("coordinated", "target").unwrap().data,
+        b"old"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn should_serialize_copy_and_completion_given_active_owner_when_a_lease_is_committing() {
     // Arrange
     for complete in [false, true] {

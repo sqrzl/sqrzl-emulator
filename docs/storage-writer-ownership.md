@@ -3,7 +3,8 @@
 One emulator process owns one `SQRZL_BLOBS_PATH`. Startup claims an exclusive OS
 lock on `.sqrzl-writer.lock` before opening storage, recovering records, or
 starting listeners. A second process using the same root exits with an actionable
-error. Different roots can run concurrently. Terminating the owner releases the
+error. The guard outlives the complete Tokio runtime, including blocking writers
+still finishing after listener failure. Different roots can run concurrently. Terminating the owner releases the
 lock; its file remains so subsequent owners use the same inode. Never delete that
 file while the emulator is running. Unmarked legacy data is rejected before the
 lock file is created.
@@ -24,7 +25,8 @@ capacity qualification.
 
 The same gate covers lease, retention and hold activation, deletes, copy and
 multipart completion, bucket changes, and admin mutations. The indexed storage
-wrapper forwards its underlying store's gate. Lifecycle expiration skips active
+wrapper forwards its underlying store's gate and authoritative metadata listings;
+it never authorizes protection or existence from a stale private key cache. Lifecycle expiration skips active
 leases, holds, retention, and incomplete protection metadata. Admin content
 replacement/deletion and version purge reject protected current or historical
 data with JSON `AccessDenied`; admin writes to GCS/Azure protected bucket modes
@@ -35,7 +37,7 @@ against S3/GCS/OCI mutations, which return their native conflict envelopes. Thos
 front doors do not implement Azure lease authorization or version ownership.
 Releasing the protection through the Azure front door restores ordinary shared
 namespace access. Namespace checks page through object metadata without loading
-payload bytes. Native Azure mutations continue to enforce their lease IDs and
+payload bytes, including large objects seen through an indexed wrapper. Native Azure mutations continue to enforce their lease IDs and
 retention rules.
 
 ## Library embedding

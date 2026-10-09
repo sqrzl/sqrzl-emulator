@@ -4,6 +4,48 @@ use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(5);
 
+#[test]
+fn should_list_sparse_objects_without_loading_payloads_through_indexed_storage() {
+    // Arrange
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let base = std::env::temp_dir().join(format!("sqrzl-indexed-sparse-{}", uuid::Uuid::new_v4()));
+    let inner = Arc::new(FilesystemStorage::new(&base));
+    inner.create_bucket("sparse".to_string()).unwrap();
+    let wrapper = crate::storage::IndexedStorage::new(inner.clone());
+    let source = base.join("source");
+    fs::File::create(&source)
+        .unwrap()
+        .set_len(192 * 1024 * 1024)
+        .unwrap();
+    let mut object = Object::new(
+        "large".to_string(),
+        Vec::new(),
+        "application/octet-stream".to_string(),
+    );
+    object.size = 192 * 1024 * 1024;
+    wrapper
+        .put_object_streamed("sparse", "large".to_string(), object, &source)
+        .unwrap();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let observed = reads.clone();
+    *inner.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if phase == TestPhase::FullPayload {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+
+    // Act
+    let page = wrapper
+        .list_objects("sparse", None, None, None, Some(10))
+        .unwrap();
+
+    // Assert
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    assert_eq!(page.objects[0].size, 192 * 1024 * 1024);
+    assert_eq!(page.objects[0].data, Vec::<u8>::new());
+    fs::remove_dir_all(base).unwrap();
+}
+
 async fn verify_request_read_path(
     path: &'static str,
     headers: &'static [(&'static str, &'static str)],
