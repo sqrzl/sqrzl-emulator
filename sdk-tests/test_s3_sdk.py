@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import zlib
 import io
 import urllib.error
 import urllib.request
@@ -9,9 +12,10 @@ import pytest
 
 boto3 = pytest.importorskip("boto3")
 botocore_config = pytest.importorskip("botocore.config")
+botocore_exceptions = pytest.importorskip("botocore.exceptions")
 
 
-def _client(sqrzl_server):
+def _client(sqrzl_server, *, native_checksums=False):
     return boto3.client(
         "s3",
         endpoint_url=sqrzl_server.api_url,
@@ -20,6 +24,7 @@ def _client(sqrzl_server):
         region_name="us-east-1",
         config=botocore_config.Config(
             signature_version="s3v4",
+            request_checksum_calculation="when_supported" if native_checksums else "when_required",
             s3={"addressing_style": "path"},
         ),
     )
@@ -274,4 +279,112 @@ def test_s3_upload_part_copy_workflow(sqrzl_server):
 
     client.delete_object(Bucket=bucket, Key=source_key)
     client.delete_object(Bucket=bucket, Key=destination_key)
+    client.delete_bucket(Bucket=bucket)
+
+
+def test_s3_direct_put_native_checksums_and_rejection(sqrzl_server):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server, native_checksums=True)
+    bucket = sqrzl_server.bucket_name("sdk-s3-checksums")
+    payload = b"123456789"
+    encode = lambda digest: base64.b64encode(digest).decode("ascii")
+    checksums = {
+        "CRC32": encode(zlib.crc32(payload).to_bytes(4, "big")),
+        "CRC32C": encode(bytes.fromhex("e3069283")),
+        "CRC64NVME": encode(bytes.fromhex("ae8b14860a799888")),
+        "SHA1": encode(hashlib.sha1(payload).digest()),
+        "SHA256": encode(hashlib.sha256(payload).digest()),
+        "MD5": encode(hashlib.md5(payload).digest()),
+    }
+    client.create_bucket(Bucket=bucket)
+    for algorithm, checksum in checksums.items():
+        field = f"Checksum{algorithm}"
+        put = client.put_object(Bucket=bucket, Key=algorithm, Body=payload,
+                                ChecksumAlgorithm=algorithm, **{field: checksum})
+        assert put[field] == checksum
+        assert put["ChecksumType"] == "FULL_OBJECT"
+        if algorithm == "SHA256":
+            # Tagging requires a request XML checksum even under the optout profile.
+            client.put_object_tagging(Bucket=bucket, Key=algorithm,
+                                      Tagging={"TagSet": [{"Key": "proof", "Value": "transactional"}]})
+
+        for method in (client.get_object, client.head_object):
+            response = method(Bucket=bucket, Key=algorithm, ChecksumMode="ENABLED")
+            assert response[field] == checksum
+            assert response["ChecksumType"] == "FULL_OBJECT"
+            if "Body" in response:
+                assert response["Body"].read() == payload
+        with pytest.raises(botocore_exceptions.ClientError) as failure:
+            client.put_object(Bucket=bucket, Key=algorithm, Body=b"different",
+                              ChecksumAlgorithm=algorithm, **{field: checksum})
+        assert failure.value.response["Error"]["Code"] == "BadDigest"
+        assert client.get_object(Bucket=bucket, Key=algorithm)["Body"].read() == payload
+        client.delete_object(Bucket=bucket, Key=algorithm)
+    # Current botocore's default direct PUT CRC32 profile must also work.
+    put = client.put_object(Bucket=bucket, Key="default", Body=payload)
+    assert put["ChecksumCRC32"] == checksums["CRC32"]
+    client.delete_object(Bucket=bucket, Key="default")
+    client.delete_bucket(Bucket=bucket)
+
+
+def test_s3_http_properties_copy_and_plain_multipart(sqrzl_server):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-properties")
+    properties = dict(CacheControl="max-age=90", ContentEncoding="identity",
+                      ContentLanguage="en-US", ContentDisposition="attachment; filename=report.txt")
+    client.create_bucket(Bucket=bucket)
+    client.put_object(Bucket=bucket, Key="source", Body=b"properties", **properties)
+    for method in (client.get_object, client.head_object):
+        response = method(Bucket=bucket, Key="source")
+        assert {name: response[name] for name in properties} == properties
+        if "Body" in response:
+            response["Body"].close()
+    client.copy_object(Bucket=bucket, Key="copied", CopySource={"Bucket": bucket, "Key": "source"})
+    head = client.head_object(Bucket=bucket, Key="copied")
+    assert {name: head[name] for name in properties} == properties
+    client.copy_object(Bucket=bucket, Key="replaced", CopySource={"Bucket": bucket, "Key": "source"},
+                       MetadataDirective="REPLACE", CacheControl="no-cache", ContentLanguage="fr")
+    head = client.head_object(Bucket=bucket, Key="replaced")
+    assert head["CacheControl"] == "no-cache"
+    assert head["ContentLanguage"] == "fr"
+    assert "ContentDisposition" not in head and "ContentEncoding" not in head
+    upload = client.create_multipart_upload(Bucket=bucket, Key="multi", **properties)
+    part = client.upload_part(Bucket=bucket, Key="multi", UploadId=upload["UploadId"], PartNumber=1, Body=b"multipart")
+    client.complete_multipart_upload(Bucket=bucket, Key="multi", UploadId=upload["UploadId"],
+                                     MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": part["ETag"]}]})
+    head = client.head_object(Bucket=bucket, Key="multi")
+    assert {name: head[name] for name in properties} == properties
+    # A fresh replacement resets omitted properties.
+    client.put_object(Bucket=bucket, Key="source", Body=b"new")
+    head = client.head_object(Bucket=bucket, Key="source")
+    assert all(name not in head for name in properties)
+    for key in ("source", "copied", "replaced", "multi"):
+        client.delete_object(Bucket=bucket, Key=key)
+    client.delete_bucket(Bucket=bucket)
+
+
+def test_s3_native_default_multipart_checksum_boundary(sqrzl_server):
+    sqrzl_server.require_provider("s3")
+    native_client = _client(sqrzl_server, native_checksums=True)
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-multipart-checksum-boundary")
+    client.create_bucket(Bucket=bucket)
+    with pytest.raises(botocore_exceptions.ClientError) as failure:
+        native_client.create_multipart_upload(Bucket=bucket, Key="explicit", ChecksumAlgorithm="CRC32")
+    assert failure.value.response["Error"]["Code"] == "NotImplemented"
+    assert client.list_multipart_uploads(Bucket=bucket).get("Uploads", []) == []
+    # Current botocore default initiation sends no checksum; part upload adds CRC32.
+    upload = native_client.create_multipart_upload(Bucket=bucket, Key="plain")
+    with pytest.raises(botocore_exceptions.ClientError) as failure:
+        native_client.upload_part(Bucket=bucket, Key="plain", UploadId=upload["UploadId"], PartNumber=1, Body=b"part")
+    assert failure.value.response["Error"]["Code"] == "NotImplemented"
+    assert client.list_parts(Bucket=bucket, Key="plain", UploadId=upload["UploadId"]).get("Parts", []) == []
+    part = client.upload_part(Bucket=bucket, Key="plain", UploadId=upload["UploadId"], PartNumber=1, Body=b"part")
+    with pytest.raises(botocore_exceptions.ClientError) as failure:
+        client.complete_multipart_upload(Bucket=bucket, Key="plain", UploadId=upload["UploadId"],
+                                         MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": part["ETag"], "ChecksumCRC32": "AAAAAA=="}]})
+    assert failure.value.response["Error"]["Code"] == "NotImplemented"
+    assert len(client.list_parts(Bucket=bucket, Key="plain", UploadId=upload["UploadId"])["Parts"]) == 1
+    client.abort_multipart_upload(Bucket=bucket, Key="plain", UploadId=upload["UploadId"])
     client.delete_bucket(Bucket=bucket)

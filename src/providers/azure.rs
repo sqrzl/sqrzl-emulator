@@ -804,6 +804,123 @@ impl AzureBlobAdapter {
         (!value.starts_with("W/")).then(|| value.trim_matches('"'))
     }
 
+    fn read_condition_date(req: &Request, name: &str) -> Result<Option<i64>, ()> {
+        let mut values = req.headers.get_all(name).iter();
+        let Some(value) = values.next() else {
+            return Ok(None);
+        };
+        if values.next().is_some() {
+            return Err(());
+        }
+        let date = DateTime::parse_from_rfc2822(value.to_str().map_err(|_| ())?).map_err(|_| ())?;
+        Ok(Some(date.timestamp()))
+    }
+
+    fn read_condition_response(
+        req: &Request,
+        blob: &crate::models::Object,
+    ) -> Option<Response<Body>> {
+        let mut response = Self::evaluate_read_conditions(req, blob)?;
+        if req.method() == Method::HEAD {
+            *response.body_mut() = Body::default();
+        }
+        Some(response)
+    }
+
+    fn evaluate_read_conditions(
+        req: &Request,
+        blob: &crate::models::Object,
+    ) -> Option<Response<Body>> {
+        if ["if-match", "if-none-match", "x-ms-lease-id"]
+            .iter()
+            .any(|name| {
+                req.headers
+                    .get_all(*name)
+                    .iter()
+                    .any(|value| value.to_str().is_err())
+            })
+            || req.headers.get_all("x-ms-lease-id").iter().count() > 1
+        {
+            return Some(Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidHeaderValue",
+                "ETag and lease conditions must contain valid header values and one lease ID.",
+            ));
+        }
+        if req.headers.contains_key("x-ms-if-tags") {
+            return Some(Self::error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "FeatureNotSupported",
+                "Blob tag read predicates are not implemented.",
+            ));
+        }
+        let (Ok(modified), Ok(unmodified)) = (
+            Self::read_condition_date(req, "if-modified-since"),
+            Self::read_condition_date(req, "if-unmodified-since"),
+        ) else {
+            return Some(Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidHeaderValue",
+                "Each date condition must contain one valid HTTP date.",
+            ));
+        };
+        let matches = |name: &str, weak: bool| {
+            req.headers.get_all(name).iter().any(|value| {
+                value.to_str().is_ok_and(|value| {
+                    value.split(',').any(|candidate| {
+                        let candidate = candidate.trim();
+                        let candidate = if weak {
+                            Some(candidate.trim_start_matches("W/").trim_matches('"'))
+                        } else {
+                            Self::strong_etag(candidate)
+                        };
+                        candidate
+                            .is_some_and(|candidate| candidate == "*" || candidate == blob.etag)
+                    })
+                })
+            })
+        };
+        if req.headers.contains_key("if-match") && !matches("if-match", false)
+            || unmodified.is_some_and(|date| blob.last_modified.timestamp() > date)
+        {
+            return Some(Self::condition_failed());
+        }
+        if let Some(lease) = req.header("x-ms-lease-id") {
+            if !Self::has_active_lease(blob) || Self::lease_id(blob) != Some(lease) {
+                return Some(Self::error_response(
+                    StatusCode::PRECONDITION_FAILED,
+                    if Self::has_active_lease(blob) {
+                        "LeaseIdMismatchWithBlobOperation"
+                    } else {
+                        "LeaseNotPresentWithBlobOperation"
+                    },
+                    "The supplied lease must match an active blob lease.",
+                ));
+            }
+        }
+        // All accepted versions use Azure's post-2013-08-15 read expression:
+        // If-Match && If-Unmodified-Since && (If-None-Match || If-Modified-Since).
+        let none_match = req
+            .headers
+            .contains_key("if-none-match")
+            .then(|| !matches("if-none-match", true));
+        let modified = modified.map(|date| blob.last_modified.timestamp() > date);
+        let cache_allows = match (none_match, modified) {
+            (Some(left), Some(right)) => left || right,
+            (Some(value), None) | (None, Some(value)) => value,
+            (None, None) => true,
+        };
+        (!cache_allows).then(|| {
+            Self::response(StatusCode::NOT_MODIFIED)
+                .header("etag", &format!("\"{}\"", blob.etag))
+                .header(
+                    "last-modified",
+                    &crate::utils::headers::format_last_modified_at(&blob.last_modified),
+                )
+                .empty()
+        })
+    }
+
     fn namespace_conditions_match(req: &Request, namespace: &crate::blob::Namespace) -> bool {
         let etag = Self::namespace_etag(namespace);
         let etag = etag.trim_matches('"');
@@ -1135,23 +1252,6 @@ impl AzureBlobAdapter {
         }
     }
 
-    fn lookup_blob(
-        storage: &Arc<dyn Storage>,
-        container: &str,
-        blob_key: &str,
-        snapshot: Option<&str>,
-        version_id: Option<&str>,
-    ) -> crate::error::Result<crate::models::Object> {
-        if let Some(version_id) = version_id {
-            return storage.get_object_version(container, blob_key, version_id);
-        }
-        let key = snapshot.map_or_else(
-            || blob_key.to_string(),
-            |value| Self::snapshot_storage_key(blob_key, value),
-        );
-        storage.get_object(container, &key)
-    }
-
     fn lookup_blob_metadata(
         storage: &Arc<dyn Storage>,
         container: &str,
@@ -1159,10 +1259,14 @@ impl AzureBlobAdapter {
         snapshot: Option<&str>,
         version_id: Option<&str>,
     ) -> crate::error::Result<crate::models::Object> {
-        if snapshot.is_some() || version_id.is_some() {
-            return Self::lookup_blob(storage, container, blob_key, snapshot, version_id);
+        if let Some(version_id) = version_id {
+            return storage.get_object_version_metadata(container, blob_key, version_id);
         }
-        storage.get_object_metadata(container, blob_key)
+        let key = snapshot.map_or_else(
+            || blob_key.to_string(),
+            |value| Self::snapshot_storage_key(blob_key, value),
+        );
+        storage.get_object_metadata(container, &key)
     }
 
     fn set_blob_type(blob: &mut crate::models::Object, blob_type: &str) {
@@ -1926,6 +2030,21 @@ impl AzureBlobAdapter {
         ))
     }
 
+    fn unsupported_operation_predicates(req: &Request) -> Option<Response<Body>> {
+        (req.headers.contains_key("x-ms-if-tags")
+            || (!matches!(*req.method(), Method::GET | Method::HEAD)
+                && ["if-modified-since", "if-unmodified-since"]
+                    .iter()
+                    .any(|name| req.headers.contains_key(*name))))
+        .then(|| {
+            Self::error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "FeatureNotSupported",
+                "Azure tag predicates and mutation date predicates are not implemented.",
+            )
+        })
+    }
+
     fn handle_request(
         &self,
         storage: &Arc<dyn Storage>,
@@ -1956,6 +2075,9 @@ impl AzureBlobAdapter {
         };
 
         if let Err(response) = Self::authorize(req, auth_config, &resource) {
+            return Ok(response);
+        }
+        if let Some(response) = Self::unsupported_operation_predicates(req) {
             return Ok(response);
         }
 
@@ -2530,7 +2652,7 @@ impl AzureBlobAdapter {
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
         let action = req.header("x-ms-lease-action").unwrap_or("");
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -2642,16 +2764,9 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match storage.as_ref().get_blob(container, blob_key) {
+        let blob = match Self::bounded_mutation_blob(storage, container, blob_key, 0) {
             Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ))
-            }
-            Err(error) => return Err(error.to_string()),
+            Err(response) => return Ok(response),
         };
         if let Err(response) = Self::ensure_lease_allows(req, &blob) {
             return Ok(response);
@@ -2731,7 +2846,7 @@ impl AzureBlobAdapter {
                 "The x-ms-immutability-policy-mode header must be Unlocked or Locked.",
             ));
         }
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -2777,7 +2892,7 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -2833,7 +2948,7 @@ impl AzureBlobAdapter {
                 ))
             }
         };
-        let mut blob = match storage.as_ref().get_blob(container, blob_key) {
+        let mut blob = match storage.get_object_metadata(container, blob_key) {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(Self::blob_not_found())
@@ -3333,16 +3448,9 @@ impl AzureBlobAdapter {
         container: &str,
         blob_key: &str,
     ) -> Result<Response<Body>, String> {
-        let existing = match storage.as_ref().get_blob(container, blob_key) {
-            Ok(existing) => existing,
-            Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ))
-            }
-            Err(error) => return Err(error.to_string()),
+        let existing = match Self::bounded_mutation_blob(storage, container, blob_key, 0) {
+            Ok(blob) => blob,
+            Err(response) => return Ok(response),
         };
         if let Err(response) = Self::ensure_mutation_allowed(req, &existing) {
             return Ok(response);
@@ -3367,7 +3475,7 @@ impl AzureBlobAdapter {
             return Ok(Self::condition_failed());
         }
         let stored = storage
-            .get_object(container, blob_key)
+            .get_object_metadata(container, blob_key)
             .map_err(|error| error.to_string())?;
         Ok(Self::response(StatusCode::OK)
             .header("etag", &format!("\"{}\"", stored.etag))
@@ -3474,7 +3582,7 @@ impl AzureBlobAdapter {
 
     fn materialized_extent_unsupported() -> Response<Body> {
         Self::error_response(StatusCode::NOT_IMPLEMENTED, "FeatureNotSupported",
-            "This emulator supports page blob extents and materialized append/page mutations up to 64 MiB. Large BlockBlob uploads remain streamed.")
+            "This emulator materializes at most 64 MiB for page extents, mutation, snapshot, and read operations. Large BlockBlob uploads remain streamed.")
     }
 
     #[allow(clippy::result_large_err)]
@@ -4005,6 +4113,7 @@ impl AzureBlobAdapter {
             .unwrap_or_default()
     }
 
+    #[allow(clippy::too_many_lines)]
     fn get_blob(
         storage: &Arc<dyn Storage>,
         req: &Request,
@@ -4012,80 +4121,132 @@ impl AzureBlobAdapter {
         blob_key: &str,
         snapshot: Option<&str>,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::lookup_blob(
-            storage,
-            container,
-            blob_key,
-            snapshot,
-            req.query_param("versionid"),
-        ) {
-            Ok(blob) => blob,
-            Err(
-                crate::error::Error::KeyNotFound
-                | crate::error::Error::NoSuchVersion
-                | crate::error::Error::BucketNotFound,
-            ) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "BlobNotFound",
-                    "The specified blob does not exist.",
-                ));
-            }
-            Err(err) => return Err(err.to_string()),
-        };
-        if let Some(range_header) = Self::requested_range(req) {
-            return Ok(Self::get_blob_range(
-                storage,
-                container,
-                blob_key,
-                &blob,
-                range_header,
-            ));
+        let version = req.query_param("versionid");
+        let initial =
+            match Self::lookup_blob_metadata(storage, container, blob_key, snapshot, version) {
+                Ok(blob) => blob,
+                Err(
+                    crate::error::Error::KeyNotFound
+                    | crate::error::Error::NoSuchVersion
+                    | crate::error::Error::BucketNotFound,
+                ) => return Ok(Self::blob_not_found()),
+                Err(error) => return Err(error.to_string()),
+            };
+        if let Some(response) = Self::read_condition_response(req, &initial) {
+            return Ok(response);
         }
-        let body_len = Self::response_body_len(blob.size)?;
+        let selected = |size| -> Option<(u64, u64)> {
+            match Self::requested_range(req) {
+                Some(range) => Self::parse_range_header(range, size)
+                    .map(|(start, end)| (start as u64, end as u64)),
+                None => Some((0, size.saturating_sub(1))),
+            }
+        };
+        let Some((start, end)) = selected(initial.size) else {
+            return Ok(Self::error_response(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                "InvalidRange",
+                "The requested range is not satisfiable.",
+            ));
+        };
+        let len = if initial.size == 0 {
+            0
+        } else {
+            end - start + 1
+        };
+        if len > AZURE_MAX_MATERIALIZED_MUTATION_BYTES {
+            return Ok(Self::materialized_extent_unsupported());
+        }
+        let (blob, data) = if len == 0 {
+            (initial, Vec::new())
+        } else {
+            // The capped storage read prevents a concurrent replacement from
+            // growing allocation after metadata admission.
+            // Preserve the client's extent rather than the first generation's
+            // clamped end: the coherent read can observe a larger replacement.
+            let limit_end = start.saturating_add(AZURE_MAX_MATERIALIZED_MUTATION_BYTES - 1);
+            let requested_end = Self::requested_range(req)
+                .and_then(|range| range.strip_prefix("bytes="))
+                .and_then(|range| range.split_once('-'))
+                .and_then(|(_, end)| end.parse::<u64>().ok());
+            let capped_end = requested_end.map_or(limit_end, |end| end.min(limit_end));
+            let read = if let Some(version) = version {
+                storage.get_object_version_range(
+                    container,
+                    blob_key,
+                    version,
+                    start,
+                    Some(capped_end),
+                )
+            } else {
+                let key = snapshot.map_or_else(
+                    || blob_key.to_string(),
+                    |value| Self::snapshot_storage_key(blob_key, value),
+                );
+                storage.get_object_range(container, &key, start, Some(capped_end))
+            };
+            let (blob, data) = match read {
+                Ok(value) => value,
+                Err(
+                    crate::error::Error::KeyNotFound
+                    | crate::error::Error::NoSuchVersion
+                    | crate::error::Error::BucketNotFound,
+                ) => return Ok(Self::blob_not_found()),
+                Err(crate::error::Error::InvalidRequest(_)) => {
+                    return Ok(Self::error_response(
+                        StatusCode::RANGE_NOT_SATISFIABLE,
+                        "InvalidRange",
+                        "The requested range is not satisfiable.",
+                    ))
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            if let Some(response) = Self::read_condition_response(req, &blob) {
+                return Ok(response);
+            }
+            let Some((actual_start, actual_end)) = selected(blob.size) else {
+                return Ok(Self::condition_failed());
+            };
+            let actual_len = if blob.size == 0 {
+                0
+            } else {
+                actual_end - actual_start + 1
+            };
+            if actual_len > AZURE_MAX_MATERIALIZED_MUTATION_BYTES
+                || actual_len != data.len() as u64
+                || actual_start != start
+            {
+                return Ok(Self::materialized_extent_unsupported());
+            }
+            (blob, data)
+        };
         let expose_version_id = Self::azure_history_visible(storage, container);
         let is_current_version = expose_version_id
             .then(|| Self::is_current_version(storage, container, blob_key, &blob))
             .flatten();
+        let ranged = Self::requested_range(req).is_some();
+        let content_range = ranged.then(|| {
+            format!(
+                "bytes {}-{}/{}",
+                start,
+                start + data.len().saturating_sub(1) as u64,
+                blob.size
+            )
+        });
         Ok(Self::blob_response(
-            StatusCode::OK,
+            if ranged {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            },
             &blob,
-            body_len,
-            None,
+            data.len(),
+            content_range,
             is_current_version,
             expose_version_id,
         )
-        .body(blob.data)
+        .body(data)
         .build())
-    }
-
-    fn get_blob_range(
-        storage: &Arc<dyn Storage>,
-        container: &str,
-        blob_key: &str,
-        blob: &crate::models::Object,
-        range_header: &str,
-    ) -> Response<Body> {
-        if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-            let data = blob.data[start..=end].to_vec();
-            return Self::blob_response(
-                StatusCode::PARTIAL_CONTENT,
-                blob,
-                data.len(),
-                Some(format!("bytes {start}-{end}/{}", blob.size)),
-                Self::azure_history_visible(storage, container)
-                    .then(|| Self::is_current_version(storage, container, blob_key, blob))
-                    .flatten(),
-                Self::azure_history_visible(storage, container),
-            )
-            .body(data)
-            .build();
-        }
-        Self::error_response(
-            StatusCode::RANGE_NOT_SATISFIABLE,
-            "InvalidRange",
-            "The requested range is not satisfiable.",
-        )
     }
 
     fn head_blob(
@@ -4114,6 +4275,9 @@ impl AzureBlobAdapter {
             }
             Err(err) => return Err(err.to_string()),
         };
+        if let Some(response) = Self::read_condition_response(req, &blob) {
+            return Ok(response);
+        }
         let body_len = Self::response_body_len(blob.size)?;
         let expose_version_id = Self::azure_history_visible(storage, container);
         let is_current_version = expose_version_id
@@ -4160,7 +4324,8 @@ impl AzureBlobAdapter {
         snapshot: Option<&str>,
     ) -> Result<Response<Body>, String> {
         if let Some(version_id) = req.query_param("versionid") {
-            let version = match storage.get_object_version(container, blob_key, version_id) {
+            let version = match storage.get_object_version_metadata(container, blob_key, version_id)
+            {
                 Ok(version) => version,
                 Err(
                     crate::error::Error::NoSuchVersion
@@ -4195,7 +4360,7 @@ impl AzureBlobAdapter {
         }
         if let Some(snapshot) = snapshot {
             let snapshot_key = Self::snapshot_storage_key(blob_key, snapshot);
-            let selected = match storage.as_ref().get_blob(container, &snapshot_key) {
+            let selected = match storage.get_object_metadata(container, &snapshot_key) {
                 Ok(selected) => selected,
                 Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                     return Ok(Self::error_response(
@@ -4365,6 +4530,312 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sqrzl-azure-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Native condition combinations use one selected-object fixture.
+    async fn should_evaluate_azure_read_conditions_for_current_snapshots_and_versions() {
+        let storage = temp_storage();
+        storage.create_bucket("conditions".to_string()).unwrap();
+        storage.enable_versioning("conditions").unwrap();
+        storage
+            .update_bucket_metadata(
+                "conditions",
+                HashMap::from([(AZURE_VERSIONING_KEY.to_string(), "true".to_string())]),
+            )
+            .unwrap();
+        let mut old = crate::models::Object::new(
+            "item".to_string(),
+            b"old".to_vec(),
+            "text/plain".to_string(),
+        );
+        old.last_modified = DateTime::parse_from_rfc3339("2020-01-01T00:00:00.500Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        storage
+            .put_object("conditions", "item".to_string(), old.clone())
+            .unwrap();
+        let version = storage
+            .get_object_metadata("conditions", "item")
+            .unwrap()
+            .version_id
+            .unwrap();
+        let snapshot = "2020-01-01T00:00:00.500000Z";
+        let snapshot_key = AzureBlobAdapter::snapshot_storage_key("item", snapshot);
+        storage
+            .put_object("conditions", snapshot_key, old.clone())
+            .unwrap();
+        let mut current = crate::models::Object::new(
+            "item".to_string(),
+            b"new".to_vec(),
+            "text/plain".to_string(),
+        );
+        current.last_modified = old.last_modified + chrono::Duration::days(1);
+        storage
+            .put_object("conditions", "item".to_string(), current.clone())
+            .unwrap();
+        for (suffix, snapshot_selector, selected) in [
+            (String::new(), None, &current),
+            (format!("?snapshot={snapshot}"), Some(snapshot), &old),
+            (format!("?versionid={version}"), None, &old),
+        ] {
+            let etag = format!("\"{}\"", selected.etag);
+            let etag_list = format!("\"other\", {etag}");
+            let weak = format!("W/{etag}");
+            let equal = crate::utils::headers::format_last_modified_at(&selected.last_modified);
+            let before = crate::utils::headers::format_last_modified_at(
+                &(selected.last_modified - chrono::Duration::days(1)),
+            );
+            let after = crate::utils::headers::format_last_modified_at(
+                &(selected.last_modified + chrono::Duration::days(1)),
+            );
+            for method in ["GET", "HEAD"] {
+                for (headers, expected) in [
+                    (
+                        vec![("if-match", "\"wrong\"")],
+                        StatusCode::PRECONDITION_FAILED,
+                    ),
+                    (vec![("if-match", etag.as_str())], StatusCode::OK),
+                    (vec![("if-match", etag_list.as_str())], StatusCode::OK),
+                    (
+                        vec![("if-match", weak.as_str())],
+                        StatusCode::PRECONDITION_FAILED,
+                    ),
+                    (
+                        vec![("if-none-match", etag.as_str())],
+                        StatusCode::NOT_MODIFIED,
+                    ),
+                    (
+                        vec![("if-none-match", etag_list.as_str())],
+                        StatusCode::NOT_MODIFIED,
+                    ),
+                    (
+                        vec![("if-none-match", weak.as_str())],
+                        StatusCode::NOT_MODIFIED,
+                    ),
+                    (vec![("if-none-match", "*")], StatusCode::NOT_MODIFIED),
+                    (
+                        vec![("if-modified-since", equal.as_str())],
+                        StatusCode::NOT_MODIFIED,
+                    ),
+                    (vec![("if-modified-since", before.as_str())], StatusCode::OK),
+                    (
+                        vec![("if-unmodified-since", equal.as_str())],
+                        StatusCode::OK,
+                    ),
+                    (
+                        vec![("if-unmodified-since", before.as_str())],
+                        StatusCode::PRECONDITION_FAILED,
+                    ),
+                    (
+                        vec![
+                            ("if-none-match", etag.as_str()),
+                            ("if-modified-since", before.as_str()),
+                        ],
+                        StatusCode::OK,
+                    ),
+                    (
+                        vec![
+                            ("if-none-match", "\"wrong\""),
+                            ("if-modified-since", after.as_str()),
+                        ],
+                        StatusCode::OK,
+                    ),
+                    (
+                        vec![
+                            ("if-none-match", etag.as_str()),
+                            ("if-modified-since", after.as_str()),
+                        ],
+                        StatusCode::NOT_MODIFIED,
+                    ),
+                    (
+                        vec![
+                            ("if-match", "\"wrong\""),
+                            ("if-modified-since", after.as_str()),
+                        ],
+                        StatusCode::PRECONDITION_FAILED,
+                    ),
+                    (
+                        vec![
+                            ("if-unmodified-since", before.as_str()),
+                            ("if-none-match", etag.as_str()),
+                        ],
+                        StatusCode::PRECONDITION_FAILED,
+                    ),
+                    (
+                        vec![("if-modified-since", "invalid")],
+                        StatusCode::BAD_REQUEST,
+                    ),
+                    (
+                        vec![
+                            ("if-modified-since", equal.as_str()),
+                            ("if-modified-since", equal.as_str()),
+                        ],
+                        StatusCode::BAD_REQUEST,
+                    ),
+                    (
+                        vec![("x-ms-if-tags", "\"tag\" = 'value'")],
+                        StatusCode::NOT_IMPLEMENTED,
+                    ),
+                    (
+                        vec![("x-ms-lease-id", "00000000-0000-0000-0000-000000000001")],
+                        StatusCode::PRECONDITION_FAILED,
+                    ),
+                ] {
+                    let request = parsed_request(
+                        method,
+                        &format!("http://localhost/devstoreaccount1/conditions/item{suffix}"),
+                        &headers,
+                        b"",
+                    )
+                    .await;
+                    let response = if method == "HEAD" {
+                        AzureBlobAdapter::head_blob(
+                            &storage,
+                            &request,
+                            "conditions",
+                            "item",
+                            snapshot_selector,
+                        )
+                    } else {
+                        AzureBlobAdapter::get_blob(
+                            &storage,
+                            &request,
+                            "conditions",
+                            "item",
+                            snapshot_selector,
+                        )
+                    }
+                    .unwrap();
+                    assert_eq!(response.status(), expected, "{method} {suffix} {headers:?}");
+                    if expected == StatusCode::NOT_MODIFIED {
+                        assert_eq!(header_value(&response, "etag"), Some(etag.as_str()));
+                        assert_eq!(
+                            header_value(&response, "last-modified"),
+                            Some(equal.as_str())
+                        );
+                    }
+                    let body = response.into_body().collect().await.unwrap().to_bytes();
+                    if method == "HEAD" || expected == StatusCode::NOT_MODIFIED {
+                        assert!(body.is_empty());
+                    } else if expected == StatusCode::OK {
+                        assert_eq!(body.as_ref(), selected.data);
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_unsupported_azure_mutation_predicates_without_side_effects() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("conditions".to_string()).unwrap();
+        storage
+            .put_object(
+                "conditions",
+                "item".to_string(),
+                crate::models::Object::new(
+                    "item".to_string(),
+                    b"original".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let original = storage.get_object("conditions", "item").unwrap();
+        for predicate in ["if-modified-since", "if-unmodified-since", "x-ms-if-tags"] {
+            for (method, suffix) in [
+                ("PUT", ""),
+                ("DELETE", ""),
+                ("PUT", "?comp=metadata"),
+                ("PUT", "?comp=snapshot"),
+                ("PUT", "?comp=lease"),
+                ("PUT", "?comp=block&blockid=YmxvY2s="),
+            ] {
+                let req = parsed_request(
+                    method,
+                    &format!("http://localhost/devstoreaccount1/conditions/item{suffix}"),
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "BlockBlob"),
+                        ("x-ms-lease-action", "acquire"),
+                        ("x-ms-lease-duration", "-1"),
+                        ("x-ms-meta-changed", "bad"),
+                        (predicate, "invalid"),
+                    ],
+                    b"replacement",
+                )
+                .await;
+                let response = adapter
+                    .handle_request(&storage, &auth_disabled(), &req)
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::NOT_IMPLEMENTED,
+                    "{method} {suffix} {predicate}"
+                );
+                assert_eq!(
+                    header_value(&response, "x-ms-error-code"),
+                    Some("FeatureNotSupported")
+                );
+                let current = storage.get_object("conditions", "item").unwrap();
+                assert_eq!(current.data, original.data);
+                assert_eq!(current.etag, original.etag);
+                assert_eq!(current.metadata, original.metadata);
+                assert_eq!(current.provider_metadata, original.provider_metadata);
+                assert_eq!(current.last_modified, original.last_modified);
+                assert_eq!(
+                    storage
+                        .list_objects("conditions", None, None, None, None)
+                        .unwrap()
+                        .objects
+                        .len(),
+                    1
+                );
+                assert!(adapter.block_sessions.lock().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_unimplemented_azure_tag_predicates_on_block_lists() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("conditions".to_string()).unwrap();
+        storage
+            .put_object(
+                "conditions",
+                "item".to_string(),
+                crate::models::Object::new(
+                    "item".to_string(),
+                    b"original".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let request = parsed_request(
+            "GET",
+            "http://localhost/devstoreaccount1/conditions/item?comp=blocklist&blocklisttype=all",
+            &[
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-if-tags", "\"tag\" = 'value'"),
+            ],
+            b"",
+        )
+        .await;
+        let response = adapter
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(
+            header_value(&response, "x-ms-error-code"),
+            Some("FeatureNotSupported")
+        );
+        assert_eq!(
+            storage.get_object("conditions", "item").unwrap().data,
+            b"original"
+        );
+        assert!(adapter.block_sessions.lock().unwrap().is_empty());
     }
 
     fn auth_disabled() -> Arc<AuthConfig> {

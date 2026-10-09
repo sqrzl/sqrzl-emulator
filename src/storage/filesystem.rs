@@ -1743,6 +1743,48 @@ impl FilesystemStorage {
 }
 
 impl FilesystemStorage {
+    // Select version metadata and its payload path under the object mutex.
+    fn read_version_metadata_and_path_locked(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<(Object, PathBuf)> {
+        if !self.bucket_exists(bucket)? {
+            return Err(Error::BucketNotFound);
+        }
+        Self::validate_version_id(version_id)?;
+        let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
+        Self::recover_publication(&self.version_dir(bucket, &object_id, version_id))?;
+        let version_path = self.version_data_path(bucket, &object_id, version_id);
+        let (mut object, path) = if version_path.exists() {
+            (
+                Self::read_object_metadata(
+                    &self.version_metadata_path(bucket, &object_id, version_id),
+                )?,
+                version_path,
+            )
+        } else {
+            let object =
+                self.read_object_metadata_locked(bucket, key)
+                    .map_err(|error| match error {
+                        Error::KeyNotFound => Error::NoSuchVersion,
+                        other => other,
+                    })?;
+            if object.version_id.as_deref() != Some(version_id) {
+                return Err(Error::NoSuchVersion);
+            }
+            (object, self.object_data_path(bucket, &object_id))
+        };
+        object.version_id = Some(version_id.to_string());
+        #[cfg(test)]
+        self.test_phase(TestPhase::ReadMetadata);
+        Ok((object, path))
+    }
+}
+
+impl FilesystemStorage {
     fn list_object_versions_for_key_locked(&self, bucket: &str, key: &str) -> Result<Vec<Object>> {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
@@ -1836,6 +1878,61 @@ impl VersionStore for FilesystemStorage {
             Error::InternalError("Failed to lock object for version read".to_string())
         })?;
         self.read_object_version_locked(bucket, key, version_id)
+    }
+
+    fn get_object_version_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<Object> {
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock version metadata read".to_string())
+        })?;
+        self.read_version_metadata_and_path_locked(bucket, key, version_id)
+            .map(|(object, _)| object)
+    }
+
+    fn get_object_version_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Object, Vec<u8>)> {
+        let object_lock = self.object_lock(bucket, key)?;
+        let _guard = object_lock
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock version range read".to_string()))?;
+        let (object, path) = self.read_version_metadata_and_path_locked(bucket, key, version_id)?;
+        if start >= object.size {
+            return Err(Error::InvalidRequest(
+                "Range start beyond file size".to_string(),
+            ));
+        }
+        let end = end.unwrap_or(object.size - 1).min(object.size - 1);
+        if end < start {
+            return Err(Error::InvalidRequest(
+                "Invalid range: end < start".to_string(),
+            ));
+        }
+        let len = usize::try_from(end - start + 1)
+            .map_err(|_| Error::InvalidRequest("Version range is too large".to_string()))?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::ReadPayloadMetadata);
+        let mut file = fs::File::open(path).map_err(|error| {
+            Error::InternalError(format!("Failed to open version payload: {error}"))
+        })?;
+        file.seek(SeekFrom::Start(start)).map_err(|error| {
+            Error::InternalError(format!("Failed to seek version payload: {error}"))
+        })?;
+        let mut data = vec![0_u8; len];
+        file.read_exact(&mut data).map_err(|error| {
+            Error::InternalError(format!("Failed to read version range: {error}"))
+        })?;
+        Ok((object, data))
     }
 
     fn list_object_versions(

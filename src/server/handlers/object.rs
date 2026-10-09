@@ -15,6 +15,8 @@ use hyper::Response;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod bounded;
+mod checksums;
 mod helpers;
 
 use self::helpers::{
@@ -208,6 +210,22 @@ fn object_acl_response(
     }
 }
 
+fn read_admission_conditions(
+    storage: &dyn Storage,
+    bucket: &str,
+    key: &str,
+    version: Option<&str>,
+    req: &crate::server::http::Request,
+    req_id: &str,
+) -> Option<Response<Body>> {
+    let object = bounded::metadata(storage, bucket, key, version).ok()?;
+    if is_s3_delete_marker(&object) {
+        return None;
+    }
+    validate_get_sse_headers(req, &object, req_id)
+        .or_else(|| check_object_conditionals(req, &object, req_id))
+}
+
 fn object_version_response(
     storage: &Arc<dyn Storage>,
     bucket: &str,
@@ -216,14 +234,51 @@ fn object_version_response(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
+    let range = match req.header("range") {
+        Some(value) => match parse_range(value) {
+            Some(range) => Some(range),
+            None => return bounded::invalid_range(req_id),
+        },
+        None => None,
+    };
+    if let Some(response) =
+        read_admission_conditions(storage.as_ref(), bucket, key, Some(version_id), req, req_id)
+    {
+        return response;
+    }
     match tokio::task::block_in_place(|| {
-        object_service::get_object_version(storage.as_ref(), bucket, key, version_id)
+        bounded::payload(
+            storage.as_ref(),
+            bucket,
+            key,
+            Some(version_id),
+            range,
+            req_id,
+        )
     }) {
         Ok(obj) if is_s3_delete_marker(&obj) => {
             delete_marker_response(storage, bucket, req, req_id, &obj, true, false)
         }
-        Ok(obj) => object_payload_response(storage, bucket, req, req_id, obj, StatusCode::OK, None),
-        Err(e) => storage_error_response(&e, req_id),
+        Ok(mut obj) => {
+            let selected = range.map(|(start, _)| {
+                let data = std::mem::take(&mut obj.data);
+                let len = data.len() as u64;
+                let content_range = format!(
+                    "bytes {}-{}/{}",
+                    start,
+                    start + len.saturating_sub(1),
+                    obj.size
+                );
+                (data, len, content_range)
+            });
+            let status = if selected.is_some() {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            };
+            object_payload_response(storage, bucket, req, req_id, obj, status, selected)
+        }
+        Err(response) => *response,
     }
 }
 
@@ -386,22 +441,26 @@ fn object_range_response(
     req_id: &str,
     range_header: &str,
 ) -> Response<Body> {
-    let Some((start, end)) = parse_range(range_header) else {
-        return xml_error_response(
-            StatusCode::RANGE_NOT_SATISFIABLE,
-            "InvalidRange",
-            "Invalid Range header",
-            req_id,
-        );
+    let Some(range) = parse_range(range_header) else {
+        return bounded::invalid_range(req_id);
     };
-
+    if let Some(response) =
+        read_admission_conditions(storage.as_ref(), bucket, key, None, req, req_id)
+    {
+        return response;
+    }
     match tokio::task::block_in_place(|| {
-        object_service::get_object_range(storage.as_ref(), bucket, key, start, end)
+        bounded::payload(storage.as_ref(), bucket, key, None, Some(range), req_id)
     }) {
-        Ok((obj, data)) => {
+        Ok(mut obj) => {
+            let data = std::mem::take(&mut obj.data);
             let len = data.len() as u64;
-            let end_idx = start + len.saturating_sub(1);
-            let content_range = format!("bytes {}-{}/{}", start, end_idx, obj.size);
+            let content_range = format!(
+                "bytes {}-{}/{}",
+                range.0,
+                range.0 + len.saturating_sub(1),
+                obj.size
+            );
             object_payload_response(
                 storage,
                 bucket,
@@ -412,23 +471,8 @@ fn object_range_response(
                 Some((data, len, content_range)),
             )
         }
-        Err(e) => current_delete_marker(storage, bucket, key).map_or_else(
-            || match e {
-                crate::error::Error::KeyNotFound | crate::error::Error::NoSuchVersion => {
-                    xml_error_response(
-                        StatusCode::NOT_FOUND,
-                        "NoSuchKey",
-                        "The specified key does not exist.",
-                        req_id,
-                    )
-                }
-                _ => xml_error_response(
-                    StatusCode::RANGE_NOT_SATISFIABLE,
-                    "InvalidRange",
-                    &e.to_string(),
-                    req_id,
-                ),
-            },
+        Err(response) => current_delete_marker(storage, bucket, key).map_or_else(
+            || *response,
             |marker| delete_marker_response(storage, bucket, req, req_id, &marker, false, false),
         ),
     }
@@ -441,11 +485,17 @@ fn object_full_response(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
-    match tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
+    if let Some(response) =
+        read_admission_conditions(storage.as_ref(), bucket, key, None, req, req_id)
     {
+        return response;
+    }
+    match tokio::task::block_in_place(|| {
+        bounded::payload(storage.as_ref(), bucket, key, None, None, req_id)
+    }) {
         Ok(obj) => object_payload_response(storage, bucket, req, req_id, obj, StatusCode::OK, None),
-        Err(e) => current_delete_marker(storage, bucket, key).map_or_else(
-            || xml_error_response(StatusCode::NOT_FOUND, "NoSuchKey", &e.to_string(), req_id),
+        Err(response) => current_delete_marker(storage, bucket, key).map_or_else(
+            || *response,
             |marker| delete_marker_response(storage, bucket, req, req_id, &marker, false, false),
         ),
     }
@@ -480,6 +530,7 @@ fn object_payload_response(
     }
 
     let builder = object_response_headers(builder, &obj, req_id);
+    let builder = checksums::retrieval_headers(builder, req, &obj);
     cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder)
         .body(data)
         .build()
@@ -525,13 +576,28 @@ pub async fn object_put(
         return Ok(s3_foreign_history_conflict_response(&req_id));
     }
 
+    if checksums::requested(req)
+        && (req.has_query_param("uploadId") || req.header("x-amz-copy-source").is_some())
+    {
+        return Ok(checksums::unsupported(&req_id));
+    }
+
+    if req.has_query_param("tagging") || req.has_query_param("acl") {
+        if let Some(response) =
+            checksums::validate_put(req, &req_id).or_else(|| validate_content_md5(req, &req_id))
+        {
+            return Ok(response);
+        }
+    }
+
     if let Some(response) = validate_object_lock_put_request(&storage, bucket, req, &req_id) {
         return Ok(response);
     }
 
-    let existing =
-        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
-            .ok();
+    let existing = tokio::task::block_in_place(|| {
+        object_service::get_object_metadata(storage.as_ref(), bucket, key)
+    })
+    .ok();
     if let Some(existing) = existing.as_ref() {
         if object_is_locked(existing)
             && !s3_mutation_preserves_current_version(&storage, bucket, existing)
@@ -739,9 +805,11 @@ fn put_object_tagging(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Result<Response<Body>, String> {
-    if tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
-        .as_ref()
-        .is_ok_and(object_is_locked)
+    if tokio::task::block_in_place(|| {
+        object_service::get_object_metadata(storage.as_ref(), bucket, key)
+    })
+    .as_ref()
+    .is_ok_and(object_is_locked)
     {
         return Ok(locked_object_response(req_id));
     }
@@ -890,25 +958,42 @@ fn upload_part_copy(
     if s3_foreign_history_conflict(storage.as_ref(), &source_bucket) {
         return s3_foreign_history_conflict_response(req_id);
     }
-    let source = match tokio::task::block_in_place(|| match source_version_id.as_deref() {
-        Some(version_id) => object_service::get_object_version(
+    let range = match req.header("x-amz-copy-source-range") {
+        Some(value) => match parse_range(value) {
+            Some(range) => Some(range),
+            None => {
+                return xml_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "InvalidArgument",
+                    "Invalid x-amz-copy-source-range value.",
+                    req_id,
+                )
+            }
+        },
+        None => None,
+    };
+    if let Ok(source) = bounded::metadata(
+        storage.as_ref(),
+        &source_bucket,
+        &source_key,
+        source_version_id.as_deref(),
+    ) {
+        if let Some(response) = check_copy_conditionals(req, &source, req_id) {
+            return response;
+        }
+    }
+    let source = match tokio::task::block_in_place(|| {
+        bounded::payload(
             storage.as_ref(),
             &source_bucket,
             &source_key,
-            version_id,
-        ),
-        None => object_service::get_object(storage.as_ref(), &source_bucket, &source_key),
+            source_version_id.as_deref(),
+            range,
+            req_id,
+        )
     }) {
         Ok(source) => source,
-        Err(crate::error::Error::KeyNotFound | crate::error::Error::NoSuchVersion) => {
-            return xml_error_response(
-                StatusCode::NOT_FOUND,
-                "NoSuchKey",
-                "Copy source not found",
-                req_id,
-            );
-        }
-        Err(error) => return storage_error_response(&error, req_id),
+        Err(response) => return *response,
     };
     if is_s3_delete_marker(&source) {
         return xml_error_response(
@@ -921,34 +1006,7 @@ fn upload_part_copy(
     if let Some(response) = check_copy_conditionals(req, &source, req_id) {
         return response;
     }
-
-    let data = match req.header("x-amz-copy-source-range") {
-        Some(value) => {
-            let Some((start, end)) = parse_range(value) else {
-                return xml_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "InvalidArgument",
-                    "Invalid x-amz-copy-source-range value.",
-                    req_id,
-                );
-            };
-            let source_len = source.data.len() as u64;
-            let end = end.unwrap_or_else(|| source_len.saturating_sub(1));
-            if start >= source_len || end < start {
-                return xml_error_response(
-                    StatusCode::RANGE_NOT_SATISFIABLE,
-                    "InvalidRange",
-                    "The requested range is not satisfiable.",
-                    req_id,
-                );
-            }
-            let end = end.min(source_len - 1);
-            let start = usize::try_from(start).expect("validated source offset should fit usize");
-            let end = usize::try_from(end).expect("validated source offset should fit usize");
-            source.data[start..=end].to_vec()
-        }
-        None => source.data.clone(),
-    };
+    let data = source.data;
     match tokio::task::block_in_place(|| {
         object_service::upload_part(storage.as_ref(), bucket, upload_id, part_number, data)
     }) {
@@ -989,25 +1047,28 @@ fn copy_object(
         return s3_foreign_history_conflict_response(req_id);
     }
 
-    match tokio::task::block_in_place(|| match source_version_id.as_deref() {
-        Some(version_id) => object_service::get_object_version(
+    if let Ok(source) = bounded::metadata(
+        storage.as_ref(),
+        &source_bucket,
+        &source_key,
+        source_version_id.as_deref(),
+    ) {
+        if let Some(response) = check_copy_conditionals(req, &source, req_id) {
+            return response;
+        }
+    }
+    match tokio::task::block_in_place(|| {
+        bounded::payload(
             storage.as_ref(),
             &source_bucket,
             &source_key,
-            version_id,
-        ),
-        None => object_service::get_object(storage.as_ref(), &source_bucket, &source_key),
+            source_version_id.as_deref(),
+            None,
+            req_id,
+        )
     }) {
         Ok(src_obj) => copy_loaded_object(storage, bucket, key, req, req_id, &src_obj),
-        Err(crate::error::Error::KeyNotFound | crate::error::Error::NoSuchVersion) => {
-            xml_error_response(
-                StatusCode::NOT_FOUND,
-                "NoSuchKey",
-                "Copy source not found",
-                req_id,
-            )
-        }
-        Err(err) => internal_error_response(&err, req_id),
+        Err(response) => *response,
     }
 }
 
@@ -1106,6 +1167,9 @@ fn copy_loaded_object(
         .provider_metadata
         .clone_from(&src_obj.provider_metadata);
     clear_object_lock_metadata(&mut dest_obj);
+    if copy_object_replaces_metadata(req) {
+        helpers::replace_content_properties(req, &mut dest_obj);
+    }
     if let Err(response) = apply_s3_request_contracts(req, &mut dest_obj, req_id) {
         return response;
     }
@@ -1269,6 +1333,9 @@ fn put_object_body(
     req_id: &str,
     existing: Option<&crate::models::Object>,
 ) -> Response<Body> {
+    if let Some(response) = checksums::validate_put(req, req_id) {
+        return response;
+    }
     if let Some(response) = validate_content_md5(req, req_id) {
         return response;
     }
@@ -1313,6 +1380,8 @@ fn put_object_body(
             clear_object_lock_metadata(&mut obj);
         }
     }
+    helpers::replace_content_properties(req, &mut obj);
+    checksums::replace_identity(req, &mut obj);
     if let Err(response) = apply_s3_request_contracts(req, &mut obj, req_id) {
         return response;
     }
@@ -1365,7 +1434,7 @@ fn store_put_object(
             );
         }
     }
-    if req.header("if-match").is_some() && storage.get_object(bucket, key).is_err() {
+    if req.header("if-match").is_some() && storage.get_object_metadata(bucket, key).is_err() {
         return xml_error_response(
             StatusCode::NOT_FOUND,
             "NoSuchKey",
@@ -1381,27 +1450,9 @@ fn store_put_object(
         .as_ref()
         .map(|spooled| spooled.path.clone());
     match tokio::task::block_in_place(|| match (condition, spooled_path) {
-        // A conditional write still needs the payload bytes resident in
-        // `obj.data` (there is no conditional variant of the streaming
-        // write path) — read the spooled file back in for this less common
-        // combination rather than adding another storage-trait method for
-        // it. An unconditional write, the common case for a large upload,
-        // never pays this cost.
-        (Some(condition), Some(payload_path)) => {
-            let mut obj = obj;
-            match std::fs::read(&payload_path) {
-                Ok(data) => {
-                    let _ = std::fs::remove_file(&payload_path);
-                    obj.data = data;
-                    storage
-                        .put_object_if(bucket, obj_key, obj, &condition)
-                        .map(Some)
-                }
-                Err(error) => Err(crate::error::Error::InternalError(format!(
-                    "Failed to read spooled payload: {error}"
-                ))),
-            }
-        }
+        (Some(condition), Some(payload_path)) => storage
+            .put_object_streamed_if(bucket, obj_key, obj, &payload_path, &condition)
+            .map(Some),
         (Some(condition), None) => storage
             .put_object_if(bucket, obj_key, obj, &condition)
             .map(Some),
@@ -1439,6 +1490,13 @@ fn put_object_response(
             .header("x-amz-id-2", &header_utils::generate_request_id()),
         stored_version_id.as_deref(),
     );
+    let mut checksum_identity = crate::models::Object::new(
+        key.to_string(),
+        Vec::new(),
+        "application/octet-stream".to_string(),
+    );
+    checksums::replace_identity(req, &mut checksum_identity);
+    let builder = checksums::response_headers(builder, &checksum_identity);
     cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty()
 }
 
@@ -2179,7 +2237,7 @@ fn delete_object_version_request(
 ) -> Response<Body> {
     let version_id = req.query_param("versionId").unwrap_or("");
     let target = tokio::task::block_in_place(|| {
-        object_service::get_object_version(storage.as_ref(), bucket, key, version_id)
+        storage.get_object_version_metadata(bucket, key, version_id)
     });
     if let Some(value) = req.header("x-amz-bypass-governance-retention") {
         if !value.eq_ignore_ascii_case("true") && !value.eq_ignore_ascii_case("false") {
@@ -2239,9 +2297,9 @@ fn delete_object_tagging(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
-    if let Ok(existing) =
-        tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
-    {
+    if let Ok(existing) = tokio::task::block_in_place(|| {
+        object_service::get_object_metadata(storage.as_ref(), bucket, key)
+    }) {
         if object_is_locked(&existing) {
             return locked_object_response(req_id);
         }
@@ -2267,7 +2325,7 @@ fn delete_current_object(
     if req.header("if-match").is_some()
         && matches!(
             tokio::task::block_in_place(|| {
-                object_service::get_object(storage.as_ref(), bucket, key)
+                object_service::get_object_metadata(storage.as_ref(), bucket, key)
             }),
             Err(crate::error::Error::KeyNotFound)
         )
@@ -2284,7 +2342,7 @@ fn delete_current_object(
     }
     let condition = mutation_if_match_condition(req);
     match tokio::task::block_in_place(|| {
-        if let Ok(existing) = object_service::get_object(storage.as_ref(), bucket, key) {
+        if let Ok(existing) = object_service::get_object_metadata(storage.as_ref(), bucket, key) {
             if object_is_locked(&existing)
                 && !s3_mutation_preserves_current_version(storage, bucket, &existing)
             {
@@ -2360,6 +2418,7 @@ fn no_content_object_response(
     cors::apply_actual_request_headers(storage, bucket, req, builder).empty()
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn object_head(
     storage: Arc<dyn Storage>,
     auth_config: Arc<AuthConfig>,
@@ -2389,7 +2448,7 @@ pub async fn object_head(
 
     if let Some(version_id) = req.query_param("versionId") {
         match tokio::task::block_in_place(|| {
-            object_service::get_object_version(storage.as_ref(), bucket, key, version_id)
+            storage.get_object_version_metadata(bucket, key, version_id)
         }) {
             Ok(obj) if is_s3_delete_marker(&obj) => {
                 return Ok(delete_marker_response(
@@ -2412,6 +2471,7 @@ pub async fn object_head(
                     &req_id,
                 );
 
+                let builder = checksums::retrieval_headers(builder, req, &obj);
                 return Ok(cors::apply_actual_request_headers(
                     storage.as_ref(),
                     bucket,
@@ -2443,8 +2503,9 @@ pub async fn object_head(
         }
     }
 
-    match tokio::task::block_in_place(|| object_service::get_object(storage.as_ref(), bucket, key))
-    {
+    match tokio::task::block_in_place(|| {
+        object_service::get_object_metadata(storage.as_ref(), bucket, key)
+    }) {
         Ok(obj) => {
             if let Some(response) = validate_get_sse_headers(req, &obj, &req_id) {
                 return Ok(response);
@@ -2461,6 +2522,7 @@ pub async fn object_head(
                 &req_id,
             );
 
+            let builder = checksums::retrieval_headers(builder, req, &obj);
             Ok(cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty())
         }
         Err(_) => Ok(current_delete_marker(&storage, bucket, key).map_or_else(
@@ -2583,6 +2645,9 @@ fn complete_multipart_upload_request(
         return s3_foreign_history_conflict_response(req_id);
     }
 
+    if checksums::requested(req) || checksums::manifest_requests_checksum(&req.body) {
+        return checksums::unsupported(req_id);
+    }
     let manifest = match std::str::from_utf8(&req.body)
         .map_err(|error| error.to_string())
         .and_then(xml_utils::parse_complete_multipart_upload_xml)
@@ -2659,6 +2724,9 @@ fn initiate_multipart_upload_request(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
+    if checksums::requested(req) {
+        return checksums::unsupported(req_id);
+    }
     if object_lock_headers_requested(req) {
         return xml_error_response(
             StatusCode::NOT_IMPLEMENTED,
@@ -2684,6 +2752,7 @@ fn initiate_multipart_upload_request(
             .unwrap_or_else(|| "application/octet-stream".to_string()),
         metadata.clone(),
     );
+    helpers::replace_content_properties(req, &mut template);
     if let Err(response) = apply_s3_request_contracts(req, &mut template, req_id) {
         return response;
     }
@@ -2725,6 +2794,450 @@ fn initiate_multipart_upload_request(
 
 #[cfg(test)]
 mod s3_contract_tests {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_validate_required_s3_tagging_checksums_without_replacing_payload_identity() {
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        storage
+            .put_object(
+                "bucket",
+                "key".to_string(),
+                Object::new(
+                    "key".to_string(),
+                    b"original".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let xml = b"<Tagging><TagSet><Tag><Key>owner</Key><Value>contract</Value></Tag></TagSet></Tagging>";
+        let checksum = BASE64.encode(crc32fast::hash(xml).to_be_bytes());
+        let response = object_put(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            "key",
+            &request_with_uri(
+                "PUT",
+                "/bucket/key?tagging",
+                &[
+                    ("x-amz-sdk-checksum-algorithm", "CRC32"),
+                    ("x-amz-checksum-crc32", &checksum),
+                ],
+                xml,
+            )
+            .await,
+            "tag".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bad = object_put(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            "key",
+            &request_with_uri(
+                "PUT",
+                "/bucket/key?tagging",
+                &[("x-amz-checksum-crc32", "AAAAAA==")],
+                xml,
+            )
+            .await,
+            "bad".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            storage.get_object("bucket", "key").unwrap().data,
+            b"original"
+        );
+        assert_eq!(
+            storage
+                .get_object_tags("bucket", "key")
+                .unwrap()
+                .get("owner")
+                .map(String::as_str),
+            Some("contract")
+        );
+        assert!(!storage
+            .get_object_metadata("bucket", "key")
+            .unwrap()
+            .provider_metadata
+            .keys()
+            .any(|key| key.starts_with("s3_checksum_")));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_validate_s3_additional_checksums_before_publication() {
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        storage
+            .put_object(
+                "bucket",
+                "key".to_string(),
+                Object::new(
+                    "key".to_string(),
+                    b"original".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        for (headers, status, code) in [
+            (
+                vec![
+                    ("x-amz-sdk-checksum-algorithm", "SHA256"),
+                    (
+                        "x-amz-checksum-sha256",
+                        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    ),
+                ],
+                StatusCode::BAD_REQUEST,
+                "BadDigest",
+            ),
+            (
+                vec![("x-amz-checksum-sha256", "not-base64")],
+                StatusCode::BAD_REQUEST,
+                "InvalidDigest",
+            ),
+            (
+                vec![("x-amz-sdk-checksum-algorithm", "SHA256")],
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+            ),
+            (
+                vec![
+                    ("x-amz-sdk-checksum-algorithm", "SHA256"),
+                    ("x-amz-checksum-crc32c", "AAAAAA=="),
+                ],
+                StatusCode::BAD_REQUEST,
+                "BadDigest",
+            ),
+            (
+                vec![("x-amz-checksum-sha512", "AAAAAAAA")],
+                StatusCode::NOT_IMPLEMENTED,
+                "NotImplemented",
+            ),
+            (
+                vec![
+                    ("x-amz-trailer", "x-amz-checksum-sha256"),
+                    ("content-encoding", "aws-chunked"),
+                ],
+                StatusCode::NOT_IMPLEMENTED,
+                "NotImplemented",
+            ),
+        ] {
+            let response = object_put(
+                storage.clone(),
+                auth_disabled_config(),
+                "bucket",
+                "key",
+                &request("PUT", &headers, b"changed").await,
+                "check".to_string(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), status, "{headers:?}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert!(String::from_utf8_lossy(&body).contains(&format!("<Code>{code}</Code>")));
+            assert_eq!(
+                storage.get_object("bucket", "key").unwrap().data,
+                b"original"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_persist_and_return_s3_checksum_identity_through_restart() {
+        use sha2::Digest as _;
+        let path =
+            std::env::temp_dir().join(format!("sqrzl-s3-checksums-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&path));
+        storage.create_bucket("bucket".to_string()).unwrap();
+        let checksum = BASE64.encode(sha2::Sha256::digest(b"checked"));
+        let response = object_put(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            "key",
+            &request(
+                "PUT",
+                &[
+                    ("x-amz-sdk-checksum-algorithm", "SHA256"),
+                    ("x-amz-checksum-sha256", &checksum),
+                ],
+                b"checked",
+            )
+            .await,
+            "put".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("x-amz-checksum-sha256").unwrap(),
+            checksum.as_str()
+        );
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&path));
+        for method in ["HEAD", "GET"] {
+            let req = request(method, &[("x-amz-checksum-mode", "ENABLED")], b"").await;
+            let response = if method == "HEAD" {
+                object_head(
+                    storage.clone(),
+                    auth_disabled_config(),
+                    "bucket",
+                    "key",
+                    &req,
+                    "head".to_string(),
+                )
+                .await
+                .unwrap()
+            } else {
+                object_get(
+                    storage.clone(),
+                    auth_disabled_config(),
+                    "bucket",
+                    "key",
+                    &req,
+                    "get".to_string(),
+                )
+                .await
+                .unwrap()
+            };
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get("x-amz-checksum-sha256").unwrap(),
+                checksum.as_str()
+            );
+            assert_eq!(
+                response.headers().get("x-amz-checksum-type").unwrap(),
+                "FULL_OBJECT"
+            );
+        }
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_explicitly_reject_s3_multipart_checksums_without_mutating_uploads() {
+        let storage = temp_storage();
+        storage.create_bucket("bucket".to_string()).unwrap();
+        let response = object_post(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            "key",
+            &request_with_uri(
+                "POST",
+                "/bucket/key?uploads",
+                &[("x-amz-checksum-algorithm", "CRC32")],
+                b"",
+            )
+            .await,
+            "init".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert!(storage.list_multipart_uploads("bucket").unwrap().is_empty());
+        let upload = object_service::create_s3_multipart_upload_with_metadata(
+            storage.as_ref(),
+            "bucket",
+            "key".to_string(),
+            None,
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .unwrap();
+        let uri = format!("/bucket/key?partNumber=1&uploadId={}", upload.upload_id);
+        let response = object_put(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            "key",
+            &request_with_uri(
+                "PUT",
+                &uri,
+                &[("x-amz-checksum-crc32", "AAAAAA==")],
+                b"part",
+            )
+            .await,
+            "part".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert!(storage
+            .list_parts("bucket", &upload.upload_id)
+            .unwrap()
+            .is_empty());
+        let etag = storage
+            .upload_part("bucket", &upload.upload_id, 1, b"part".to_vec())
+            .unwrap();
+        let xml = format!("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{etag}</ETag><ChecksumCRC32>AAAAAA==</ChecksumCRC32></Part></CompleteMultipartUpload>");
+        let response = object_post(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            "key",
+            &request_with_uri(
+                "POST",
+                &format!("/bucket/key?uploadId={}", upload.upload_id),
+                &[],
+                xml.as_bytes(),
+            )
+            .await,
+            "complete".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert!(!storage.object_exists("bucket", "key").unwrap());
+        assert_eq!(
+            storage
+                .list_parts("bucket", &upload.upload_id)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::too_many_lines)]
+    async fn should_round_trip_s3_content_properties_through_copy_restart_and_multipart() {
+        let path =
+            std::env::temp_dir().join(format!("sqrzl-s3-properties-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&path));
+        storage.create_bucket("bucket".to_string()).unwrap();
+        let headers = [
+            ("cache-control", "max-age=60"),
+            ("content-encoding", "identity"),
+            ("content-language", "en-US"),
+            ("content-disposition", "attachment; filename=report.txt"),
+        ];
+        let response = object_put(
+            storage.clone(),
+            auth_disabled_config(),
+            "bucket",
+            "key",
+            &request("PUT", &headers, b"properties").await,
+            "put".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&path));
+        for method in ["GET", "HEAD"] {
+            let req = request(method, &[], b"").await;
+            let response = if method == "GET" {
+                object_get(
+                    storage.clone(),
+                    auth_disabled_config(),
+                    "bucket",
+                    "key",
+                    &req,
+                    "get".to_string(),
+                )
+                .await
+                .unwrap()
+            } else {
+                object_head(
+                    storage.clone(),
+                    auth_disabled_config(),
+                    "bucket",
+                    "key",
+                    &req,
+                    "head".to_string(),
+                )
+                .await
+                .unwrap()
+            };
+            for (header, expected) in headers {
+                assert_eq!(response.headers().get(header).unwrap(), expected);
+            }
+        }
+        for (directive, expected) in [("COPY", Some("max-age=60")), ("REPLACE", None)] {
+            let response = object_put(
+                storage.clone(),
+                auth_disabled_config(),
+                "bucket",
+                "copy",
+                &request(
+                    "PUT",
+                    &[
+                        ("x-amz-copy-source", "/bucket/key"),
+                        ("x-amz-metadata-directive", directive),
+                    ],
+                    b"",
+                )
+                .await,
+                "copy".to_string(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let head = object_head(
+                storage.clone(),
+                auth_disabled_config(),
+                "bucket",
+                "copy",
+                &request("HEAD", &[], b"").await,
+                "head".to_string(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                head.headers()
+                    .get("cache-control")
+                    .and_then(|v| v.to_str().ok()),
+                expected
+            );
+        }
+        let response = initiate_multipart_upload_request(
+            &storage,
+            "bucket",
+            "multi",
+            &request("POST", &headers, b"").await,
+            "init",
+        );
+        assert_eq!(response.status(), StatusCode::OK);
+        let upload = storage.list_multipart_uploads("bucket").unwrap().remove(0);
+        let etag = storage
+            .upload_part("bucket", &upload.upload_id, 1, b"multipart".to_vec())
+            .unwrap();
+        let xml = format!("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{etag}</ETag></Part></CompleteMultipartUpload>");
+        let completed = complete_multipart_upload_request(
+            &storage,
+            &auth_disabled_config(),
+            "bucket",
+            "multi",
+            &request_with_uri(
+                "POST",
+                &format!("/bucket/multi?uploadId={}", upload.upload_id),
+                &[],
+                xml.as_bytes(),
+            )
+            .await,
+            "complete",
+        );
+        assert_eq!(completed.status(), StatusCode::OK);
+        let head = object_head(
+            storage,
+            auth_disabled_config(),
+            "bucket",
+            "multi",
+            &request("HEAD", &[], b"").await,
+            "head".to_string(),
+        )
+        .await
+        .unwrap();
+        for (header, expected) in headers {
+            assert_eq!(head.headers().get(header).unwrap(), expected);
+        }
+        fs::remove_dir_all(path).unwrap();
+    }
+
     use super::*;
     use crate::auth::AuthConfig;
     use crate::body::Body;

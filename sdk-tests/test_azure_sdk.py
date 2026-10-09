@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -16,6 +16,80 @@ def _service(sqrzl_server):
             sqrzl_server.azure_account_key if sqrzl_server.enforce_auth else None
         ),
     )
+
+
+def test_azure_conditional_current_snapshot_and_version_reads(sqrzl_server):
+    from azure.core import MatchConditions
+    from azure.core.exceptions import HttpResponseError
+
+    sqrzl_server.require_provider("azure")
+    service = _service(sqrzl_server)
+    container = service.create_container(
+        sqrzl_server.bucket_name("sdk-azure-conditions"),
+        headers={"x-sqrzl-azure-versioning-enabled": "true"},
+    )
+    blob = container.get_blob_client("item")
+    original = blob.upload_blob(b"old", overwrite=True)
+    snapshot = blob.create_snapshot()["snapshot"]
+    blob.upload_blob(b"new", overwrite=True)
+    selected_clients = [
+        (blob, b"new"),
+        (container.get_blob_client("item", snapshot=snapshot), b"old"),
+        (container.get_blob_client("item", version_id=original["version_id"]), b"old"),
+    ]
+    for selected, expected in selected_clients:
+        properties = selected.get_blob_properties()
+        for operation in [selected.get_blob_properties, selected.download_blob]:
+            with pytest.raises(HttpResponseError) as error:
+                operation(etag='"wrong"', match_condition=MatchConditions.IfNotModified)
+            assert error.value.status_code == 412
+            assert error.value.error_code == "ConditionNotMet"
+            with pytest.raises(HttpResponseError) as error:
+                operation(etag=properties.etag, match_condition=MatchConditions.IfModified)
+            assert error.value.status_code == 304
+            with pytest.raises(HttpResponseError) as error:
+                operation(if_modified_since=properties.last_modified)
+            assert error.value.status_code == 304
+            with pytest.raises(HttpResponseError) as error:
+                operation(if_unmodified_since=properties.last_modified - timedelta(seconds=1))
+            assert error.value.status_code == 412
+        assert selected.download_blob(
+            etag=properties.etag,
+            match_condition=MatchConditions.IfNotModified,
+            if_unmodified_since=properties.last_modified,
+        ).readall() == expected
+        # Modern Azure combines these two cache conditions with OR.
+        assert selected.download_blob(
+            etag=properties.etag,
+            match_condition=MatchConditions.IfModified,
+            if_modified_since=properties.last_modified - timedelta(seconds=1),
+        ).readall() == expected
+
+    with pytest.raises(HttpResponseError) as error:
+        blob.get_blob_properties(lease="00000000-0000-0000-0000-000000000001")
+    assert error.value.status_code == 412
+    lease = blob.acquire_lease(lease_duration=-1)
+    assert blob.download_blob(lease=lease).readall() == b"new"
+    assert blob.download_blob().readall() == b"new"
+    assert blob.get_blob_properties(lease=lease).size == 3
+    lease.release()
+    for operation in [blob.download_blob, blob.get_block_list]:
+        with pytest.raises(HttpResponseError) as error:
+            operation(if_tags_match_condition='"tag" = \'value\'')
+        assert error.value.status_code == 501
+        assert error.value.error_code == "FeatureNotSupported"
+    for operation in [
+        lambda: blob.upload_blob(b"bad", overwrite=True, if_unmodified_since=datetime.now(timezone.utc)),
+        lambda: blob.set_blob_metadata({"changed": "bad"}, if_modified_since=datetime.now(timezone.utc)),
+        lambda: blob.delete_blob(if_unmodified_since=datetime.now(timezone.utc)),
+    ]:
+        with pytest.raises(HttpResponseError) as error:
+            operation()
+        assert error.value.status_code == 501
+        assert error.value.error_code == "FeatureNotSupported"
+        assert blob.download_blob().readall() == b"new"
+        assert blob.get_blob_properties().metadata == {}
+    service.delete_container(container.container_name)
 
 
 def test_azure_core_blob_workflows(sqrzl_server):

@@ -5631,6 +5631,8 @@ mod tests {
             sha2::Sha384::digest(payload).into(),
             crc32c::crc32c(payload),
             crc64.sum64(),
+            sha1::Sha1::digest(payload).into(),
+            crc32fast::hash(payload),
         ));
 
         // Act

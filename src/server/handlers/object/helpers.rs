@@ -7,6 +7,23 @@ use hyper::Response;
 use std::collections::HashMap;
 use urlencoding::decode;
 
+const CONTENT_PROPERTIES: [(&str, &str); 4] = [
+    ("cache-control", "s3_cache_control"),
+    ("content-encoding", "s3_content_encoding"),
+    ("content-language", "s3_content_language"),
+    ("content-disposition", "s3_content_disposition"),
+];
+
+pub(super) fn replace_content_properties(req: &Request, obj: &mut crate::models::Object) {
+    for (header, key) in CONTENT_PROPERTIES {
+        obj.provider_metadata.remove(key);
+        if let Some(value) = req.header(header) {
+            obj.provider_metadata
+                .insert(key.to_string(), value.to_string());
+        }
+    }
+}
+
 const S3_SSE_MODE_KEY: &str = "s3_sse_mode";
 const S3_SSE_KMS_KEY_ID: &str = "s3_sse_kms_key_id";
 const S3_SSE_C_ALGORITHM_KEY: &str = "s3_sse_c_algorithm";
@@ -160,6 +177,12 @@ pub(super) fn object_response_headers(
         .header("Accept-Ranges", "bytes");
 
     builder = add_version_header(builder, obj.version_id.as_deref());
+
+    for (header, key) in CONTENT_PROPERTIES {
+        if let Some(value) = obj.provider_metadata.get(key) {
+            builder = builder.header(header, value);
+        }
+    }
 
     for (k, v) in &obj.metadata {
         builder = builder.header(&format!("x-amz-meta-{k}"), v);

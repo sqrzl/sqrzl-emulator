@@ -359,6 +359,29 @@ pub trait VersionStore: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn get_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<Object>;
+    /// Reads a selected version's metadata without materializing its payload.
+    ///
+    /// # Errors
+    /// Returns an error when the version does not exist or cannot be read.
+    fn get_object_version_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<Object>;
+    /// Reads a coherent selected range from a version's payload.
+    ///
+    /// # Errors
+    /// Returns an error when the version or range cannot be read.
+    fn get_object_version_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Object, Vec<u8>)>;
+
     ///
     /// # Errors
     ///
@@ -808,6 +831,29 @@ pub trait Storage: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn get_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<Object>;
+    /// Reads a selected version's metadata without materializing its payload.
+    ///
+    /// # Errors
+    /// Returns an error when the version does not exist or cannot be read.
+    fn get_object_version_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<Object>;
+    /// Reads a coherent selected range from a version's payload.
+    ///
+    /// # Errors
+    /// Returns an error when the version or range cannot be read.
+    fn get_object_version_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Object, Vec<u8>)>;
+
     ///
     /// # Errors
     ///
@@ -1210,6 +1256,26 @@ where
         VersionStore::get_object_version(self, bucket, key, version_id)
     }
 
+    fn get_object_version_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<Object> {
+        VersionStore::get_object_version_metadata(self, bucket, key, version_id)
+    }
+
+    fn get_object_version_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Object, Vec<u8>)> {
+        VersionStore::get_object_version_range(self, bucket, key, version_id, start, end)
+    }
+
     fn list_object_versions(&self, bucket: &str, prefix: Option<&str>) -> Result<Vec<Object>> {
         VersionStore::list_object_versions(self, bucket, prefix)
     }
@@ -1582,6 +1648,26 @@ impl VersionStore for dyn Storage + '_ {
 
     fn get_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<Object> {
         Storage::get_object_version(self, bucket, key, version_id)
+    }
+
+    fn get_object_version_metadata(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<Object> {
+        Storage::get_object_version_metadata(self, bucket, key, version_id)
+    }
+
+    fn get_object_version_range(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        start: u64,
+        end: Option<u64>,
+    ) -> Result<(Object, Vec<u8>)> {
+        Storage::get_object_version_range(self, bucket, key, version_id, start, end)
     }
 
     fn list_object_versions(&self, bucket: &str, prefix: Option<&str>) -> Result<Vec<Object>> {

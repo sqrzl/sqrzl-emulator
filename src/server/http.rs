@@ -32,6 +32,8 @@ pub struct SpooledPayload {
     pub md5: [u8; 16],
     pub sha256_hex: String,
     pub sha384: [u8; 48],
+    pub sha1: [u8; 20],
+    pub crc32: u32,
     pub crc32c: u32,
     pub crc64_nvme: u64,
     _cleanup: std::sync::Arc<SpooledPayloadCleanup>,
@@ -49,6 +51,7 @@ impl Drop for SpooledPayloadCleanup {
 
 impl SpooledPayload {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         path: std::path::PathBuf,
         len: u64,
@@ -57,6 +60,8 @@ impl SpooledPayload {
         sha384: [u8; 48],
         crc32c: u32,
         crc64_nvme: u64,
+        sha1: [u8; 20],
+        crc32: u32,
     ) -> Self {
         Self {
             _cleanup: std::sync::Arc::new(SpooledPayloadCleanup { path: path.clone() }),
@@ -67,6 +72,8 @@ impl SpooledPayload {
             sha384,
             crc32c,
             crc64_nvme,
+            sha1,
+            crc32,
         }
     }
 }
@@ -285,6 +292,24 @@ impl Request {
         )
     }
 
+    /// SHA-1 digest of the request payload without loading a spooled body.
+    #[must_use]
+    pub fn payload_sha1(&self) -> [u8; 20] {
+        use sha1::Digest as _;
+        self.spooled_body.as_ref().map_or_else(
+            || sha1::Sha1::digest(&self.body).into(),
+            |payload| payload.sha1,
+        )
+    }
+
+    /// CRC32 digest of the request payload without loading a spooled body.
+    #[must_use]
+    pub fn payload_crc32(&self) -> u32 {
+        self.spooled_body
+            .as_ref()
+            .map_or_else(|| crc32fast::hash(&self.body), |payload| payload.crc32)
+    }
+
     /// CRC32C digest of the request payload.
     #[must_use]
     pub fn payload_crc32c(&self) -> u32 {
@@ -335,6 +360,21 @@ pub(crate) enum CollectBodyError {
     BodyTooLarge { max_request_bytes: usize },
 }
 
+pub(crate) fn reject_s3_checksum_trailers(
+    trailers: Option<&HeaderMap>,
+) -> Result<(), CollectBodyError> {
+    if trailers.is_some_and(|headers| {
+        headers
+            .keys()
+            .any(|name| name.as_str().starts_with("x-amz-checksum-"))
+    }) {
+        return Err(CollectBodyError::BodyRead(
+            "S3 checksum trailers are unsupported".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn collect_body<B>(
     mut body: B,
     max_request_bytes: Option<usize>,
@@ -344,16 +384,18 @@ where
     B::Error: std::fmt::Display,
 {
     let Some(max_request_bytes) = max_request_bytes else {
-        return body
+        let collected = body
             .collect()
             .await
-            .map(http_body_util::Collected::to_bytes)
-            .map_err(|err| CollectBodyError::BodyRead(err.to_string()));
+            .map_err(|err| CollectBodyError::BodyRead(err.to_string()))?;
+        reject_s3_checksum_trailers(collected.trailers())?;
+        return Ok(collected.to_bytes());
     };
 
     let mut bytes = BytesMut::new();
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|err| CollectBodyError::BodyRead(err.to_string()))?;
+        reject_s3_checksum_trailers(frame.trailers_ref())?;
         if let Some(data) = frame.data_ref() {
             let next_len = bytes.len().saturating_add(data.len());
             if next_len > max_request_bytes {
@@ -451,6 +493,22 @@ mod tests {
     use http_body_util::Full;
     type Body = Full<Bytes>;
     use hyper::Request as HyperRequest;
+
+    #[tokio::test]
+    async fn should_reject_s3_checksum_trailers_in_both_buffered_collectors() {
+        use http_body_util::BodyExt as _;
+        for limit in [None, Some(1024)] {
+            let mut trailers = http::HeaderMap::new();
+            trailers.insert(
+                "x-amz-checksum-crc32",
+                http::HeaderValue::from_static("AAAAAA=="),
+            );
+            let body = Body::from(Bytes::from_static(b"payload"))
+                .with_trailers(std::future::ready(Some(Ok(trailers))));
+            let result = super::collect_body(body, limit).await;
+            assert!(matches!(result, Err(super::CollectBodyError::BodyRead(_))));
+        }
+    }
 
     #[tokio::test]
     async fn should_preserve_bare_query_flags_when_parsing_requests() {
