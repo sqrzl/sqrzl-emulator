@@ -8,10 +8,69 @@ against an artifact author who fabricates both the manifest and the results.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from campaign_evidence import digest, integer
+
+
+def _distribution_versions(value) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("SDK version metadata must be a package mapping")
+    normalized = {}
+    for name, version in value.items():
+        if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
+            raise ValueError("SDK version metadata has an invalid package or version")
+        key = re.sub(r"[-_.]+", "-", name).lower()
+        if key in normalized:
+            raise ValueError("SDK version metadata has ambiguous distribution aliases")
+        normalized[key] = version
+    return normalized
+
+
+def _validate_sdk_metadata(lane: dict, tracked_file) -> None:
+    baseline = json.loads(tracked_file("sdk-tests/qualification-baseline.json"))
+    manifest = json.loads(tracked_file("sdk-tests/acceptance-manifest.json"))
+    lock = tracked_file("sdk-tests/requirements.lock")
+    lock_digest = hashlib.sha256(lock).hexdigest()
+    if (
+        lane.get("baseline_lock_sha256") != lock_digest
+        or baseline.get("requirements_lock_sha256") != lock_digest
+        or baseline.get("lock_file") != "sdk-tests/requirements.lock"
+    ):
+        raise ValueError("SDK baseline lock metadata differs from tracked source")
+    locked = {}
+    for line in lock.decode().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        name, separator, version = line.strip().partition("==")
+        if not separator or name in locked:
+            raise ValueError("SDK baseline lock must contain unique pinned distributions")
+        locked[name] = version
+    expected = _distribution_versions(baseline.get("dependency_versions"))
+    if _distribution_versions(locked) != expected:
+        raise ValueError("SDK baseline dependency metadata differs from tracked lock")
+    installed = _distribution_versions(lane.get("dependency_versions"))
+    if any(installed.get(name) != version for name, version in expected.items()):
+        raise ValueError("SDK dependency metadata differs from the pinned baseline")
+    direct = _distribution_versions(baseline.get("direct_sdk_versions"))
+    if any(expected.get(name) != version for name, version in direct.items()):
+        raise ValueError("SDK direct package metadata differs from tracked lock")
+    # The runner records the direct SDKs plus these signing/model dependencies.
+    recorded = direct | {name: expected[name] for name in ("botocore", "google-auth")}
+    if _distribution_versions(lane.get("sdk_versions")) != recorded:
+        raise ValueError("SDK version metadata differs from the pinned baseline")
+    api_versions = baseline.get("api_versions")
+    if (
+        not isinstance(api_versions, dict)
+        or not api_versions
+        or manifest.get("api_versions") != api_versions
+        or lane.get("api_versions") != api_versions
+        or lane.get("baseline_api_versions") != api_versions
+    ):
+        raise ValueError("SDK API metadata differs from the tracked baseline and manifest")
 
 
 def validate_sdk_lane(lane: dict, head: str, source_tree: str, tracked_file) -> None:
@@ -28,6 +87,7 @@ def validate_sdk_lane(lane: dict, head: str, source_tree: str, tracked_file) -> 
         or not digest(lane.get("binary_sha256"))
     ):
         raise ValueError("SDK lane is not clean passing exact-head managed evidence")
+    _validate_sdk_metadata(lane, tracked_file)
     provenance = lane.get("build_provenance")
     snapshot = {"commit": head, "tree": source_tree, "clean": True}
     if (

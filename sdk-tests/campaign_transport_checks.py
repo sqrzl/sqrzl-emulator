@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import tempfile
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -17,6 +20,28 @@ from large_campaign import PART_BYTES
 
 class InterruptedProbeReached(Exception):
     pass
+
+
+class CompletionHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.server.calls.append(self.path)
+        time.sleep(self.server.delay)
+        body = (
+            b'<CompleteMultipartUploadResult><ETag>"controlled"</ETag></CompleteMultipartUploadResult>'
+            if self.server.response_status == 200
+            else b'<Error><Code>ServiceUnavailable</Code><Message>controlled failure</Message></Error>'
+        )
+        self.send_response(self.server.response_status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass  # The RED control closes after its old five-second deadline.
+
+    def log_message(self, *args):
+        pass
 
 
 class DirectGcsTransport:
@@ -57,6 +82,33 @@ class CampaignTransportChecks(unittest.TestCase):
             api_url="http://localhost", require_provider=lambda _: None,
             require_process=lambda: None, bucket_name=lambda _: "transport-probe",
         )
+
+    def test_s3_completion_can_outlast_five_seconds_without_retrying_failures(self):
+        import botocore.exceptions
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), CompletionHandler)
+        server.calls, server.delay, server.response_status = [], 6, 200
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        client = subject._s3_campaign_client(SimpleNamespace(
+            api_url=f"http://127.0.0.1:{server.server_port}",
+            access_key_id="test-access", secret_access_key="test-secret",
+        ))
+        self.addCleanup(client.close)
+        args = dict(Bucket="bucket", Key="object", UploadId="upload", MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": '"part"'}]})
+
+        response = client.complete_multipart_upload(**args)
+        self.assertEqual(response["ResponseMetadata"]["HTTPStatusCode"], 200)
+        self.assertEqual(len(server.calls), 1)
+        self.assertEqual(client.meta.config.connect_timeout, 5)
+        self.assertLessEqual(client.meta.config.read_timeout, 60)
+        server.delay, server.response_status = 0, 503
+        with self.assertRaises(botocore.exceptions.ClientError):
+            client.complete_multipart_upload(**args)
+        self.assertEqual(len(server.calls), 2)
 
     def run_gcs_probe(self, transport):
         # Bypass generation and the already-qualified main upload/readbacks.

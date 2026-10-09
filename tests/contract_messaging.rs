@@ -210,6 +210,177 @@ fn email_payload() -> Value {
     json!({"senderAddress":"sender@example.com","recipients":{"to":[{"address":"alice@example.com"},{"address":"bob@example.com"}]},"content":{"subject":"repeatable","plainText":"hello"}})
 }
 
+fn store_legacy_acs_capture(
+    store: &dyn MailStore,
+    operation_id: &str,
+    request_id: &str,
+    first_sent: &str,
+    payload: &Value,
+) {
+    use sha2::{Digest, Sha256};
+    let mut fingerprint = Sha256::new();
+    fingerprint.update(b"/emails:send?api-version=2023-03-31\0");
+    fingerprint.update(operation_id.as_bytes());
+    fingerprint.update([0]);
+    fingerprint.update(payload.to_string().as_bytes());
+    let message: sqrzl_emulator::mail::Message = serde_json::from_value(json!({
+        "source_protocol":"acs", "from":{"email":"sender@example.com"},
+        "to":[{"email":"alice@example.com"},{"email":"bob@example.com"}],
+        "subject":"repeatable", "body_text":"hello",
+        "provider_metadata":{
+            "repeatability_request_id":request_id,
+            "repeatability_first_sent":first_sent,
+            "repeatability_request_hash":hex::encode(fingerprint.finalize())
+        }
+    }))
+    .unwrap();
+    for mailbox in ["_all", "alice@example.com", "bob@example.com"] {
+        store
+            .store_message(mailbox, operation_id, message.clone())
+            .unwrap();
+    }
+}
+
+async fn acs_poll_status(store: Arc<dyn MailStore>, operation_id: &str) -> StatusCode {
+    let req = RequestExt::from_hyper(request(
+        "GET",
+        &format!("http://localhost/emails/operations/{operation_id}?api-version=2023-03-31"),
+        &[],
+        b"",
+    ))
+    .await
+    .unwrap();
+    MailAdapterRegistry::default()
+        .route(store, auth_disabled(), req)
+        .await
+        .unwrap()
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn should_return_not_found_for_malformed_acs_operation_ids() {
+    // Arrange
+    let root =
+        std::env::temp_dir().join(format!("sqrzl-acs-invalid-poll-{}", uuid::Uuid::new_v4()));
+    let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+    // Act and Assert
+    for operation_id in ["unknown", "missing/path", "..", "bad..id", "missing%2Fpath"] {
+        assert_eq!(
+            acs_poll_status(store.clone(), operation_id).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn should_replay_and_poll_legacy_uppercase_acs_operations_after_restart() {
+    // Arrange a pre-journal capture whose hash included the original header case.
+    let root = std::env::temp_dir().join(format!("sqrzl-acs-legacy-{}", uuid::Uuid::new_v4()));
+    let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+    let operation_id = uuid::Uuid::new_v4().to_string().to_ascii_uppercase();
+    let request_id = uuid::Uuid::new_v4().to_string().to_ascii_uppercase();
+    let first_sent = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let payload = email_payload();
+    store_legacy_acs_capture(
+        store.as_ref(),
+        &operation_id,
+        &request_id,
+        &first_sent,
+        &payload,
+    );
+    drop(store);
+    let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+    assert_eq!(
+        acs_email(
+            store.clone(),
+            &uuid::Uuid::new_v4().to_string(),
+            &first_sent,
+            Some(&operation_id.to_ascii_lowercase()),
+            &payload,
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Act and assert: both GUID spellings find the original operation, with no capture.
+    for candidate in [operation_id.to_ascii_lowercase(), operation_id.clone()] {
+        assert_eq!(
+            acs_poll_status(store.clone(), &candidate).await,
+            StatusCode::OK
+        );
+        let (status, body) = acs_email(
+            store.clone(),
+            &request_id.to_ascii_lowercase(),
+            &first_sent,
+            Some(&candidate),
+            &payload,
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        assert_eq!(body["id"], operation_id);
+    }
+    let mut changed = payload.clone();
+    changed["content"]["plainText"] = json!("changed");
+    assert_eq!(
+        acs_email(
+            store.clone(),
+            &request_id,
+            &first_sent,
+            Some(&operation_id),
+            &changed
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        acs_email(
+            store.clone(),
+            &uuid::Uuid::new_v4().to_string(),
+            &first_sent,
+            Some(&operation_id),
+            &payload,
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        store
+            .list_messages("_all", ListMessagesParams::default())
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    for mailbox in ["_all", "alice@example.com", "bob@example.com"] {
+        store.delete_message(mailbox, &operation_id).unwrap();
+    }
+    drop(store);
+    let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+    let (status, body) = acs_email(
+        store.clone(),
+        &request_id,
+        &first_sent,
+        Some(&operation_id),
+        &payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body["id"], operation_id);
+    assert!(store
+        .list_messages("_all", ListMessagesParams::default())
+        .unwrap()
+        .messages
+        .is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn should_poll_acs_operation_guids_case_insensitively_after_capture_deletion_and_restart() {
     let root = std::env::temp_dir().join(format!("sqrzl-acs-poll-case-{}", uuid::Uuid::new_v4()));

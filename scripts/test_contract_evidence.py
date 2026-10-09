@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -256,6 +257,9 @@ def source_lane():
         "Cargo.lock": b"tracked lock",
         "sdk-tests/build_provenance.py": b"tracked builder",
     }
+    for name in ("qualification-baseline.json", "acceptance-manifest.json", "requirements.lock"):
+        source[f"sdk-tests/{name}"] = (Path(__file__).resolve().parents[1] / "sdk-tests" / name).read_bytes()
+    baseline = json.loads(source["sdk-tests/qualification-baseline.json"])
     lane = {
         "source_commit": head,
         "binary_source_commit": head,
@@ -266,6 +270,14 @@ def source_lane():
         "exit_status": 0,
         "remote_endpoint": False,
         "upgrade_candidate": False,
+        "sdk_versions": {
+            name: baseline["dependency_versions"][name]
+            for name in (*baseline["direct_sdk_versions"], "botocore", "google-auth")
+        },
+        "dependency_versions": dict(baseline["dependency_versions"]),
+        "api_versions": dict(baseline["api_versions"]),
+        "baseline_api_versions": dict(baseline["api_versions"]),
+        "baseline_lock_sha256": baseline["requirements_lock_sha256"],
         "build_provenance": {
             "schema_version": 1,
             "kind": "sqrzl-qualification-build",
@@ -323,6 +335,53 @@ def source_lane():
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_should_reject_missing_or_conflicting_sdk_metadata(self):
+        for field in ("sdk_versions", "dependency_versions", "api_versions", "baseline_api_versions", "baseline_lock_sha256"):
+            for change in ("missing", "stale"):
+                with self.subTest(field=field, change=change):
+                    lane, head, tree, source = source_lane()
+                    if change == "missing":
+                        lane.pop(field)
+                    elif isinstance(lane[field], dict):
+                        key = next(iter(lane[field]))
+                        lane[field][key] = "0.0.0"
+                    else:
+                        lane[field] = "0" * 64
+                    with self.assertRaisesRegex(ValueError, "SDK.*(metadata|baseline|lock)"):
+                        validate_sdk_lane(lane, head, tree, source.__getitem__)
+
+    def test_should_require_all_recorded_sdk_and_dependency_packages(self):
+        for field, package in (("sdk_versions", "google-auth"), ("dependency_versions", "botocore")):
+            with self.subTest(field=field):
+                lane, head, tree, source = source_lane()
+                lane[field].pop(package)
+                with self.assertRaises(ValueError):
+                    validate_sdk_lane(lane, head, tree, source.__getitem__)
+
+    def test_should_normalize_distribution_names_without_allowing_ambiguous_aliases(self):
+        lane, head, tree, source = source_lane()
+        value = lane["dependency_versions"].pop("typing_extensions")
+        lane["dependency_versions"]["Typing.Extensions"] = value
+        lane["dependency_versions"]["pip"] = "26.0"
+        validate_sdk_lane(lane, head, tree, source.__getitem__)
+        lane["dependency_versions"]["typing-extensions"] = value
+        with self.assertRaises(ValueError):
+            validate_sdk_lane(lane, head, tree, source.__getitem__)
+
+    def test_should_bind_baseline_to_tracked_lock_and_api_manifest(self):
+        for name in ("requirements.lock", "acceptance-manifest.json", "qualification-baseline.json"):
+            with self.subTest(name=name):
+                lane, head, tree, source = source_lane()
+                path = f"sdk-tests/{name}"
+                if name == "requirements.lock":
+                    source[path] += b"\nextra==1.0\n"
+                else:
+                    data = json.loads(source[path])
+                    data["api_versions"]["s3"] = "2099-01-01"
+                    source[path] = json.dumps(data).encode()
+                with self.assertRaises(ValueError):
+                    validate_sdk_lane(lane, head, tree, source.__getitem__)
+
     def test_should_require_distinct_owned_api_and_ui_readiness_evidence(self):
         for change in ("missing", "foreign", "duplicate-port", "remote"):
             with self.subTest(change=change):

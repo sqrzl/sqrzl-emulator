@@ -4927,7 +4927,7 @@
         "path": "/{account}/{container}/{blob}?comp=lease",
         "variant": "acquire",
         "support_tier": "partial",
-        "boundary": "Local persisted lease identity and expiry; metadata-only mutation.",
+        "boundary": "Local persisted lease identity and duration; metadata-only mutation. Automatic lease expiry is not modeled; break/renew timing is simplified.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
@@ -4964,7 +4964,7 @@
         "path": "/{account}/{container}/{blob}?comp=lease",
         "variant": "renew",
         "support_tier": "partial",
-        "boundary": "Local persisted lease identity and expiry; metadata-only mutation.",
+        "boundary": "Local persisted lease identity and duration; metadata-only mutation. Automatic lease expiry is not modeled; break/renew timing is simplified.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
@@ -4999,7 +4999,7 @@
         "path": "/{account}/{container}/{blob}?comp=lease",
         "variant": "release",
         "support_tier": "partial",
-        "boundary": "Local persisted lease identity and expiry; metadata-only mutation.",
+        "boundary": "Local persisted lease identity and duration; metadata-only mutation. Automatic lease expiry is not modeled; break/renew timing is simplified.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_manage_leases_snapshots_and_immutability",
@@ -5036,7 +5036,7 @@
         "path": "/{account}/{container}/{blob}?comp=lease",
         "variant": "break",
         "support_tier": "partial",
-        "boundary": "Local persisted lease identity and expiry; metadata-only mutation.",
+        "boundary": "Local persisted lease identity and duration; metadata-only mutation. Automatic lease expiry is not modeled; break/renew timing is simplified.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_manage_leases_snapshots_and_immutability",

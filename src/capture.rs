@@ -188,12 +188,27 @@ pub(crate) fn commit_with_hook(
     }
     let transaction_dir = root.join(TRANSACTIONS).join(id);
     fs::create_dir_all(&transaction_dir).map_err(io_error)?;
-    hook("prepare", 0)?;
-    let intent = serde_json::to_vec(&Intent { paths }).map_err(serialization_error)?;
-    write_new_synced(&transaction_dir.join("intent.json"), &intent)?;
-    sync_directory(&transaction_dir)?;
-    sync_directory(&root.join(TRANSACTIONS))?;
     let result = (|| {
+        hook("prepare", 0)?;
+        let intent = serde_json::to_vec(&Intent { paths }).map_err(serialization_error)?;
+        // Publish only a complete, synced intent. An interrupted preparation
+        // leaves an unreferenced stage that recovery can remove without parsing.
+        let staged_intent = transaction_dir.join("intent.pending");
+        let mut staged = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged_intent)
+            .map_err(io_error)?;
+        let (first, rest) = intent.split_at(intent.len().div_ceil(2));
+        staged.write_all(first).map_err(io_error)?;
+        hook("intent_partial", 0)?;
+        staged.write_all(rest).map_err(io_error)?;
+        staged.sync_all().map_err(io_error)?;
+        hook("intent_staged", 0)?;
+        fs::rename(staged_intent, transaction_dir.join("intent.json")).map_err(io_error)?;
+        hook("intent_published", 0)?;
+        sync_directory(&transaction_dir)?;
+        sync_directory(&root.join(TRANSACTIONS))?;
         hook("intent", 0)?;
         for (index, (path, data)) in files.iter().enumerate() {
             if let Some(parent) = path.parent() {
@@ -494,6 +509,9 @@ mod tests {
     fn crash_boundaries(files: usize) -> Vec<(&'static str, usize)> {
         let mut phases = vec![
             ("prepare", 0),
+            ("intent_partial", 0),
+            ("intent_staged", 0),
+            ("intent_published", 0),
             ("intent", 0),
             ("commit_marker", files),
             ("commit", files),
@@ -613,7 +631,16 @@ mod tests {
         // Arrange
         let root = temp_root();
         fs::create_dir_all(&root).unwrap();
-        for phase in ["intent", "stage", "publish", "file"] {
+        for phase in [
+            "prepare",
+            "intent_partial",
+            "intent_staged",
+            "intent_published",
+            "intent",
+            "stage",
+            "publish",
+            "file",
+        ] {
             let id = new_transaction_id();
             let files = vec![
                 (root.join("first.json"), b"first".to_vec()),
@@ -633,9 +660,59 @@ mod tests {
             assert!(result.is_err());
             assert!(!root.join("first.json").exists());
             assert!(!root.join("second.json").exists());
+            assert!(!root.join(TRANSACTIONS).join(id).exists());
             recover(&root).unwrap();
             assert_no_pending_files(&root);
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn should_remove_interrupted_intent_stage_without_touching_prior_capture() {
+        // Arrange: a prior committed capture and a partial unpublished intent.
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let accepted = root.join("accepted.json");
+        commit(
+            &root,
+            &new_transaction_id(),
+            &[(accepted.clone(), b"accepted".to_vec())],
+        )
+        .unwrap();
+        let interrupted = root.join(TRANSACTIONS).join(new_transaction_id());
+        fs::create_dir(&interrupted).unwrap();
+        fs::write(interrupted.join("intent.pending"), b"{\"paths\":[\"").unwrap();
+        // Act
+        recover(&root).unwrap();
+        // Assert
+        assert!(!interrupted.exists());
+        assert_eq!(fs::read(accepted).unwrap(), b"accepted");
+        commit(
+            &root,
+            &new_transaction_id(),
+            &[(root.join("next.json"), b"next".to_vec())],
+        )
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn should_fail_closed_without_removing_files_when_published_intent_is_corrupt() {
+        // Arrange: a published intent may already have destination effects.
+        let root = temp_root();
+        let transaction = root.join(TRANSACTIONS).join(new_transaction_id());
+        fs::create_dir_all(&transaction).unwrap();
+        fs::write(transaction.join("intent.json"), b"{\"paths\":[\"").unwrap();
+        fs::write(root.join("possibly-published.json"), b"keep").unwrap();
+        // Act
+        let result = recover(&root);
+        // Assert
+        assert!(result.is_err());
+        assert!(transaction.exists());
+        assert_eq!(
+            fs::read(root.join("possibly-published.json")).unwrap(),
+            b"keep"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

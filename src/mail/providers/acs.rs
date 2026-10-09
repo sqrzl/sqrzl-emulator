@@ -279,6 +279,19 @@ impl AcsEmailAdapter {
             ));
         }
 
+        Ok(Some(Repeatability {
+            request_id: request_id.to_ascii_lowercase(),
+            first_sent: first_sent.to_string(),
+            request_hash: Self::request_fingerprint(
+                req,
+                &req.header("operation-id")
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+            ),
+        }))
+    }
+
+    fn request_fingerprint(req: &MailRequest, operation_id: &str) -> String {
         let mut digest = Sha256::new();
         digest.update(
             req.uri
@@ -287,19 +300,20 @@ impl AcsEmailAdapter {
                 .as_bytes(),
         );
         digest.update([0]);
-        digest.update(
-            req.header("operation-id")
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .as_bytes(),
-        );
+        digest.update(operation_id.as_bytes());
         digest.update([0]);
         digest.update(&req.body);
-        Ok(Some(Repeatability {
-            request_id: request_id.to_ascii_lowercase(),
-            first_sent: first_sent.to_string(),
-            request_hash: hex::encode(digest.finalize()),
-        }))
+        hex::encode(digest.finalize())
+    }
+
+    fn operation_exists(mail: &dyn MailStore, operation_id: &str) -> crate::error::Result<bool> {
+        match mail.get_message_case_insensitive(ALL_MAILBOX, operation_id) {
+            Ok(stored) => Ok(stored.message.source_protocol == SourceProtocol::Acs),
+            Err(crate::error::Error::MessageNotFound | crate::error::Error::InvalidRequest(_)) => {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn existing_repeatability(
@@ -490,11 +504,12 @@ impl MailAdapter for AcsEmailAdapter {
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| "invalid ACS operation path".to_string())?
                     .to_ascii_lowercase();
-                if mail.get_message(ALL_MAILBOX, &operation_id).is_err()
-                    && mail
-                        .get_repeatability_record(&format!("acs-email-operation/{operation_id}"))
+                if mail
+                    .get_repeatability_record(&format!("acs-email-operation/{operation_id}"))
+                    .map_err(|error| error.to_string())?
+                    .is_none()
+                    && !Self::operation_exists(mail.as_ref(), &operation_id)
                         .map_err(|error| error.to_string())?
-                        .is_none()
                 {
                     return Ok(ResponseBuilder::new(StatusCode::NOT_FOUND)
                         .header("x-ms-error-code", "NotFound")
@@ -547,19 +562,52 @@ impl MailAdapter for AcsEmailAdapter {
                 };
                 if let Some(existing) = existing {
                     let metadata = &existing.message.provider_metadata;
+                    let stored_hash = metadata
+                        .get("repeatability_request_hash")
+                        .and_then(Value::as_str);
+                    let legacy_hash = req.header("operation-id").and_then(|operation_id| {
+                        operation_id
+                            .eq_ignore_ascii_case(&existing.message_id)
+                            .then(|| Self::request_fingerprint(&req, &existing.message_id))
+                    });
                     let matches = metadata
                         .get("repeatability_first_sent")
                         .and_then(Value::as_str)
                         == Some(repeatability.first_sent.as_str())
-                        && metadata
-                            .get("repeatability_request_hash")
-                            .and_then(Value::as_str)
-                            == Some(repeatability.request_hash.as_str());
+                        && (stored_hash == Some(repeatability.request_hash.as_str())
+                            || legacy_hash
+                                .as_deref()
+                                .is_some_and(|hash| stored_hash == Some(hash)));
                     if !matches {
                         return Ok(Self::invalid_request_response(
                             "Repeated request does not match the original request",
                         ));
                     }
+                    // Retain the historical wire ID while reserving its canonical
+                    // identity independently of later admin capture deletion.
+                    let records = [
+                        RepeatabilityRecord {
+                            key,
+                            request_hash: repeatability.request_hash.clone(),
+                            first_sent: repeatability.first_sent.clone(),
+                            status: 202,
+                            result: serde_json::json!({"id":existing.message_id}),
+                            transaction_id: String::new(),
+                        },
+                        RepeatabilityRecord {
+                            key: format!(
+                                "acs-email-operation/{}",
+                                existing.message_id.to_ascii_lowercase()
+                            ),
+                            request_hash: repeatability.request_hash.clone(),
+                            first_sent: String::new(),
+                            status: 202,
+                            result: serde_json::json!({"id":existing.message_id}),
+                            transaction_id: String::new(),
+                        },
+                    ];
+                    mail.capture_batch(&[], &records)
+                        .map_err(|error| error.to_string())?;
                     return Ok(Self::accepted_response(&req, &existing.message_id));
                 }
             }
@@ -597,6 +645,9 @@ impl MailAdapter for AcsEmailAdapter {
                 .get_repeatability_record(&format!("acs-email-operation/{operation_id}"))
                 .map_err(|error| error.to_string())?
                 .is_some()
+                || (req.header("operation-id").is_some()
+                    && Self::operation_exists(mail.as_ref(), &operation_id)
+                        .map_err(|error| error.to_string())?)
             {
                 return Ok(Self::rejected_request(
                     mail.as_ref(),

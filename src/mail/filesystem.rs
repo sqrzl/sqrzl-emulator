@@ -303,6 +303,39 @@ impl MailStore for FilesystemMailStore {
         Ok(stored)
     }
 
+    fn get_message_case_insensitive(
+        &self,
+        mailbox: &str,
+        message_id: &str,
+    ) -> Result<StoredMessage> {
+        match self.get_message(mailbox, message_id) {
+            Err(Error::MessageNotFound) => {}
+            result => return result,
+        }
+        // Match filenames before loading content so operation lookup does not
+        // materialize the mailbox's captured bodies and attachments.
+        let entries = fs::read_dir(self.mailbox_dir(mailbox)?).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::MessageNotFound
+            } else {
+                io_err(&error)
+            }
+        })?;
+        for entry in entries {
+            let name = entry.map_err(|error| io_err(&error))?.file_name();
+            let Some(candidate) = name.to_str().and_then(|name| name.strip_suffix(".json")) else {
+                continue;
+            };
+            if candidate.eq_ignore_ascii_case(message_id) {
+                match self.get_message(mailbox, candidate) {
+                    Err(Error::MessageNotFound) => {}
+                    result => return result,
+                }
+            }
+        }
+        Err(Error::MessageNotFound)
+    }
+
     fn list_messages(
         &self,
         mailbox: &str,
@@ -542,6 +575,35 @@ mod tests {
 
         assert_eq!(fetched.message_id, stored.message_id);
         assert_eq!(fetched.message.subject, "hello");
+    }
+
+    #[test]
+    fn should_resolve_message_id_case_without_loading_unrelated_capture_content() {
+        // Arrange a legacy GUID spelling and unrelated unreadable JSON content.
+        let store = temp_store();
+        let message_id = "F9168C5E-CEB2-4FAA-B6BF-329BF39FA1E4";
+        store
+            .store_message(ALL_MAILBOX, message_id, sample_message("alice@example.com"))
+            .unwrap();
+        fs::write(
+            store.message_path(ALL_MAILBOX, "unrelated").unwrap(),
+            b"malformed unrelated capture",
+        )
+        .unwrap();
+        // Act
+        let fetched = store
+            .get_message_case_insensitive(ALL_MAILBOX, &message_id.to_ascii_lowercase())
+            .unwrap();
+        // Assert
+        assert_eq!(fetched.message_id, message_id);
+        assert!(matches!(
+            store.get_message_case_insensitive(ALL_MAILBOX, "missing"),
+            Err(Error::MessageNotFound)
+        ));
+        assert!(matches!(
+            store.get_message_case_insensitive(ALL_MAILBOX, "../escape"),
+            Err(Error::InvalidRequest(_))
+        ));
     }
 
     #[test]

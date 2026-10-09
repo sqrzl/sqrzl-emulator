@@ -727,7 +727,11 @@ impl OciAdapter {
 
     #[allow(clippy::result_large_err)]
     #[allow(clippy::too_many_lines)]
-    fn authorize(req: &Request, config: &AuthConfig) -> Result<(), Response<Body>> {
+    fn authorize(
+        req: &Request,
+        config: &AuthConfig,
+        parts: &[String],
+    ) -> Result<(), Response<Body>> {
         if !config.oci_auth_enforced() {
             return Ok(());
         }
@@ -807,9 +811,46 @@ impl OciAdapter {
         {
             return Err(malformed());
         }
+        let date_header = if req.header("x-date").is_some() {
+            "x-date"
+        } else {
+            "date"
+        };
+        if !signed_headers.contains(&date_header) {
+            return Err(malformed());
+        }
+        let upload_put = req.method() == Method::PUT
+            && parts.len() >= 4
+            && parts[0] == "b"
+            && matches!(parts[2].as_str(), "o" | "u");
+        // Native PutObject/UploadPart signers may omit the content headers,
+        // including transport-added content-type/length. Other POST/PUT APIs
+        // require all three, even with an empty body.
+        if matches!(*req.method(), Method::POST | Method::PUT)
+            && !upload_put
+            && ["x-content-sha256", "content-type", "content-length"]
+                .iter()
+                .any(|name| !signed_headers.contains(name))
+        {
+            return Err(malformed());
+        }
+        if let Some(value) = req.header("x-content-sha256") {
+            if !signed_headers.contains(&"x-content-sha256")
+                || BASE64.decode(value).ok().as_deref() != Some(req.payload_sha256().as_slice())
+            {
+                return Err(malformed());
+            }
+        }
+        if signed_headers.contains(&"content-length")
+            && req
+                .header("content-length")
+                .and_then(|value| value.parse::<u64>().ok())
+                != Some(req.payload_len())
+        {
+            return Err(malformed());
+        }
         let request_date = req
-            .header("x-date")
-            .or_else(|| req.header("date"))
+            .header(date_header)
             .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
             .map(|value| value.with_timezone(&chrono::Utc));
         if request_date.is_none_or(|date| {
@@ -889,7 +930,7 @@ impl OciAdapter {
             }
         };
 
-        if let Err(response) = Self::authorize(req, auth_config) {
+        if let Err(response) = Self::authorize(req, auth_config, &parts) {
             return Ok(response);
         }
 
@@ -2998,6 +3039,286 @@ mod tests {
         assert_eq!(accepted.status(), StatusCode::OK);
         assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
         let _ = std::fs::remove_file(public_key_path);
+    }
+
+    struct OciTestSigner {
+        key: rsa::RsaPrivateKey,
+        path: std::path::PathBuf,
+    }
+
+    impl OciTestSigner {
+        fn new() -> Self {
+            use rsa::pkcs8::{EncodePublicKey, LineEnding};
+            let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+            let path =
+                std::env::temp_dir().join(format!("sqrzl-oci-auth-{}.pem", uuid::Uuid::new_v4()));
+            fs::write(
+                &path,
+                key.to_public_key()
+                    .to_public_key_pem(LineEnding::LF)
+                    .unwrap(),
+            )
+            .unwrap();
+            Self { key, path }
+        }
+
+        fn sign(&self, request: &mut Request, names: &[&str]) {
+            use rsa::pkcs1v15::SigningKey;
+            use rsa::signature::{SignatureEncoding, Signer};
+            let lines = names
+                .iter()
+                .map(|name| {
+                    if *name == "(request-target)" {
+                        format!(
+                            "(request-target): {} {}",
+                            request.method().as_str().to_ascii_lowercase(),
+                            request.uri.path_and_query().unwrap()
+                        )
+                    } else {
+                        format!("{name}: {}", request.header(name).unwrap())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let signature = SigningKey::<RsaSha256>::new(self.key.clone()).sign(lines.as_bytes());
+            request.headers.insert("authorization", format!(
+                "Signature version=\"1\",keyId=\"ocid1.tenancy/ocid1.user/fingerprint\",algorithm=\"rsa-sha256\",headers=\"{}\",signature=\"{}\"",
+                names.join(" "), BASE64.encode(signature.to_bytes())
+            ).parse().unwrap());
+        }
+    }
+
+    impl Drop for OciTestSigner {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+
+    async fn oci_body_request(method: &str, path: &str, body: &[u8]) -> Request {
+        use sha2::Digest as _;
+        parsed_request(
+            method,
+            &format!("http://localhost{path}"),
+            &[
+                ("host", "objectstorage.localhost"),
+                ("date", &chrono::Utc::now().to_rfc2822()),
+                ("content-type", "application/json"),
+                ("content-length", &body.len().to_string()),
+                (
+                    "x-content-sha256",
+                    &BASE64.encode(sha2::Sha256::digest(body)),
+                ),
+            ],
+            body,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn should_bind_oci_body_authentication_to_payload_and_required_headers() {
+        // Arrange
+        let signer = OciTestSigner::new();
+        let auth = oci_rsa_auth(&signer.path);
+        let storage = temp_storage();
+        let names = [
+            "(request-target)",
+            "host",
+            "date",
+            "content-type",
+            "content-length",
+            "x-content-sha256",
+        ];
+        let original = br#"{"name":"original","compartmentId":"ignored"}"#;
+        let changed = br#"{"name":"tampered","compartmentId":"ignored"}"#;
+        let mut valid = oci_body_request("POST", "/n/sqrzl-emulator/b", original).await;
+        signer.sign(&mut valid, &names);
+
+        // Act and Assert
+        for spooled in [false, true] {
+            let mut tampered = valid.clone();
+            tampered.body = bytes::Bytes::copy_from_slice(changed);
+            if spooled {
+                let path =
+                    std::env::temp_dir().join(format!("sqrzl-oci-body-{}", uuid::Uuid::new_v4()));
+                fs::write(&path, changed).unwrap();
+                tampered.spooled_body = Some(crate::server::SpooledPayload::new(
+                    path,
+                    tampered.payload_len(),
+                    tampered.payload_md5(),
+                    hex::encode(tampered.payload_sha256()),
+                    tampered.payload_sha384(),
+                    tampered.payload_crc32c(),
+                    tampered.payload_crc64_nvme(),
+                    tampered.payload_sha1(),
+                    tampered.payload_crc32(),
+                ));
+                tampered.body = bytes::Bytes::new();
+            }
+            assert_eq!(
+                OciAdapter::new()
+                    .handle_request(&storage, &auth, &tampered)
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+            assert!(storage.get_namespace("tampered").is_err());
+        }
+        for omitted in ["content-type", "content-length", "x-content-sha256"] {
+            let mut missing = valid.clone();
+            signer.sign(
+                &mut missing,
+                &names
+                    .iter()
+                    .copied()
+                    .filter(|name| *name != omitted)
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(
+                OciAdapter::new()
+                    .handle_request(&storage, &auth, &missing)
+                    .unwrap()
+                    .status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        assert_eq!(
+            OciAdapter::new()
+                .handle_request(&storage, &auth, &valid)
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert!(storage.get_namespace("original").is_ok());
+    }
+
+    #[tokio::test]
+    async fn should_preserve_oci_upload_signing_exception_and_verify_supplied_digests() {
+        // Arrange
+        let signer = OciTestSigner::new();
+        let auth = oci_rsa_auth(&signer.path);
+        let names = ["(request-target)", "host", "date"];
+
+        // Act and Assert
+        for path in [
+            "/n/sqrzl-emulator/b/bucket/o/folder/item",
+            "/n/sqrzl-emulator/b/bucket/u/folder/item?uploadId=upload&uploadPartNum=1",
+        ] {
+            let mut request = oci_body_request("PUT", path, b"ordinary payload").await;
+            request.headers.remove("x-content-sha256");
+            signer.sign(&mut request, &names);
+            let (_, parts, _) = OciAdapter::parse_path(&request).unwrap();
+            assert!(OciAdapter::authorize(
+                &request,
+                &auth,
+                &OciAdapter::parse_path(&request).unwrap().1
+            )
+            .is_ok());
+            request.headers.insert(
+                "x-content-sha256",
+                BASE64.encode(request.payload_sha256()).parse().unwrap(),
+            );
+            assert!(OciAdapter::authorize(
+                &request,
+                &auth,
+                &OciAdapter::parse_path(&request).unwrap().1
+            )
+            .is_err());
+            signer.sign(
+                &mut request,
+                &["(request-target)", "host", "date", "x-content-sha256"],
+            );
+            assert!(OciAdapter::authorize(
+                &request,
+                &auth,
+                &OciAdapter::parse_path(&request).unwrap().1
+            )
+            .is_ok());
+            request.body = bytes::Bytes::from_static(b"modified payload");
+            assert!(OciAdapter::authorize(
+                &request,
+                &auth,
+                &OciAdapter::parse_path(&request).unwrap().1
+            )
+            .is_err());
+            assert_eq!(parts[0], "b");
+        }
+        let mut bucket = oci_body_request("PUT", "/n/sqrzl-emulator/b/bucket", b"{}").await;
+        signer.sign(&mut bucket, &names);
+        assert!(
+            OciAdapter::authorize(&bucket, &auth, &OciAdapter::parse_path(&bucket).unwrap().1)
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn should_require_oci_clock_skew_date_to_be_signed() {
+        // Arrange
+        let signer = OciTestSigner::new();
+        let auth = oci_rsa_auth(&signer.path);
+        let mut request = oci_body_request("GET", "/n/", b"").await;
+        request.headers.remove("x-content-sha256");
+        request.headers.insert(
+            "date",
+            (chrono::Utc::now() - chrono::Duration::hours(1))
+                .to_rfc2822()
+                .parse()
+                .unwrap(),
+        );
+        signer.sign(&mut request, &["(request-target)", "host", "date"]);
+        request
+            .headers
+            .insert("x-date", chrono::Utc::now().to_rfc2822().parse().unwrap());
+
+        // Act and Assert
+        assert!(OciAdapter::authorize(
+            &request,
+            &auth,
+            &OciAdapter::parse_path(&request).unwrap().1
+        )
+        .is_err());
+        signer.sign(&mut request, &["(request-target)", "host", "x-date"]);
+        assert!(OciAdapter::authorize(
+            &request,
+            &auth,
+            &OciAdapter::parse_path(&request).unwrap().1
+        )
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_oci_digest_encodings_and_allow_signed_empty_bodies() {
+        // Arrange
+        let signer = OciTestSigner::new();
+        let auth = oci_rsa_auth(&signer.path);
+        let names = [
+            "(request-target)",
+            "host",
+            "date",
+            "content-type",
+            "content-length",
+            "x-content-sha256",
+        ];
+        let mut request = oci_body_request("POST", "/n/sqrzl-emulator/b", b"").await;
+        let parts = OciAdapter::parse_path(&request).unwrap().1;
+
+        // Act and Assert
+        signer.sign(&mut request, &names);
+        assert!(OciAdapter::authorize(&request, &auth, &parts).is_ok());
+        for digest in [
+            "malformed%",
+            "",
+            "YQ==",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        ] {
+            request
+                .headers
+                .insert("x-content-sha256", digest.parse().unwrap());
+            signer.sign(&mut request, &names);
+            assert!(OciAdapter::authorize(&request, &auth, &parts).is_err());
+        }
+        let mut missing = oci_body_request("POST", "/n/sqrzl-emulator/b", b"").await;
+        signer.sign(&mut missing, &["(request-target)", "host", "date"]);
+        assert!(OciAdapter::authorize(&missing, &auth, &parts).is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]

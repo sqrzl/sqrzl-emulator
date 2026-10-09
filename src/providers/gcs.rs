@@ -2507,6 +2507,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_authenticate_gcs_xml_service_listing() {
+        // Arrange
+        let storage = temp_storage();
+        storage
+            .create_bucket("private-service-bucket".to_string())
+            .unwrap();
+        let config = gcs_auth();
+        let date = crate::utils::headers::format_last_modified();
+        let signature = GcsAdapter::sign(&config, &format!("GET\n\n\n{date}\n/")).unwrap();
+        let valid = format!("GOOG1 test-access:{signature}");
+
+        // Act and Assert
+        for authorization in [
+            None,
+            Some("GOOG1 wrong:invalid"),
+            Some("GOOG1 test-access:invalid"),
+            Some(valid.as_str()),
+        ] {
+            let mut headers = vec![("host", "storage.googleapis.com"), ("date", date.as_str())];
+            if let Some(value) = authorization {
+                headers.push(("authorization", value));
+            }
+            let request = parsed_request("GET", "http://localhost/", &headers, b"").await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &config, &request)
+                .unwrap();
+            let expected = if authorization == Some(valid.as_str()) {
+                StatusCode::OK
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            assert_eq!(response.status(), expected);
+            let body = String::from_utf8(read_test_body(response).await).unwrap();
+            assert_eq!(
+                body.contains("private-service-bucket"),
+                expected == StatusCode::OK
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn should_reject_gcs_hmac_with_wrong_identifier_or_signature_without_mutation() {
         let storage = temp_storage();
         let config = gcs_auth();
@@ -6333,6 +6374,9 @@ impl GcsAdapter {
             }
         };
         let Some(bucket) = bucket else {
+            if let Err(response) = Self::authorize(req, auth_config, "", None) {
+                return Ok(response);
+            }
             return Ok(Self::handle_xml_root_request(storage, req));
         };
 

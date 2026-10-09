@@ -416,12 +416,14 @@ impl AzureBlobAdapter {
         let new_block_version = req.query_param("comp") == Some("block")
             && Self::service_version(req).is_ok_and(|version| version >= "2026-10-06");
         if block_blob || !has_md5 || new_block_version {
-            response = response.header(
-                "x-ms-content-crc64",
-                &BASE64.encode(req.payload_crc64_nvme().to_be_bytes()),
-            );
+            response = response.header("x-ms-content-crc64", &Self::crc64_header_value(req));
         }
         response
+    }
+
+    fn crc64_header_value(req: &Request) -> String {
+        // Azure serializes CRC64-NVME as little-endian bytes before Base64 encoding.
+        BASE64.encode(req.payload_crc64_nvme().to_le_bytes())
     }
 
     fn namespace_etag(namespace: &crate::blob::Namespace) -> String {
@@ -3197,6 +3199,13 @@ impl AzureBlobAdapter {
                 if !Self::conditions_match_blob(req, &existing) {
                     return Ok(Self::condition_failed());
                 }
+                if Self::blob_type(&existing) != "BlockBlob" {
+                    return Ok(Self::error_response(
+                        StatusCode::CONFLICT,
+                        "InvalidBlobType",
+                        "The operation is not supported for this blob type.",
+                    ));
+                }
             }
             Err(crate::error::Error::KeyNotFound) => {
                 if req.header("if-match").is_some() {
@@ -3273,7 +3282,7 @@ impl AzureBlobAdapter {
         }
         let expected = md5
             .map(|_| BASE64.encode(req.payload_md5()))
-            .or_else(|| crc64.map(|_| BASE64.encode(req.payload_crc64_nvme().to_be_bytes())));
+            .or_else(|| crc64.map(|_| Self::crc64_header_value(req)));
         let provided = md5.or(crc64);
         (expected.as_deref() != provided).then(|| {
             Self::error_response(
@@ -3377,6 +3386,13 @@ impl AzureBlobAdapter {
                     }
                     if !Self::conditions_match_blob(req, &existing) {
                         return Ok(Self::condition_failed());
+                    }
+                    if Self::blob_type(&existing) != "BlockBlob" {
+                        return Ok(Self::error_response(
+                            StatusCode::BAD_REQUEST,
+                            "InvalidBlobType",
+                            "The operation is not supported for this blob type.",
+                        ));
                     }
                     (ObjectCondition::Etag(existing.etag.clone()), Some(existing))
                 }
@@ -5914,6 +5930,209 @@ mod tests {
                 .data,
             b"direct"
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Both specialized types must retain bytes, metadata, and staged blocks on every rejected stage or commit.
+    async fn should_reject_block_uploads_and_commits_on_specialized_azure_blobs_without_mutating() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("specialized".to_string()).unwrap();
+        for blob_type in ["PageBlob", "AppendBlob"] {
+            let uri = format!("/devstoreaccount1/specialized/{blob_type}");
+            let mut object = crate::models::Object::new(
+                blob_type.to_string(),
+                vec![b'p'; 512],
+                "application/octet-stream".to_string(),
+            );
+            AzureBlobAdapter::set_blob_type(&mut object, "BlockBlob");
+            storage
+                .put_object("specialized", blob_type.to_string(), object.clone())
+                .unwrap();
+            let stage = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}?comp=block&blockid=YQ=="),
+                        &[("x-ms-version", AZURE_VERSION)],
+                        b"staged",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(stage.status(), StatusCode::CREATED);
+            // Model durable upload state left by an earlier BlockBlob before a
+            // specialized object was installed by another storage front door.
+            AzureBlobAdapter::set_blob_type(&mut object, blob_type);
+            storage
+                .put_object("specialized", blob_type.to_string(), object)
+                .unwrap();
+            let lease = "12345678-1234-1234-1234-123456789abc";
+            acquire_azure_lease_for(&adapter, &storage, &uri, lease).await;
+            let observed = storage.get_object("specialized", blob_type).unwrap();
+            let etag = format!("\"{}\"", observed.etag);
+            let session_key =
+                AzureBlobAdapter::blob_state_key("devstoreaccount1", "specialized", blob_type);
+            let prior_session =
+                serde_json::to_value(adapter.load_block_session(&storage, &session_key).unwrap())
+                    .unwrap();
+            for (suffix, body, type_status) in [
+                (
+                    "?comp=block&blockid=YQ==",
+                    b"replacement".as_slice(),
+                    StatusCode::CONFLICT,
+                ),
+                (
+                    "?comp=blocklist",
+                    b"<BlockList/>".as_slice(),
+                    StatusCode::BAD_REQUEST,
+                ),
+                (
+                    "?comp=blocklist",
+                    b"<BlockList><Latest>YQ==</Latest></BlockList>".as_slice(),
+                    StatusCode::BAD_REQUEST,
+                ),
+            ] {
+                for (extra_headers, status, code) in [
+                    (
+                        vec![("if-match", etag.as_str())],
+                        StatusCode::PRECONDITION_FAILED,
+                        "LeaseIdMissing",
+                    ),
+                    (
+                        vec![("if-match", "\"stale\""), ("x-ms-lease-id", lease)],
+                        StatusCode::PRECONDITION_FAILED,
+                        "ConditionNotMet",
+                    ),
+                    (
+                        vec![("if-match", etag.as_str()), ("x-ms-lease-id", lease)],
+                        type_status,
+                        "InvalidBlobType",
+                    ),
+                ] {
+                    let mut headers = vec![("x-ms-version", AZURE_VERSION)];
+                    headers.extend(extra_headers);
+                    let response = adapter
+                        .handle(
+                            storage.clone(),
+                            auth_disabled(),
+                            parsed_request("PUT", &format!("{uri}{suffix}"), &headers, body).await,
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), status, "{blob_type}: {suffix}");
+                    assert_eq!(header_value(&response, "x-ms-error-code"), Some(code));
+                    let current = storage.get_object("specialized", blob_type).unwrap();
+                    assert_eq!(current.data, observed.data);
+                    assert_eq!(current.etag, observed.etag);
+                    assert_eq!(current.last_modified, observed.last_modified);
+                    assert_eq!(current.provider_metadata, observed.provider_metadata);
+                    assert_eq!(
+                        serde_json::to_value(
+                            adapter.load_block_session(&storage, &session_key).unwrap()
+                        )
+                        .unwrap(),
+                        prior_session
+                    );
+                    assert!(adapter
+                        .load_committed_blocks(&storage, &session_key)
+                        .unwrap()
+                        .is_empty());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Published vectors exercise buffered/spooled admission and staged-state preservation on both upload surfaces.
+    async fn should_accept_native_azure_crc64_vectors_and_reject_reversed_checksums() {
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        storage.create_bucket("crc-vectors".to_string()).unwrap();
+        // Independent wire vectors published in Azure's Structured Body Format examples.
+        // https://learn.microsoft.com/en-us/rest/api/storageservices/structured-body-format
+        for (body, checksum) in [
+            (b"\x11".as_slice(), "0GFnV7RfVNI="),
+            (b"\x22".as_slice(), "2Er7nqBPxto="),
+            (b"\x11\x22".as_slice(), "4qY3dFCtwu8="),
+        ] {
+            for (suffix, spooled) in [
+                ("", false),
+                ("", true),
+                ("?comp=block&blockid=YQ==", false),
+                ("?comp=block&blockid=YQ==", true),
+            ] {
+                let request = parsed_request(
+                    "PUT",
+                    &format!("/devstoreaccount1/crc-vectors/blob{suffix}"),
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "BlockBlob"),
+                        ("x-ms-content-crc64", checksum),
+                    ],
+                    body,
+                )
+                .await;
+                let request = if spooled {
+                    spool_test_request(request, &std::env::temp_dir())
+                } else {
+                    request
+                };
+                let response = adapter
+                    .handle(storage.clone(), auth_disabled(), request)
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED);
+                assert_eq!(
+                    header_value(&response, "x-ms-content-crc64"),
+                    Some(checksum)
+                );
+                let prior = storage.get_object("crc-vectors", "blob").unwrap();
+                let session_key =
+                    AzureBlobAdapter::blob_state_key("devstoreaccount1", "crc-vectors", "blob");
+                let prior_session = serde_json::to_value(
+                    adapter.load_block_session(&storage, &session_key).unwrap(),
+                )
+                .unwrap();
+                let mut reversed = BASE64.decode(checksum).unwrap();
+                reversed.reverse();
+                let reversed = BASE64.encode(reversed);
+                let request = parsed_request(
+                    "PUT",
+                    &format!("/devstoreaccount1/crc-vectors/blob{suffix}"),
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "BlockBlob"),
+                        ("x-ms-content-crc64", &reversed),
+                    ],
+                    body,
+                )
+                .await;
+                let request = if spooled {
+                    spool_test_request(request, &std::env::temp_dir())
+                } else {
+                    request
+                };
+                let rejected = adapter
+                    .handle(storage.clone(), auth_disabled(), request)
+                    .await
+                    .unwrap();
+                assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+                let current = storage.get_object("crc-vectors", "blob").unwrap();
+                assert_eq!(current.data, prior.data);
+                assert_eq!(current.etag, prior.etag);
+                assert_eq!(
+                    serde_json::to_value(
+                        adapter.load_block_session(&storage, &session_key).unwrap()
+                    )
+                    .unwrap(),
+                    prior_session
+                );
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -9451,7 +9670,7 @@ mod tests {
             )
             .await;
             let md5 = BASE64.encode(req.payload_md5());
-            let crc = BASE64.encode(req.payload_crc64_nvme().to_be_bytes());
+            let crc = BASE64.encode(req.payload_crc64_nvme().to_le_bytes());
             let response = adapter
                 .handle(storage.clone(), auth_disabled(), req)
                 .await
@@ -9765,7 +9984,7 @@ mod tests {
                     body,
                 )
                 .await;
-                let crc = BASE64.encode(request.payload_crc64_nvme().to_be_bytes());
+                let crc = BASE64.encode(request.payload_crc64_nvme().to_le_bytes());
                 let response = adapter
                     .handle(storage.clone(), auth_disabled(), request)
                     .await
