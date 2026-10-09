@@ -1438,6 +1438,7 @@ impl AzureBlobAdapter {
         .join("\n")
     }
 
+    #[allow(clippy::too_many_lines)]
     fn validate_sas(
         req: &Request,
         config: &AuthConfig,
@@ -1615,11 +1616,11 @@ impl AzureBlobAdapter {
                 match (req.method(), comp) {
                     (&Method::GET | &Method::HEAD, _) => &['r'],
                     (&Method::DELETE, _) if req.query_param("versionid").is_some() => &['x'],
-                    (&Method::DELETE, Some("immutabilityPolicies")) => &['i'],
+                    (&Method::DELETE, Some("immutabilityPolicies"))
+                    | (&Method::PUT, Some("immutabilityPolicies" | "legalhold")) => &['i'],
                     (&Method::DELETE, _) => &['d'],
                     (&Method::PUT, Some("snapshot")) => &['c', 'w'],
                     (&Method::PUT, Some("appendblock")) => &['a', 'w'],
-                    (&Method::PUT, Some("immutabilityPolicies" | "legalhold")) => &['i'],
                     (&Method::PUT, Some("lease"))
                         if req.header("x-ms-lease-action") == Some("break") =>
                     {
@@ -3773,6 +3774,7 @@ impl AzureBlobAdapter {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn put_blob(
         &self,
         storage: &Arc<dyn Storage>,
@@ -7902,6 +7904,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn should_round_trip_azure_content_properties_through_restart_and_block_commit() {
         let root =
             std::env::temp_dir().join(format!("sqrzl-azure-properties-{}", uuid::Uuid::new_v4()));
@@ -8108,7 +8111,7 @@ mod tests {
         assert!(response.headers().get("etag").is_some());
         assert!(response.headers().get("last-modified").is_some());
         assert_eq!(header_value(&response, "x-ms-meta-owner"), Some("bob"));
-        assert!(read_test_body(response).await.is_empty());
+        assert_eq!(read_test_body(response).await, Vec::<u8>::new());
     }
 
     #[tokio::test]
