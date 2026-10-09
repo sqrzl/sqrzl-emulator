@@ -1,4 +1,4 @@
-use super::FilesystemStorage;
+use super::{BucketIdentity, FilesystemStorage};
 use crate::error::{Error, Result};
 use crate::models::{MultipartUpload, Object};
 use crate::storage::LockFreeIndex;
@@ -122,6 +122,7 @@ impl FilesystemStorage {
             index,
             uploads_cache: Mutex::new(HashMap::new()),
             object_locks: Mutex::new(HashMap::new()),
+            bucket_locks: Mutex::new(HashMap::new()),
             #[cfg(test)]
             test_hook: Mutex::new(None),
         }
@@ -140,6 +141,82 @@ impl FilesystemStorage {
         let lock = Arc::new(Mutex::new(()));
         locks.insert(lock_key, Arc::downgrade(&lock));
         Ok(lock)
+    }
+
+    pub(super) fn bucket_lock(&self, bucket: &str) -> Result<Arc<Mutex<()>>> {
+        let mut locks = self
+            .bucket_locks
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock bucket lock registry".to_string()))?;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(bucket).and_then(std::sync::Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(bucket.to_string(), Arc::downgrade(&lock));
+        Ok(lock)
+    }
+
+    pub(super) fn read_bucket_identity_locked(&self, bucket: &str) -> Result<BucketIdentity> {
+        let path = self.bucket_dir(bucket).join(".bucket.identity.json");
+        match fs::read(&path) {
+            Ok(json) => serde_json::from_slice(&json)
+                .map_err(|error| Error::InternalError(format!("Invalid bucket identity: {error}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // Existing v2 buckets predate the identity sidecar. The name
+                // marker belongs to bucket creation; object writes do not alter
+                // it. Derive once and persist, never substitute the read clock.
+                let metadata = fs::metadata(self.bucket_dir(bucket).join(".bucket.name")).map_err(
+                    |error| {
+                        Error::InternalError(format!(
+                            "Failed to inspect legacy bucket identity: {error}"
+                        ))
+                    },
+                )?;
+                let created_at = metadata
+                    .created()
+                    .or_else(|_| metadata.modified())
+                    .map_err(|error| {
+                        Error::InternalError(format!(
+                            "Failed to derive legacy bucket creation: {error}"
+                        ))
+                    })?
+                    .into();
+                let identity = BucketIdentity {
+                    created_at,
+                    modified_at: created_at,
+                };
+                self.write_bucket_identity(bucket, &identity)?;
+                Ok(identity)
+            }
+            Err(error) => Err(Error::InternalError(format!(
+                "Failed to read bucket identity: {error}"
+            ))),
+        }
+    }
+
+    pub(super) fn write_bucket_identity(
+        &self,
+        bucket: &str,
+        identity: &BucketIdentity,
+    ) -> Result<()> {
+        let json = serde_json::to_vec(identity).map_err(|error| {
+            Error::InternalError(format!("Failed to serialize bucket identity: {error}"))
+        })?;
+        Self::atomic_write(
+            &self.bucket_dir(bucket).join(".bucket.identity.json"),
+            &json,
+        )
+    }
+
+    pub(super) fn touch_bucket_identity(&self, bucket: &str) -> Result<()> {
+        let lock = self.bucket_lock(bucket)?;
+        let _guard = lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock bucket identity for modification".to_string())
+        })?;
+        let mut identity = self.read_bucket_identity_locked(bucket)?;
+        identity.modified_at = chrono::Utc::now();
+        self.write_bucket_identity(bucket, &identity)
     }
 
     pub(super) fn bucket_dir(&self, bucket: &str) -> PathBuf {
@@ -185,6 +262,7 @@ impl FilesystemStorage {
 
         match name.as_ref() {
             ".bucket.meta.json"
+            | ".bucket.identity.json"
             | ".bucket.name"
             | ".versioning-enabled"
             | ".lifecycle.json"

@@ -1726,8 +1726,9 @@ impl GcsAdapter {
             ));
         };
         if let Some(token) = authorization.strip_prefix("Bearer ") {
-            if config.gcs_hmac_secret() == Some(token) || config.gcs_hmac_access_id() == Some(token)
-            {
+            // This is the documented local SDK convenience token, not native OAuth.
+            // HMAC access identifiers are public credential selectors, never bearer secrets.
+            if config.gcs_hmac_secret() == Some(token) {
                 return Ok(());
             }
             return Err(Self::authorization_error(
@@ -1839,10 +1840,197 @@ mod tests {
         assert!(storage.get_namespace("A").is_err());
     }
 
+    #[tokio::test]
+    async fn should_reject_unsupported_gcs_bucket_fields_before_create_or_patch() {
+        let storage = temp_storage();
+        storage
+            .create_bucket("existing-config".to_string())
+            .unwrap();
+        let original = HashMap::from([("gcs_retention_seconds".to_string(), "3600".to_string())]);
+        storage
+            .update_bucket_metadata("existing-config", original.clone())
+            .unwrap();
+        // Fields from the native bucket resource that this adapter cannot enact.
+        let fields = [
+            ("versioning", serde_json::json!({"enabled": true})),
+            (
+                "encryption",
+                serde_json::json!({"defaultKmsKeyName": "key"}),
+            ),
+            ("lifecycle", serde_json::json!({"rule": []})),
+            ("defaultEventBasedHold", serde_json::json!(true)),
+            (
+                "iamConfiguration",
+                serde_json::json!({"publicAccessPrevention": "enforced"}),
+            ),
+            ("acl", serde_json::json!([])),
+            ("defaultObjectAcl", serde_json::json!([])),
+            ("labels", serde_json::json!({"owner": "test"})),
+            ("notifications", serde_json::json!([])),
+            (
+                "website",
+                serde_json::json!({"mainPageSuffix": "index.html"}),
+            ),
+            ("cors", serde_json::json!([])),
+            ("billing", serde_json::json!({"requesterPays": true})),
+            ("logging", serde_json::json!({"logBucket": "logs"})),
+            ("autoclass", serde_json::json!({"enabled": true})),
+            (
+                "hierarchicalNamespace",
+                serde_json::json!({"enabled": true}),
+            ),
+            ("location", serde_json::json!("US")),
+            ("storageClass", serde_json::json!("NEARLINE")),
+            ("rpo", serde_json::json!("ASYNC_TURBO")),
+            (
+                "customPlacementConfig",
+                serde_json::json!({"dataLocations": ["US-EAST1", "US-WEST1"]}),
+            ),
+            ("ipFilter", serde_json::json!({"mode": "Enabled"})),
+        ];
+        for (field, value) in fields {
+            for (method, url) in [
+                ("POST", "http://localhost/storage/v1/b?project=test-project"),
+                ("PATCH", "http://localhost/storage/v1/b/existing-config"),
+            ] {
+                let mut payload =
+                    serde_json::json!({"retentionPolicy": {"retentionPeriod": "7200"}});
+                if method == "POST" {
+                    payload["name"] = serde_json::json!("rejected-config");
+                }
+                payload[field] = value.clone();
+                let request =
+                    parsed_request(method, url, &[], &serde_json::to_vec(&payload).unwrap()).await;
+                let response = GcsAdapter::new()
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap();
+                let unknown = field == "notifications";
+                assert_eq!(
+                    response.status(),
+                    if unknown {
+                        StatusCode::BAD_REQUEST
+                    } else {
+                        StatusCode::NOT_IMPLEMENTED
+                    },
+                    "{method} {field}"
+                );
+                let body = parse_json_body(response).await;
+                assert_eq!(
+                    body["error"]["errors"][0]["reason"],
+                    if unknown {
+                        "invalidArgument"
+                    } else {
+                        "notImplemented"
+                    }
+                );
+                assert!(!storage.bucket_exists("rejected-config").unwrap());
+                assert_eq!(
+                    storage.get_bucket("existing-config").unwrap().metadata,
+                    original
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_unknown_or_malformed_gcs_bucket_documents_without_mutation() {
+        let storage = temp_storage();
+        for payload in [
+            serde_json::json!([]),
+            serde_json::json!({"name": "invalid-config", "unexpected": true}),
+            serde_json::json!({"name": "invalid-config", "retentionPolicy": {"retentionPeriod": "3600", "unexpected": true}}),
+            serde_json::json!({"name": "invalid-config", "softDeletePolicy": {"retentionDurationSeconds": "604800", "unexpected": true}}),
+        ] {
+            let request = parsed_request(
+                "POST",
+                "http://localhost/storage/v1/b?project=test-project",
+                &[],
+                &serde_json::to_vec(&payload).unwrap(),
+            )
+            .await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert!(!storage.bucket_exists("invalid-config").unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_unimplemented_gcs_xml_bucket_create_controls_without_mutation() {
+        let storage = temp_storage();
+        for (headers, body) in [
+            (vec![], b"<CreateBucketConfiguration><LocationConstraint>EU</LocationConstraint></CreateBucketConfiguration>".as_slice()),
+            (vec![("x-goog-acl", "public-read")], b"".as_slice()),
+            (vec![("x-goog-bucket-object-lock-enabled", "true")], b"".as_slice()),
+            (vec![("x-goog-bucket-retention-period", "3600")], b"".as_slice()),
+        ] {
+            let request = parsed_request("PUT", "http://localhost/xml-config", &headers, body).await;
+            let response = GcsAdapter::new().handle_request(&storage, &auth_disabled(), &request).unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+            assert!(String::from_utf8(read_test_body(response).await).unwrap().contains("<Code>NotImplemented</Code>"));
+            assert!(!storage.bucket_exists("xml-config").unwrap());
+        }
+    }
+
     fn temp_storage() -> Arc<dyn Storage> {
         let dir = std::env::temp_dir().join(format!("sqrzl-gcs-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
+    }
+
+    #[tokio::test]
+    async fn should_preserve_gcs_bucket_creation_time_in_get_list_and_restart() {
+        let base =
+            std::env::temp_dir().join(format!("sqrzl-gcs-identity-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let create = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[],
+            br#"{"name":"stable-gcs-time"}"#,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &create)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = parse_json_body(response).await;
+        let created = body["timeCreated"].clone();
+        let updated = body["updated"].clone();
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        for _ in 0..2 {
+            let get = parsed_request(
+                "GET",
+                "http://localhost/storage/v1/b/stable-gcs-time",
+                &[],
+                b"",
+            )
+            .await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &get)
+                .unwrap();
+            let body = parse_json_body(response).await;
+            assert_eq!(body["timeCreated"], created);
+            assert_eq!(body["updated"], updated);
+        }
+        let list = parsed_request(
+            "GET",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[],
+            b"",
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &list)
+            .unwrap();
+        assert_eq!(
+            parse_json_body(response).await["items"][0]["timeCreated"],
+            created
+        );
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
     }
 
     fn auth_disabled() -> Arc<AuthConfig> {
@@ -1875,6 +2063,68 @@ mod tests {
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
             vendor_credentials: crate::config::VendorCredentials::default(),
         })
+    }
+
+    #[tokio::test]
+    async fn should_reject_gcs_access_identifier_as_bearer_without_mutation() {
+        let storage = temp_storage();
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("authorization", "Bearer test-access")],
+            br#"{"name":"identifier-token"}"#,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &gcs_auth(), &request)
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(storage.get_namespace("identifier-token").is_err());
+        let body: serde_json::Value =
+            serde_json::from_slice(&read_test_body(response).await).unwrap();
+        assert_eq!(body["error"]["errors"][0]["reason"], "authError");
+    }
+
+    #[tokio::test]
+    async fn should_preserve_documented_gcs_local_secret_bearer_mode() {
+        let storage = temp_storage();
+        let config = gcs_auth();
+        let authorization = format!("Bearer {}", config.gcs_hmac_secret().unwrap());
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("authorization", &authorization)],
+            br#"{"name":"local-secret-token"}"#,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &config, &request)
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(storage.get_namespace("local-secret-token").is_ok());
+    }
+
+    #[tokio::test]
+    async fn should_reject_gcs_hmac_with_wrong_identifier_or_signature_without_mutation() {
+        let storage = temp_storage();
+        let config = gcs_auth();
+        let date = crate::utils::headers::format_last_modified();
+        for authorization in ["GOOG1 wrong-access:invalid", "GOOG1 test-access:invalid"] {
+            let request = parsed_request(
+                "PUT",
+                "http://localhost/hmac-denied",
+                &[("authorization", authorization), ("date", &date)],
+                b"",
+            )
+            .await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &config, &request)
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert!(storage.get_namespace("hmac-denied").is_err());
+        }
     }
 
     async fn parsed_request(
@@ -5742,6 +5992,17 @@ impl GcsAdapter {
 
         match *req.method() {
             Method::PUT => {
+                if !req.body.is_empty()
+                    || [
+                        "x-goog-acl",
+                        "x-goog-bucket-object-lock-enabled",
+                        "x-goog-bucket-retention-period",
+                    ]
+                    .iter()
+                    .any(|header| req.header(header).is_some())
+                {
+                    return Self::error_response(StatusCode::NOT_IMPLEMENTED, "NotImplemented", "GCS XML bucket configuration bodies, ACLs, and retention headers are not supported; use the supported JSON data-protection fields instead.");
+                }
                 if !Self::valid_bucket_name(bucket) {
                     return Self::error_response(
                         StatusCode::BAD_REQUEST,
@@ -7780,10 +8041,105 @@ impl GcsAdapter {
             .or_else(|| value.as_str().and_then(|value| value.parse::<u64>().ok()))
     }
 
+    fn validate_bucket_fields(
+        req: &Request,
+        payload: &serde_json::Value,
+    ) -> Option<Response<Body>> {
+        // Each bucket control has independent semantics. Partial breadth must
+        // not turn an unsupported request into an apparently successful no-op.
+        let Some(fields) = payload.as_object() else {
+            return Some(Self::invalid_data_protection_response(
+                "Bucket metadata must be a JSON object",
+            ));
+        };
+        for field in fields.keys() {
+            match field.as_str() {
+                "name" if req.method() == Method::POST => {}
+                "retentionPolicy" | "softDeletePolicy" => {}
+                "name"
+                | "versioning"
+                | "encryption"
+                | "lifecycle"
+                | "defaultEventBasedHold"
+                | "iamConfiguration"
+                | "acl"
+                | "defaultObjectAcl"
+                | "labels"
+                | "website"
+                | "cors"
+                | "billing"
+                | "logging"
+                | "autoclass"
+                | "hierarchicalNamespace"
+                | "location"
+                | "storageClass"
+                | "rpo"
+                | "customPlacementConfig"
+                | "ipFilter"
+                | "objectRetention"
+                | "kind"
+                | "id"
+                | "selfLink"
+                | "projectNumber"
+                | "generation"
+                | "metageneration"
+                | "etag"
+                | "timeCreated"
+                | "updated"
+                | "softDeleteTime"
+                | "hardDeleteTime"
+                | "owner"
+                | "locationType" => {
+                    return Some(Self::unimplemented_data_protection_response(&format!(
+                        "Bucket field {field} is not writable on this emulator surface"
+                    )));
+                }
+                _ => {
+                    return Some(Self::invalid_data_protection_response(&format!(
+                        "Unknown bucket field: {field}"
+                    )));
+                }
+            }
+        }
+        for (policy, allowed) in [
+            ("retentionPolicy", "retentionPeriod"),
+            ("softDeletePolicy", "retentionDurationSeconds"),
+        ] {
+            if let Some(value) = fields.get(policy).filter(|value| !value.is_null()) {
+                let Some(policy_fields) = value.as_object() else {
+                    return Some(Self::invalid_data_protection_response(&format!(
+                        "{policy} must be a JSON object"
+                    )));
+                };
+                for field in policy_fields.keys() {
+                    if field != allowed
+                        && field != "effectiveTime"
+                        && !(policy == "retentionPolicy" && field == "isLocked")
+                    {
+                        return Some(Self::invalid_data_protection_response(&format!(
+                            "Unknown {policy} field: {field}"
+                        )));
+                    }
+                }
+            }
+        }
+        if req.query_param("predefinedAcl").is_some()
+            || req.query_param("predefinedDefaultObjectAcl").is_some()
+        {
+            return Some(Self::unimplemented_data_protection_response(
+                "Predefined bucket and default object ACLs are not supported",
+            ));
+        }
+        None
+    }
+
     fn validate_bucket_data_protection(
         req: &Request,
         payload: &serde_json::Value,
     ) -> Option<Response<Body>> {
+        if let Some(response) = Self::validate_bucket_fields(req, payload) {
+            return Some(response);
+        }
         if req.query_param("enableObjectRetention").is_some()
             || payload.get("objectRetention").is_some()
         {
@@ -7866,6 +8222,7 @@ impl GcsAdapter {
                 "kind": "storage#bucket",
                 "name": namespace.name,
                 "timeCreated": namespace.created_at.to_rfc3339(),
+                "updated": namespace.modified_at.to_rfc3339(),
                 "softDeletePolicy": soft_delete,
                 "retentionPolicy": retention,
             })

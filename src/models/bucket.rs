@@ -6,6 +6,8 @@ use std::collections::HashMap;
 pub struct Bucket {
     pub name: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub modified_at: DateTime<Utc>,
     pub versioning_enabled: bool,
     pub policy: Option<BucketPolicy>,
     pub lifecycle_rules: Vec<LifecycleRule>,
@@ -47,9 +49,11 @@ pub struct LifecycleExpiration {
 impl Bucket {
     #[must_use]
     pub fn new(name: String) -> Self {
+        let now = Utc::now();
         Self {
             name,
-            created_at: Utc::now(),
+            created_at: now,
+            modified_at: now,
             versioning_enabled: false,
             policy: None,
             lifecycle_rules: Vec::new(),

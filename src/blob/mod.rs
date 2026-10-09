@@ -14,6 +14,8 @@ pub struct TenantContext {
 pub struct Namespace {
     pub name: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub modified_at: DateTime<Utc>,
     pub metadata: HashMap<String, String>,
 }
 
@@ -202,6 +204,7 @@ where
         Ok(Namespace {
             name: bucket.name,
             created_at: bucket.created_at,
+            modified_at: bucket.modified_at,
             metadata: bucket.metadata,
         })
     }
@@ -213,6 +216,7 @@ where
             .map(|bucket| Namespace {
                 name: bucket.name,
                 created_at: bucket.created_at,
+                modified_at: bucket.modified_at,
                 metadata: bucket.metadata,
             })
             .collect())
