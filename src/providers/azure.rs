@@ -1808,6 +1808,10 @@ impl AzureBlobAdapter {
                         return Err(AzureBlockListError::InvalidBlockList);
                     }
                 }
+                Ok(Event::Empty(event)) if !root_seen && event.name().as_ref() == b"BlockList" => {
+                    root_seen = true;
+                    root_closed = true;
+                }
                 Ok(Event::End(event)) => {
                     let name = event.name().as_ref().to_vec();
                     if current_element.as_deref() == Some(name.as_slice()) {
@@ -1869,7 +1873,7 @@ impl AzureBlobAdapter {
         if current_element.is_some() || (root_seen && !root_closed) {
             return Err(AzureBlockListError::InvalidXmlDocument);
         }
-        if !root_seen || block_references.is_empty() {
+        if !root_seen {
             return Err(AzureBlockListError::InvalidBlockList);
         }
 
@@ -5457,6 +5461,204 @@ mod tests {
             .expect("body should read")
             .to_bytes();
         assert_eq!(body.as_ref(), b"abcdef");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Empty commits cover both XML encodings, existing/missing targets, and restart.
+    async fn should_commit_empty_azure_block_lists_with_native_conditions_and_checksums() {
+        let root = std::env::temp_dir().join(format!("azure-empty-list-{}", uuid::Uuid::new_v4()));
+        let mut storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::open(&root).unwrap());
+        storage.create_bucket("empty-commits".to_string()).unwrap();
+        storage.enable_versioning("empty-commits").unwrap();
+        storage
+            .update_bucket_metadata(
+                "empty-commits",
+                HashMap::from([(AZURE_VERSIONING_KEY.to_string(), "true".to_string())]),
+            )
+            .unwrap();
+        for (key, xml, existing) in [
+            ("new-paired", "<BlockList></BlockList>", false),
+            (
+                "new-self-closing",
+                "<?xml version=\"1.0\"?><BlockList />",
+                false,
+            ),
+            ("existing-paired", "<BlockList></BlockList>", true),
+            ("existing-self-closing", "<BlockList/>", true),
+        ] {
+            let adapter = AzureBlobAdapter::new();
+            let uri = format!("/devstoreaccount1/empty-commits/{key}");
+            let prior = if existing {
+                let response = adapter
+                    .handle(
+                        storage.clone(),
+                        auth_disabled(),
+                        parsed_request(
+                            "PUT",
+                            &uri,
+                            &[
+                                ("x-ms-version", AZURE_VERSION),
+                                ("x-ms-blob-type", "BlockBlob"),
+                            ],
+                            b"previous",
+                        )
+                        .await,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED);
+                Some((
+                    header_value(&response, "etag").unwrap().to_string(),
+                    header_value(&response, "x-ms-version-id")
+                        .unwrap()
+                        .to_string(),
+                ))
+            } else {
+                None
+            };
+            let stage = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}?comp=block&blockid=YQ=="),
+                        &[("x-ms-version", AZURE_VERSION)],
+                        b"staged",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(stage.status(), StatusCode::CREATED);
+            let session_key =
+                AzureBlobAdapter::blob_state_key("devstoreaccount1", "empty-commits", key);
+            for (extra_header, status, code) in [
+                (
+                    ("content-md5", "AAAAAAAAAAAAAAAAAAAAAA=="),
+                    StatusCode::BAD_REQUEST,
+                    "Md5Mismatch",
+                ),
+                (
+                    ("if-match", "\"stale\""),
+                    StatusCode::PRECONDITION_FAILED,
+                    "ConditionNotMet",
+                ),
+            ] {
+                let response = adapter
+                    .handle(
+                        storage.clone(),
+                        auth_disabled(),
+                        parsed_request(
+                            "PUT",
+                            &format!("{uri}?comp=blocklist"),
+                            &[("x-ms-version", AZURE_VERSION), extra_header],
+                            xml.as_bytes(),
+                        )
+                        .await,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status);
+                assert_eq!(header_value(&response, "x-ms-error-code"), Some(code));
+                assert_eq!(
+                    adapter
+                        .load_block_session(&storage, &session_key)
+                        .unwrap()
+                        .unwrap()
+                        .blocks
+                        .len(),
+                    1
+                );
+                if existing {
+                    assert_eq!(
+                        storage.get_object("empty-commits", key).unwrap().data,
+                        b"previous"
+                    );
+                } else {
+                    assert!(matches!(
+                        storage.get_object_metadata("empty-commits", key),
+                        Err(crate::error::Error::KeyNotFound)
+                    ));
+                }
+            }
+            let md5 = BASE64.encode(md5::compute(xml.as_bytes()).0);
+            let mut headers = vec![("x-ms-version", AZURE_VERSION), ("content-md5", &md5)];
+            if let Some((etag, _)) = &prior {
+                headers.push(("if-match", etag));
+            }
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}?comp=blocklist"),
+                        &headers,
+                        xml.as_bytes(),
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED, "{key}");
+            assert_eq!(header_value(&response, "content-md5"), Some(md5.as_str()));
+            let etag = header_value(&response, "etag").unwrap().to_string();
+            if let Some((prior_etag, version)) = &prior {
+                assert_ne!(&etag, prior_etag);
+                assert_eq!(
+                    storage
+                        .get_object_version("empty-commits", key, version)
+                        .unwrap()
+                        .data,
+                    b"previous"
+                );
+            }
+            storage = Arc::new(FilesystemStorage::open(&root).unwrap());
+            let head = AzureBlobAdapter::new()
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request("HEAD", &uri, &[("x-ms-version", AZURE_VERSION)], b"").await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(head.status(), StatusCode::OK);
+            assert_eq!(header_value(&head, "content-length"), Some("0"));
+            assert_eq!(header_value(&head, "etag"), Some(etag.as_str()));
+            assert_eq!(
+                storage.get_object("empty-commits", key).unwrap().data,
+                Vec::<u8>::new()
+            );
+            assert!(AzureBlobAdapter::new()
+                .load_committed_blocks(&storage, &session_key)
+                .unwrap()
+                .is_empty());
+            // Put Blob is the documented operation that discards staged blocks.
+            let replaced = AzureBlobAdapter::new()
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &uri,
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                        ],
+                        b"",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(replaced.status(), StatusCode::CREATED);
+            assert!(AzureBlobAdapter::new()
+                .load_block_session(&storage, &session_key)
+                .unwrap()
+                .is_none());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]

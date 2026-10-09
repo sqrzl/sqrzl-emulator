@@ -60,6 +60,33 @@ def test_azure_same_byte_writes_revise_etags(sqrzl_server):
     service.delete_container(container.container_name)
 
 
+def test_azure_empty_block_list_commits(sqrzl_server):
+    from azure.core import MatchConditions
+    from azure.core.exceptions import HttpResponseError
+
+    sqrzl_server.require_provider("azure")
+    service = _service(sqrzl_server)
+    container = service.create_container(sqrzl_server.bucket_name("sdk-azure-empty-blocks"))
+    for existing in [False, True]:
+        blob = container.get_blob_client(f"empty-{existing}")
+        original = blob.upload_blob(b"previous") if existing else None
+        blob.stage_block(base64.b64encode(b"staged").decode(), b"staged", validate_content=True)
+        committed = blob.commit_block_list([], validate_content=True)
+        assert blob.get_blob_properties().size == 0
+        assert blob.download_blob().readall() == b""
+        assert blob.get_block_list(block_list_type="committed")[0] == []
+        if original:
+            assert committed["etag"] != original["etag"]
+            with pytest.raises(HttpResponseError) as error:
+                blob.commit_block_list([], etag=original["etag"], match_condition=MatchConditions.IfNotModified)
+            assert error.value.status_code == 412
+        # Put Blob explicitly discards remaining uncommitted blocks.
+        blob.upload_blob(b"", overwrite=True)
+        assert blob.get_block_list(block_list_type="all") == ([], [])
+        blob.delete_blob()
+    service.delete_container(container.container_name)
+
+
 def test_azure_conditional_current_snapshot_and_version_reads(sqrzl_server):
     from azure.core import MatchConditions
     from azure.core.exceptions import HttpResponseError
