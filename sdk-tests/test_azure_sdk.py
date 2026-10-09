@@ -18,6 +18,48 @@ def _service(sqrzl_server):
     )
 
 
+def test_azure_same_byte_writes_revise_etags(sqrzl_server):
+    from azure.core import MatchConditions
+    from azure.core.exceptions import HttpResponseError
+
+    sqrzl_server.require_provider("azure")
+    service = _service(sqrzl_server)
+    container = service.create_container(
+        sqrzl_server.bucket_name("sdk-azure-revisions"),
+        headers={"x-sqrzl-azure-versioning-enabled": "true"},
+    )
+    blob = container.get_blob_client("item")
+    first = blob.upload_blob(b"same bytes", overwrite=True, validate_content=True)
+    second = blob.upload_blob(
+        b"same bytes", overwrite=True, validate_content=True,
+        etag=first["etag"], match_condition=MatchConditions.IfNotModified,
+    )
+    assert first["etag"] != second["etag"]
+    assert first["version_id"] != second["version_id"]
+    for operation in [
+        lambda: blob.download_blob(etag=first["etag"], match_condition=MatchConditions.IfNotModified),
+        lambda: blob.get_blob_properties(etag=first["etag"], match_condition=MatchConditions.IfNotModified),
+        lambda: blob.upload_blob(b"bad", overwrite=True, etag=first["etag"], match_condition=MatchConditions.IfNotModified),
+    ]:
+        with pytest.raises(HttpResponseError) as error:
+            operation()
+        assert error.value.status_code == 412
+        assert error.value.error_code == "ConditionNotMet"
+    assert blob.download_blob().readall() == b"same bytes"
+    selected = container.get_blob_client("item", version_id=first["version_id"])
+    assert selected.get_blob_properties().etag == first["etag"]
+    assert selected.download_blob(etag=first["etag"], match_condition=MatchConditions.IfNotModified).readall() == b"same bytes"
+
+    page = container.get_blob_client("page")
+    original = page.create_page_blob(512)
+    revised = page.upload_page(bytes(512), offset=0, length=512, validate_content=True)
+    assert original["etag"] != revised["etag"]
+    cleared = page.clear_page(offset=0, length=512)
+    assert cleared["etag"] != revised["etag"]
+    assert page.download_blob().readall() == bytes(512)
+    service.delete_container(container.container_name)
+
+
 def test_azure_conditional_current_snapshot_and_version_reads(sqrzl_server):
     from azure.core import MatchConditions
     from azure.core.exceptions import HttpResponseError

@@ -3670,7 +3670,7 @@ impl AzureBlobAdapter {
         let observed_etag = blob.etag.clone();
         blob.data.extend_from_slice(&req.body);
         blob.size = blob.data.len() as u64;
-        blob.etag = crate::models::object::compute_etag(&blob.data);
+        blob.etag = uuid::Uuid::new_v4().simple().to_string();
         blob.last_modified = Utc::now();
         if !storage
             .put_object_if(
@@ -3777,7 +3777,7 @@ impl AzureBlobAdapter {
         } else {
             blob.data[start..=end].copy_from_slice(&req.body);
         }
-        blob.etag = crate::models::object::compute_etag(&blob.data);
+        blob.etag = uuid::Uuid::new_v4().simple().to_string();
         blob.last_modified = Utc::now();
         if !storage
             .put_object_if(
@@ -4021,12 +4021,12 @@ impl AzureBlobAdapter {
                 Vec::new(),
                 Self::content_type(req),
                 Self::metadata_from_headers(req),
-                hex::encode(req.payload_md5()),
+                uuid::Uuid::new_v4().simple().to_string(),
             );
             object.size = req.payload_len();
             object
         } else {
-            crate::models::Object::new_with_metadata(
+            crate::models::Object::new_with_metadata_and_etag(
                 blob_key.to_string(),
                 if blob_type == "PageBlob" {
                     vec![0_u8; Self::page_blob_declared_len(req)]
@@ -4035,6 +4035,7 @@ impl AzureBlobAdapter {
                 },
                 Self::content_type(req),
                 Self::metadata_from_headers(req),
+                uuid::Uuid::new_v4().simple().to_string(),
             )
         };
         Self::set_blob_type(&mut object, blob_type);
@@ -4530,6 +4531,301 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sqrzl-azure-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
+    }
+
+    fn spool_test_request(mut request: Request, root: &std::path::Path) -> Request {
+        let path = root.join(format!("request-{}", uuid::Uuid::new_v4()));
+        fs::write(&path, &request.body).unwrap();
+        request.spooled_body = Some(crate::server::SpooledPayload::new(
+            path,
+            request.payload_len(),
+            request.payload_md5(),
+            hex::encode(request.payload_sha256()),
+            request.payload_sha384(),
+            request.payload_crc32c(),
+            request.payload_crc64_nvme(),
+            request.payload_sha1(),
+            request.payload_crc32(),
+        ));
+        request.body = bytes::Bytes::new();
+        request
+    }
+
+    #[tokio::test]
+    async fn should_revise_buffered_azure_etags_for_same_byte_overwrites() {
+        verify_same_byte_azure_etags(false).await;
+    }
+
+    #[tokio::test]
+    async fn should_revise_streamed_azure_etags_for_same_byte_overwrites() {
+        verify_same_byte_azure_etags(true).await;
+    }
+
+    #[allow(clippy::too_many_lines)] // One revision fixture verifies current/history identity and restart.
+    async fn verify_same_byte_azure_etags(streamed: bool) {
+        let root = std::env::temp_dir().join(format!("azure-etags-{}", uuid::Uuid::new_v4()));
+        let mut storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::open(&root).unwrap());
+        storage.create_bucket("revisions".to_string()).unwrap();
+        storage.enable_versioning("revisions").unwrap();
+        storage
+            .update_bucket_metadata(
+                "revisions",
+                HashMap::from([(AZURE_VERSIONING_KEY.to_string(), "true".to_string())]),
+            )
+            .unwrap();
+        let adapter = AzureBlobAdapter::new();
+        let uri = "/devstoreaccount1/revisions/item";
+        let body = b"same bytes";
+        let md5 = BASE64.encode(md5::compute(body).0);
+        let mut etags: Vec<String> = Vec::new();
+        let mut versions = Vec::new();
+        for _ in 0..2 {
+            let mut headers = vec![
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-blob-type", "BlockBlob"),
+                ("content-md5", md5.as_str()),
+            ];
+            if let Some(etag) = etags.last() {
+                headers.push(("if-match", etag));
+            }
+            let request = parsed_request("PUT", uri, &headers, body).await;
+            let request = if streamed {
+                spool_test_request(request, &root)
+            } else {
+                request
+            };
+            let response = adapter
+                .handle(storage.clone(), auth_disabled(), request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            assert_eq!(header_value(&response, "content-md5"), Some(md5.as_str()));
+            etags.push(header_value(&response, "etag").unwrap().to_string());
+            versions.push(
+                header_value(&response, "x-ms-version-id")
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        assert_ne!(
+            etags[0], etags[1],
+            "each successful write must revise the ETag"
+        );
+        assert_ne!(versions[0], versions[1]);
+        for method in ["GET", "HEAD", "PUT"] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        method,
+                        uri,
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                            ("if-match", &etags[0]),
+                        ],
+                        b"replacement",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::PRECONDITION_FAILED,
+                "{method}"
+            );
+            assert_eq!(
+                header_value(&response, "x-ms-error-code"),
+                Some("ConditionNotMet")
+            );
+        }
+        assert_eq!(storage.get_object("revisions", "item").unwrap().data, body);
+        assert_eq!(
+            storage
+                .list_object_versions_for_key("revisions", "item")
+                .unwrap()
+                .len(),
+            2
+        );
+        storage = Arc::new(FilesystemStorage::open(&root).unwrap());
+        for (suffix, etag) in [
+            (String::new(), &etags[1]),
+            (format!("?versionid={}", versions[0]), &etags[0]),
+        ] {
+            let response = AzureBlobAdapter::new()
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "GET",
+                        &format!("{uri}{suffix}"),
+                        &[("x-ms-version", AZURE_VERSION), ("if-match", etag)],
+                        b"",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(header_value(&response, "etag"), Some(etag.as_str()));
+            assert_eq!(read_test_body(response).await, body);
+        }
+        let metadata = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=metadata"),
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("if-match", &etags[1]),
+                        ("x-ms-meta-note", "same payload"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(metadata.status(), StatusCode::OK);
+        assert_ne!(header_value(&metadata, "etag"), Some(etags[1].as_str()));
+        assert_eq!(storage.get_object("revisions", "item").unwrap().data, body);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_revise_azure_page_etags_for_noop_writes() {
+        let storage = temp_storage();
+        storage.create_bucket("page-revisions".to_string()).unwrap();
+        let adapter = AzureBlobAdapter::new();
+        let uri = "/devstoreaccount1/page-revisions/item";
+        let created = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    uri,
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "PageBlob"),
+                        ("x-ms-blob-content-length", "512"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let mut etag = header_value(&created, "etag").unwrap().to_string();
+        for (mode, body) in [("update", vec![0; 512]), ("clear", Vec::new())] {
+            let headers = [
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-page-write", mode),
+                ("x-ms-range", "bytes=0-511"),
+                ("if-match", etag.as_str()),
+            ];
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request("PUT", &format!("{uri}?comp=page"), &headers, &body).await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let revised = header_value(&response, "etag").unwrap().to_string();
+            assert_ne!(revised, etag, "a successful {mode} must revise the ETag");
+            let stale = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request("PUT", &format!("{uri}?comp=page"), &headers, &body).await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+            assert_eq!(
+                storage.get_object("page-revisions", "item").unwrap().data,
+                vec![0; 512]
+            );
+            etag = revised;
+        }
+    }
+
+    #[tokio::test]
+    async fn should_keep_azure_append_revision_separate_from_transactional_md5() {
+        let storage = temp_storage();
+        storage
+            .create_bucket("append-revisions".to_string())
+            .unwrap();
+        let adapter = AzureBlobAdapter::new();
+        let uri = "/devstoreaccount1/append-revisions/item";
+        let created = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    uri,
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "AppendBlob"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let etag = header_value(&created, "etag").unwrap();
+        let md5 = BASE64.encode(md5::compute(b"append").0);
+        let headers = [
+            ("x-ms-version", AZURE_VERSION),
+            ("if-match", etag),
+            ("content-md5", md5.as_str()),
+        ];
+        let request = parsed_request(
+            "PUT",
+            &format!("{uri}?comp=appendblock"),
+            &headers,
+            b"append",
+        )
+        .await;
+        let response = adapter
+            .handle(storage.clone(), auth_disabled(), request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let stored = storage.get_object("append-revisions", "item").unwrap();
+        assert_ne!(
+            stored.etag,
+            crate::models::object::compute_etag(&stored.data)
+        );
+        let stale = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=appendblock"),
+                    &headers,
+                    b"append",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            storage.get_object("append-revisions", "item").unwrap().data,
+            b"append"
+        );
     }
 
     #[tokio::test]
