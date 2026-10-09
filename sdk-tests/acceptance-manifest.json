@@ -45,6 +45,69 @@
         ]
       }
     },
+    "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads": {
+      "provider": "azure",
+      "operations": [
+        "GetBlob",
+        "GetBlobProperties",
+        "CreateSnapshot",
+        "LeaseBlob",
+        "GetBlockList",
+        "PutBlob",
+        "SetBlobMetadata",
+        "DeleteBlob"
+      ],
+      "checks": [
+        "positive",
+        "condition",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Current/snapshot/version GET/HEAD ETag/date conditions, combined cache predicates, read lease checks, tag predicates and date mutation variants explicitly rejected. No restart or broad conditional mutation claim.",
+      "operation_checks": {
+        "GetBlob": [
+          "positive",
+          "condition",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "GetBlobProperties": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "CreateSnapshot": [
+          "positive"
+        ],
+        "LeaseBlob": [
+          "positive"
+        ],
+        "GetBlockList": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "PutBlob": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "SetBlobMetadata": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "DeleteBlob": [
+          "negative",
+          "boundary",
+          "native-error"
+        ]
+      }
+    },
     "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract": {
       "provider": "azure",
       "operations": [
@@ -807,6 +870,83 @@
         ]
       }
     },
+    "sdk-tests/test_s3_sdk.py::test_s3_direct_put_native_checksums_and_rejection": {
+      "provider": "s3",
+      "operations": [
+        "PutObject",
+        "GetObject",
+        "HeadObject",
+        "PutObjectTagging"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Direct full-object CRC32/CRC32C/CRC64NVME/SHA1/SHA256/MD5 request/response checksums, default PUT CRC32, mismatch preservation and transactional tagging checksum; no multipart checksum acceptance.",
+      "operation_checks": {
+        "PutObject": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "GetObject": [
+          "positive"
+        ],
+        "HeadObject": [
+          "positive"
+        ],
+        "PutObjectTagging": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart": {
+      "provider": "s3",
+      "operations": [
+        "PutObject",
+        "GetObject",
+        "HeadObject",
+        "CopyObject",
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "positive",
+        "boundary"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected HTTP properties on PUT, GET/HEAD, COPY/REPLACE and plain multipart with request checksum opt-out; replacement resets omitted properties.",
+      "operation_checks": {
+        "PutObject": [
+          "positive",
+          "boundary"
+        ],
+        "GetObject": [
+          "positive"
+        ],
+        "HeadObject": [
+          "positive"
+        ],
+        "CopyObject": [
+          "positive",
+          "boundary"
+        ],
+        "CreateMultipartUpload": [
+          "positive"
+        ],
+        "UploadPart": [
+          "positive"
+        ],
+        "CompleteMultipartUpload": [
+          "positive"
+        ]
+      }
+    },
     "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows": {
       "provider": "s3",
       "operations": [
@@ -847,6 +987,53 @@
           "positive"
         ],
         "ListObjectVersions": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary": {
+      "provider": "s3",
+      "operations": [
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CompleteMultipartUpload",
+        "ListMultipartUploads",
+        "ListParts",
+        "AbortMultipartUpload"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Default botocore additional-checksum part and explicit initiation/completion variants are rejected before upload mutation; plain opt-out remains accepted.",
+      "operation_checks": {
+        "CreateMultipartUpload": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "UploadPart": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "CompleteMultipartUpload": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "ListMultipartUploads": [
+          "positive"
+        ],
+        "ListParts": [
+          "positive"
+        ],
+        "AbortMultipartUpload": [
           "positive"
         ]
       }
