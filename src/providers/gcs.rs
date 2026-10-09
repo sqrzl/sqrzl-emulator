@@ -3,6 +3,10 @@ use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::BlobBackend;
 use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
+use crate::storage::upload_cancellation::{
+    UploadCancellation, GCS_ACTIVE_SESSION_STATE as GCS_RESUMABLE_SESSION_STATE,
+    GCS_XML_CANCELLATION_STATE,
+};
 use crate::storage::ObjectCondition;
 use crate::storage::Storage;
 use crate::utils::request_origin;
@@ -28,7 +32,6 @@ const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
 const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
 const GCS_UPDATED_KEY: &str = "__sqrzl_gcs_updated";
 const GCS_CRC32C_KEY: &str = "__sqrzl_gcs_crc32c";
-const GCS_RESUMABLE_SESSION_STATE: &str = "gcs-resumable-session-v2";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
 const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
 const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
@@ -48,7 +51,7 @@ struct ResumableSession {
     // Older sessions did not record their origin; retain their original 204
     // cancellation contract rather than treating an XML session as JSON.
     #[serde(default)]
-    initiated_via_json: bool,
+    initiated_via_json: Option<bool>,
     content_type: String,
     metadata: HashMap<String, String>,
     #[serde(default)]
@@ -2038,12 +2041,16 @@ mod tests {
             );
             drop(storage);
             let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
-            let query =
-                parsed_request("PUT", &location, &[("content-range", "bytes */*")], b"").await;
-            let response = GcsAdapter::new()
-                .handle_request(&storage, &auth_disabled(), &query)
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_cancelled_upload_requests(
+                &storage,
+                &location,
+                if json_origin {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::NO_CONTENT
+                },
+            )
+            .await;
             assert_eq!(
                 storage.get_object("cancel", "item").unwrap().data,
                 b"original"
@@ -2100,8 +2107,250 @@ mod tests {
                 .next()
                 .is_none());
         }
+        assert_cancelled_upload_requests(&storage, &location, StatusCode::NOT_FOUND).await;
+        assert_cancelled_upload_requests(
+            &storage,
+            "http://localhost/upload/resumable/absent-session",
+            StatusCode::NOT_FOUND,
+        )
+        .await;
         drop(storage);
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_recover_xml_cancel_cleanup_given_a_durable_decision_before_cleanup() {
+        // Arrange
+        for reopen in [false, true] {
+            let base = std::env::temp_dir().join(format!(
+                "sqrzl-gcs-cancel-recovery-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            storage.create_bucket("cancel".to_string()).unwrap();
+            storage
+                .put_object(
+                    "cancel",
+                    "item".to_string(),
+                    crate::models::Object::new(
+                        "item".to_string(),
+                        b"original".to_vec(),
+                        "text/plain".to_string(),
+                    ),
+                )
+                .unwrap();
+            let location = stage_cancellable_upload(&storage, false).await;
+            let session_id = location.rsplit('/').next().unwrap();
+            let session = state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .unwrap();
+            // Persist the exact decision boundary, leaving active state and chunks
+            // present as they are when interruption precedes their retirement.
+            state::save_json(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+                &UploadCancellation {
+                    session_id: session_id.to_string(),
+                    bucket: session.bucket.clone(),
+                    bucket_created_at: storage.get_namespace("cancel").unwrap().created_at,
+                    expires_at: session.initiated_at
+                        + chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS),
+                },
+            )
+            .unwrap();
+            let provider = fs::read_dir(base.join(".provider-uploads"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            let payloads = fs::read_dir(provider.path())
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(fs::read_dir(payloads.path()).unwrap().count(), 1);
+            // Act
+            let storage = if reopen {
+                drop(storage);
+                Arc::new(FilesystemStorage::new(&base)) as Arc<dyn Storage>
+            } else {
+                let query =
+                    parsed_request("PUT", &location, &[("content-range", "bytes */*")], b"").await;
+                assert_eq!(
+                    GcsAdapter::new()
+                        .handle_request(&storage, &auth_disabled(), &query)
+                        .unwrap()
+                        .status(),
+                    StatusCode::NO_CONTENT
+                );
+                storage
+            };
+
+            // Assert
+            assert!(state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_none());
+            for provider in fs::read_dir(base.join(".provider-uploads")).unwrap() {
+                assert!(fs::read_dir(provider.unwrap().path())
+                    .unwrap()
+                    .next()
+                    .is_none());
+            }
+            assert_cancelled_upload_requests(&storage, &location, StatusCode::NO_CONTENT).await;
+            assert_eq!(
+                storage.get_object("cancel", "item").unwrap().data,
+                b"original"
+            );
+            drop(storage);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn should_expire_xml_cancellation_decisions_at_the_original_session_deadline() {
+        // Arrange
+        for reopen in [false, true] {
+            let base = std::env::temp_dir()
+                .join(format!("sqrzl-gcs-cancel-expiry-{}", uuid::Uuid::new_v4()));
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            storage.create_bucket("cancel".to_string()).unwrap();
+            let location = stage_cancellable_upload(&storage, false).await;
+            let session_id = location.rsplit('/').next().unwrap();
+            let session = state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .unwrap();
+            let request = parsed_request("DELETE", &location, &[], b"").await;
+            GcsAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            let mut decision = state::load_json::<UploadCancellation>(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                decision.expires_at,
+                session.initiated_at + chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS)
+            );
+            decision.expires_at = chrono::Utc::now() - chrono::Duration::days(1);
+            state::save_json(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+                &decision,
+            )
+            .unwrap();
+            let storage = if reopen {
+                drop(storage);
+                Arc::new(FilesystemStorage::new(&base)) as Arc<dyn Storage>
+            } else {
+                storage
+            };
+
+            // Act
+            assert_cancelled_upload_requests(&storage, &location, StatusCode::NOT_FOUND).await;
+
+            // Assert
+            assert!(state::load_json::<UploadCancellation>(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_none());
+            assert!(!storage.object_exists("cancel", "item").unwrap());
+            drop(storage);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn should_discard_cancelled_xml_identity_when_its_bucket_is_deleted_or_recreated() {
+        // Arrange
+        for (recreate, reopen) in [(false, false), (false, true), (true, false), (true, true)] {
+            let base = std::env::temp_dir()
+                .join(format!("sqrzl-gcs-cancel-bucket-{}", uuid::Uuid::new_v4()));
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            storage.create_bucket("cancel".to_string()).unwrap();
+            let location = stage_cancellable_upload(&storage, false).await;
+            let session_id = location.rsplit('/').next().unwrap();
+            let adapter = GcsAdapter::new();
+            let request = parsed_request("DELETE", &location, &[], b"").await;
+            assert_eq!(
+                adapter
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap()
+                    .status(),
+                StatusCode::NO_CONTENT
+            );
+            let request = parsed_request("DELETE", "http://localhost/cancel", &[], b"").await;
+            assert_eq!(
+                adapter
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap()
+                    .status(),
+                StatusCode::NO_CONTENT
+            );
+            if recreate {
+                storage.create_bucket("cancel".to_string()).unwrap();
+            }
+            let storage = if reopen {
+                drop(storage);
+                Arc::new(FilesystemStorage::new(&base)) as Arc<dyn Storage>
+            } else {
+                storage
+            };
+
+            // Act
+            assert_cancelled_upload_requests(&storage, &location, StatusCode::NOT_FOUND).await;
+
+            // Assert
+            assert!(state::load_json::<UploadCancellation>(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_none());
+            assert_eq!(storage.bucket_exists("cancel").unwrap(), recreate);
+            drop(storage);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    async fn assert_cancelled_upload_requests(
+        storage: &Arc<dyn Storage>,
+        location: &str,
+        expected: StatusCode,
+    ) {
+        for (range, body) in [
+            ("bytes */*", b"".as_slice()),
+            ("bytes 262144-262147/262148", b"tail".as_slice()),
+        ] {
+            let request = parsed_request("PUT", location, &[("content-range", range)], body).await;
+            let response = GcsAdapter::new()
+                .handle_request(storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::NO_CONTENT {
+                assert_eq!(read_test_body(response).await, [] as [u8; 0]);
+            }
+        }
     }
 
     async fn stage_cancellable_upload(storage: &Arc<dyn Storage>, json_origin: bool) -> String {
@@ -6533,7 +6782,7 @@ impl GcsAdapter {
         let session = ResumableSession {
             bucket: bucket.to_string(),
             key: object.to_string(),
-            initiated_via_json: false,
+            initiated_via_json: Some(false),
             content_type: req
                 .header("x-upload-content-type")
                 .or_else(|| req.header("content-type"))
@@ -7313,7 +7562,7 @@ impl GcsAdapter {
         let session = ResumableSession {
             bucket: bucket.to_string(),
             key,
-            initiated_via_json: true,
+            initiated_via_json: Some(true),
             content_type: upload_metadata.content_type.unwrap_or_else(|| {
                 req.header("x-upload-content-type")
                     .unwrap_or("application/octet-stream")
@@ -7352,6 +7601,11 @@ impl GcsAdapter {
         req: &Request,
         session_id: &str,
     ) -> Result<Response<Body>, String> {
+        if matches!(*req.method(), Method::PUT | Method::DELETE)
+            && self.finish_cancelled_xml_upload(storage, session_id)?
+        {
+            return Ok(Self::response(StatusCode::NO_CONTENT).empty());
+        }
         if req.method() == Method::DELETE {
             let Some(session) = self.load_resumable_session(storage, session_id)? else {
                 return Ok(Self::json_upload_error(
@@ -7360,8 +7614,26 @@ impl GcsAdapter {
                     "The resumable upload session does not exist.",
                 ));
             };
+            if session.initiated_via_json == Some(false) {
+                let bucket = storage
+                    .get_namespace(&session.bucket)
+                    .map_err(|error| error.to_string())?;
+                let decision = UploadCancellation {
+                    session_id: session_id.to_string(),
+                    bucket: session.bucket.clone(),
+                    bucket_created_at: bucket.created_at,
+                    expires_at: session.initiated_at
+                        + chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS),
+                };
+                state::save_json(
+                    storage.as_ref(),
+                    GCS_XML_CANCELLATION_STATE,
+                    session_id,
+                    &decision,
+                )?;
+            }
             self.remove_resumable_session(storage, session_id)?;
-            let status = if session.initiated_via_json {
+            let status = if session.initiated_via_json == Some(true) {
                 StatusCode::from_u16(499).expect("499 is a valid GCS cancellation status")
             } else {
                 StatusCode::NO_CONTENT
@@ -7598,6 +7870,39 @@ impl GcsAdapter {
             return Ok(None);
         }
         Ok(session)
+    }
+
+    fn finish_cancelled_xml_upload(
+        &self,
+        storage: &Arc<dyn Storage>,
+        session_id: &str,
+    ) -> Result<bool, String> {
+        let Some(decision) = state::load_json::<UploadCancellation>(
+            storage.as_ref(),
+            GCS_XML_CANCELLATION_STATE,
+            session_id,
+        )?
+        else {
+            return Ok(false);
+        };
+        if decision.session_id != session_id {
+            return Err("Cancelled upload identity does not match its session".to_string());
+        }
+        // The decision takes precedence even if interruption left active state.
+        self.remove_resumable_session(storage, session_id)?;
+        let current_bucket = match storage.get_namespace(&decision.bucket) {
+            Ok(bucket) => Some(bucket),
+            Err(crate::error::Error::BucketNotFound) => None,
+            Err(error) => return Err(error.to_string()),
+        };
+        let active = decision.expires_at > chrono::Utc::now()
+            && current_bucket.is_some_and(|bucket| bucket.created_at == decision.bucket_created_at);
+        if !active {
+            storage
+                .delete_provider_state(GCS_XML_CANCELLATION_STATE, session_id)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(active)
     }
 
     fn remove_resumable_session(

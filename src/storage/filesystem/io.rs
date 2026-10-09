@@ -1,7 +1,10 @@
 use super::{BucketIdentity, FilesystemStorage};
 use crate::error::{Error, Result};
 use crate::models::{MultipartUpload, Object};
-use crate::storage::LockFreeIndex;
+use crate::storage::upload_cancellation::{
+    UploadCancellation, GCS_ACTIVE_SESSION_STATE, GCS_XML_CANCELLATION_STATE,
+};
+use crate::storage::{BucketStore, LockFreeIndex, ProviderStateStore, UploadStore};
 use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -136,7 +139,7 @@ impl FilesystemStorage {
             }
         }
 
-        Ok(Self {
+        let storage = Self {
             base_path,
             index,
             uploads_cache: Mutex::new(HashMap::new()),
@@ -144,7 +147,56 @@ impl FilesystemStorage {
             bucket_locks: Mutex::new(HashMap::new()),
             #[cfg(test)]
             test_hook: Mutex::new(None),
-        })
+        };
+        storage.recover_gcs_cancellations()?;
+        Ok(storage)
+    }
+
+    fn recover_gcs_cancellations(&self) -> Result<()> {
+        let directory = self
+            .base_path
+            .join(".provider-state")
+            .join(GCS_XML_CANCELLATION_STATE);
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::InternalError(error.to_string())),
+        };
+        for entry in entries {
+            let path = entry
+                .map_err(|error| Error::InternalError(error.to_string()))?
+                .path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let decision: UploadCancellation = serde_json::from_slice(
+                &fs::read(&path).map_err(|error| Error::InternalError(error.to_string()))?,
+            )
+            .map_err(|error| {
+                Error::InternalError(format!("Invalid upload cancellation decision: {error}"))
+            })?;
+            if path != self.provider_state_path(GCS_XML_CANCELLATION_STATE, &decision.session_id) {
+                return Err(Error::InternalError(
+                    "Upload cancellation decision has an invalid session identity".to_string(),
+                ));
+            }
+            // A durable decision must retire active payloads before any reader
+            // can observe the reopened store, even while its tombstone is live.
+            self.delete_provider_state(GCS_ACTIVE_SESSION_STATE, &decision.session_id)?;
+            self.delete_upload_session("gcs", &decision.session_id)?;
+            let current_bucket = match self.get_bucket(&decision.bucket) {
+                Ok(bucket) => Some(bucket),
+                Err(Error::BucketNotFound) => None,
+                Err(error) => return Err(error),
+            };
+            if decision.expires_at <= chrono::Utc::now()
+                || current_bucket
+                    .is_none_or(|bucket| bucket.created_at != decision.bucket_created_at)
+            {
+                self.delete_provider_state(GCS_XML_CANCELLATION_STATE, &decision.session_id)?;
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn object_lock(&self, bucket: &str, key: &str) -> Result<Arc<Mutex<()>>> {
