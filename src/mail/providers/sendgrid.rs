@@ -369,14 +369,22 @@ fn parse_attachments(values: &[Value]) -> Result<Vec<Attachment>, String> {
             .filter(|value| !value.is_empty())
             .map(std::string::ToString::to_string)
             .ok_or_else(|| "sendgrid attachment must include filename".to_string())?;
-        let content_type = value
-            .get("type")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map_or_else(
-                || "application/octet-stream".to_string(),
-                std::string::ToString::to_string,
+        if name.contains([';', ',', '\r', '\n']) {
+            return Err(
+                "sendgrid attachment filename cannot contain separators or CRLF".to_string(),
             );
+        }
+        let content_type =
+            match value.get("type") {
+                None => "application/octet-stream".to_string(),
+                Some(Value::String(content_type)) if valid_attachment_type(content_type) => {
+                    content_type.clone()
+                }
+                Some(_) => return Err(
+                    "sendgrid attachment type must be a valid MIME type without separators or CRLF"
+                        .to_string(),
+                ),
+            };
         let content = value
             .get("content")
             .and_then(Value::as_str)
@@ -402,7 +410,11 @@ fn parse_attachments(values: &[Value]) -> Result<Vec<Attachment>, String> {
             },
             content_id: match value.get("content_id") {
                 None => None,
-                Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+                Some(Value::String(value))
+                    if !value.is_empty() && !value.contains([';', '\r', '\n']) =>
+                {
+                    Some(value.clone())
+                }
                 Some(_) => {
                     return Err(
                         "sendgrid attachment content_id must be a non-empty string".to_string()
@@ -412,6 +424,18 @@ fn parse_attachments(values: &[Value]) -> Result<Vec<Attachment>, String> {
         });
     }
     Ok(attachments)
+}
+
+fn valid_attachment_type(value: &str) -> bool {
+    fn token(value: &str) -> bool {
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+    }
+    value
+        .split_once('/')
+        .is_some_and(|(kind, subtype)| token(kind) && token(subtype))
 }
 
 fn parse_headers(value: Option<&Value>) -> Result<HashMap<String, String>, String> {

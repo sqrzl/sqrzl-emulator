@@ -12,7 +12,7 @@ use crate::mail::model::{Address, Message, SourceProtocol};
 use crate::mail::{fan_out, MailStore};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 pub struct SmtpServer {
@@ -92,17 +92,24 @@ where
     let mut greeted = false;
 
     while let Some(line) = next_line(&mut reader).await? {
+        let line = match line {
+            CommandLine::Valid(line) => line,
+            CommandLine::Invalid(message) => {
+                write_line(&mut writer, message).await?;
+                continue;
+            }
+        };
         let Some((command, rest)) = split_command(&line) else {
             write_line(&mut writer, "500 Command not recognized").await?;
             continue;
         };
 
+        if let Some(error) = command_argument_error(&command, rest, line.contains(' ')) {
+            write_line(&mut writer, error).await?;
+            continue;
+        }
         match command.as_str() {
             "EHLO" | "HELO" => {
-                if rest.is_empty() {
-                    write_line(&mut writer, "501 Domain/address required").await?;
-                    continue;
-                }
                 greeted = true;
                 transaction = Transaction::default();
                 write_line(&mut writer, "250 sqrzl-emulator").await?;
@@ -117,6 +124,9 @@ where
                         transaction.from = Some(address);
                         write_line(&mut writer, "250 OK").await?;
                     }
+                    None if unsupported_envelope_parameters(rest) => {
+                        write_line(&mut writer, "555 MAIL FROM parameters not supported").await?;
+                    }
                     None => write_line(&mut writer, "501 Syntax error in MAIL FROM").await?,
                 }
             }
@@ -127,6 +137,9 @@ where
                 Some(address) => {
                     transaction.recipients.push(address);
                     write_line(&mut writer, "250 OK").await?;
+                }
+                None if unsupported_envelope_parameters(rest) => {
+                    write_line(&mut writer, "555 RCPT TO parameters not supported").await?;
                 }
                 None => write_line(&mut writer, "501 Syntax error in RCPT TO").await?,
             },
@@ -169,31 +182,69 @@ where
     Ok(())
 }
 
-async fn next_line<R>(reader: &mut BufReader<R>) -> Result<Option<String>>
+enum CommandLine {
+    Valid(String),
+    Invalid(&'static str),
+}
+
+/// Drain one command without retaining more than the RFC 5321 512-octet limit.
+async fn next_line<R>(reader: &mut BufReader<R>) -> Result<Option<CommandLine>>
 where
     R: AsyncRead + Unpin,
 {
-    let mut line = String::new();
-    let read = reader
-        .read_line(&mut line)
-        .await
-        .map_err(|e| Error::InternalError(e.to_string()))?;
-    if read == 0 {
-        return Ok(None);
+    let mut line = Vec::with_capacity(512);
+    let mut too_long = false;
+    loop {
+        let byte = match reader.read_u8().await {
+            Ok(byte) => byte,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(error) => return Err(Error::InternalError(error.to_string())),
+        };
+        if line.len() < 512 {
+            line.push(byte);
+        } else {
+            too_long = true;
+        }
+        if byte == b'\n' {
+            break;
+        }
     }
-    while line.ends_with(['\r', '\n']) {
-        line.pop();
+    if too_long {
+        return Ok(Some(CommandLine::Invalid("500 Command line too long")));
     }
-    Ok(Some(line))
+    if !line.ends_with(b"\r\n") {
+        return Ok(Some(CommandLine::Invalid("501 Command must end with CRLF")));
+    }
+    line.truncate(line.len() - 2);
+    Ok(Some(match String::from_utf8(line) {
+        Ok(line) => CommandLine::Valid(line),
+        Err(_) => CommandLine::Invalid("500 Command is not valid UTF-8"),
+    }))
 }
 
 fn split_command(line: &str) -> Option<(String, &str)> {
-    let line = line.trim();
-    if line.is_empty() {
+    if line.is_empty() || line.starts_with(' ') || line.chars().any(char::is_control) {
         return None;
     }
     let (command, rest) = line.split_once(' ').unwrap_or((line, ""));
     Some((command.to_ascii_uppercase(), rest.trim()))
+}
+
+fn command_argument_error(command: &str, rest: &str, has_parameters: bool) -> Option<&'static str> {
+    if matches!(command, "EHLO" | "HELO")
+        && (rest.is_empty() || rest.chars().any(char::is_whitespace))
+    {
+        Some("501 Domain/address required")
+    } else if matches!(command, "DATA" | "RSET" | "QUIT") && has_parameters {
+        Some("501 Command does not accept arguments")
+    } else {
+        None
+    }
+}
+
+fn unsupported_envelope_parameters(rest: &str) -> bool {
+    rest.split_once('>')
+        .is_some_and(|(_, parameters)| parameters.starts_with(' ') && !parameters.trim().is_empty())
 }
 
 /// Parses `FROM:<addr>` / `TO:<addr>` envelope arguments, case-insensitively on
@@ -211,12 +262,9 @@ fn parse_address(rest: &str, prefix: &str, allow_null: bool) -> Option<Address> 
     let close = path.find('>')?;
     let email = path[..close].trim();
     let parameters = &path[close + 1..];
-    if !parameters.is_empty()
-        && !parameters
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_whitespace)
-    {
+    // No ESMTP extensions are advertised; accepting an extension parameter
+    // would silently discard a requested delivery semantic.
+    if !parameters.trim().is_empty() {
         return None;
     }
     if allow_null && email.is_empty() {
@@ -225,7 +273,7 @@ fn parse_address(rest: &str, prefix: &str, allow_null: bool) -> Option<Address> 
         // the outer Option still distinguishes it from MAIL not being issued.
         return Some(Address::new(""));
     }
-    if email.is_empty() || email.contains(['<', '>', '\r', '\n']) {
+    if email.is_empty() || email.contains(['<', '>']) || email.chars().any(char::is_whitespace) {
         return None;
     }
     Some(Address::new(email))
@@ -603,6 +651,87 @@ mod tests {
             .is_empty());
     }
 
+    #[tokio::test]
+    async fn should_reject_data_arguments_without_resetting_the_transaction() {
+        let mail = temp_store();
+        let (client, server) = tokio::io::duplex(4096);
+        let session = tokio::spawn(handle_session(server, mail.clone(), 4096));
+        let mut client = ClientBufReader::new(client);
+        assert_reply(&mut client, "220").await;
+        for command in [
+            "EHLO localhost",
+            "MAIL FROM:<sender@example.com>",
+            "RCPT TO:<alice@example.com>",
+        ] {
+            send(&mut client, command).await;
+            assert_reply(&mut client, "250").await;
+        }
+        for command in ["DATA unexpected-argument", "DATA ", "DATA  "] {
+            send(&mut client, command).await;
+            assert_reply(&mut client, "501").await;
+        }
+        assert!(mail
+            .list_messages("alice@example.com", ListMessagesParams::default())
+            .unwrap()
+            .messages
+            .is_empty());
+        send(&mut client, "DATA").await;
+        assert_reply(&mut client, "354").await;
+        send(&mut client, "Subject: valid retry").await;
+        send(&mut client, "").await;
+        send(&mut client, "hello").await;
+        send(&mut client, ".").await;
+        assert_reply(&mut client, "250").await;
+        send(&mut client, "QUIT").await;
+        assert_reply(&mut client, "221").await;
+        session.await.unwrap().unwrap();
+        assert_eq!(
+            mail.list_messages("alice@example.com", ListMessagesParams::default())
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn should_bound_and_validate_commands_independently_of_data() {
+        let mail = temp_store();
+        let (client, server) = tokio::io::duplex(4096);
+        let session = tokio::spawn(handle_session(server, mail.clone(), 4096));
+        let mut client = ClientBufReader::new(client);
+        assert_reply(&mut client, "220").await;
+        // RFC 5321 includes CRLF in the 512-octet command limit.
+        send(&mut client, &format!("NOOP {}", "x".repeat(505))).await;
+        assert_reply(&mut client, "250").await;
+        send(&mut client, &format!("NOOP {}", "x".repeat(506))).await;
+        assert_reply(&mut client, "500").await;
+        send(&mut client, &"x".repeat(1_048_576)).await;
+        assert_reply(&mut client, "500").await;
+        client.write_all(b"EHLO localhost\n").await.unwrap();
+        assert_reply(&mut client, "501").await;
+        for command in [" EHLO localhost", "EHLO\tlocalhost", "EHLO local\rhost"] {
+            send(&mut client, command).await;
+            assert_reply(&mut client, "500").await;
+        }
+        for command in ["EHLO", "EHLO two domains", "RSET argument", "QUIT argument"] {
+            send(&mut client, command).await;
+            assert_reply(&mut client, "501").await;
+        }
+        send(&mut client, "EHLO localhost").await;
+        assert_reply(&mut client, "250").await;
+        send(&mut client, "MAIL FROM:<sender@example.com> SIZE=12").await;
+        assert_reply(&mut client, "555").await;
+        for command in ["MAIL FROM:<sender@example.com>garbage"] {
+            send(&mut client, command).await;
+            assert_reply(&mut client, "501").await;
+        }
+        send(&mut client, "QUIT").await;
+        assert_reply(&mut client, "221").await;
+        session.await.unwrap().unwrap();
+        assert!(mail.list_mailboxes().unwrap().is_empty());
+    }
+
     async fn send(client: &mut ClientBufReader<tokio::io::DuplexStream>, line: &str) {
         client
             .write_all(format!("{line}\r\n").as_bytes())
@@ -641,12 +770,7 @@ mod tests {
                 .email,
             ""
         );
-        assert_eq!(
-            parse_address("FROM:<> BODY=8BITMIME", "FROM:", true)
-                .expect("null reverse-path with ESMTP parameters should parse")
-                .email,
-            ""
-        );
+        assert!(parse_address("FROM:<> BODY=8BITMIME", "FROM:", true).is_none());
         assert!(parse_address("FROM:sender@example.com", "FROM:", true).is_none());
         assert!(parse_address("FROM:<sender@example.com>garbage", "FROM:", true).is_none());
     }

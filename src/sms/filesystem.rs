@@ -1,3 +1,4 @@
+use crate::capture::{self, RepeatabilityRecord, TRANSACTION_METADATA};
 use crate::error::{Error, Result};
 use crate::sms::model::{
     CallbackAttempt, ListSmsMessagesResult, ListSmsParams, NewSmsMessage, SmsConversation,
@@ -9,6 +10,8 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+type InlineMediaContent = Vec<(String, Vec<u8>)>;
 
 pub struct FilesystemSmsStore {
     root: PathBuf,
@@ -32,6 +35,7 @@ impl FilesystemSmsStore {
         ] {
             fs::create_dir_all(root.join(child)).map_err(io_err)?;
         }
+        capture::recover(&root)?;
         Ok(Self {
             root,
             write_lock: Mutex::new(()),
@@ -121,6 +125,9 @@ impl FilesystemSmsStore {
         };
         let mut ids = entries
             .filter_map(std::result::Result::ok)
+            .filter(|entry| {
+                entry.path().extension().and_then(std::ffi::OsStr::to_str) == Some("idx")
+            })
             .filter_map(|entry| {
                 entry
                     .path()
@@ -157,10 +164,10 @@ impl FilesystemSmsStore {
         }
         Ok(())
     }
-}
-
-impl SmsStore for FilesystemSmsStore {
-    fn store_message(&self, new: NewSmsMessage) -> Result<SmsMessage> {
+    fn prepare_message(
+        new: NewSmsMessage,
+        transaction_id: &str,
+    ) -> Result<(SmsMessage, InlineMediaContent)> {
         if new.from.trim().is_empty() || new.to.trim().is_empty() {
             return Err(Error::InvalidRequest(
                 "from and to must not be empty".to_string(),
@@ -191,7 +198,7 @@ impl SmsStore for FilesystemSmsStore {
                 external_url: item.external_url,
             });
         }
-        let message = SmsMessage {
+        let mut message = SmsMessage {
             message_id: message_id.clone(),
             batch_id: new.batch_id,
             provider: new.provider,
@@ -209,56 +216,88 @@ impl SmsStore for FilesystemSmsStore {
             updated_at: now,
         };
 
+        message.metadata.insert(
+            TRANSACTION_METADATA.to_string(),
+            serde_json::Value::String(transaction_id.to_string()),
+        );
+        Ok((message, media_content))
+    }
+
+    fn capture_messages(
+        &self,
+        messages: Vec<NewSmsMessage>,
+        records: &[RepeatabilityRecord],
+    ) -> Result<Vec<SmsMessage>> {
         let _guard = self
             .write_lock
             .lock()
             .map_err(|_| Error::InternalError("SMS store lock poisoned".to_string()))?;
-        let peer_dir = self.peer_index_dir(&peer)?;
-        fs::create_dir_all(&peer_dir).map_err(io_err)?;
-        let sidecar = self.peer_sidecar(&peer)?;
-        if sidecar.exists() {
-            let existing = fs::read_to_string(&sidecar).map_err(io_err)?;
-            if existing != peer {
-                return Err(Error::InternalError(
-                    "SMS peer storage key collision".to_string(),
-                ));
+        let id = capture::new_transaction_id();
+        let mut files = Vec::new();
+        let mut result = Vec::with_capacity(messages.len());
+        for new in messages {
+            let (message, media_content) = Self::prepare_message(new, &id)?;
+            let peer_dir = self.peer_index_dir(&message.peer)?;
+            fs::create_dir_all(&peer_dir).map_err(io_err)?;
+            let sidecar = self.peer_sidecar(&message.peer)?;
+            if sidecar.exists() {
+                if fs::read_to_string(&sidecar).map_err(io_err)? != message.peer {
+                    return Err(Error::InternalError(
+                        "SMS peer storage key collision".to_string(),
+                    ));
+                }
+            } else {
+                write_atomic(&sidecar, message.peer.as_bytes())?;
             }
-        } else {
-            write_atomic(&sidecar, peer.as_bytes())?;
+            files.push((
+                self.message_path(&message.message_id)?,
+                serde_json::to_vec(&message)
+                    .map_err(|error| Error::InternalError(error.to_string()))?,
+            ));
+            files.push((
+                peer_dir.join(format!("{}.idx", message.message_id)),
+                Vec::new(),
+            ));
+            for (media_id, content) in media_content {
+                files.push((self.media_path(&message.message_id, &media_id)?, content));
+            }
+            result.push(message);
         }
-        let message_bytes =
-            serde_json::to_vec(&message).map_err(|err| Error::InternalError(err.to_string()))?;
-        write_atomic(&self.message_path(&message_id)?, &message_bytes)?;
-        write_atomic(&peer_dir.join(format!("{message_id}.idx")), b"")?;
-        for (media_id, content) in media_content {
-            write_atomic(&self.media_path(&message_id, &media_id)?, &content)?;
+        for record in records {
+            let mut record = record.clone();
+            record.transaction_id.clone_from(&id);
+            files.push(capture::record_file(&self.root, &record)?);
         }
-        Ok(message)
+        capture::commit(&self.root, &id, &files)?;
+        Ok(result)
     }
 
-    fn get_message(&self, message_id: &str) -> Result<SmsMessage> {
-        Self::read_message_path(&self.message_path(message_id)?)
-    }
-
-    fn get_message_by_provider_id(&self, provider_message_id: &str) -> Result<SmsMessage> {
-        for entry in fs::read_dir(self.root.join("messages")).map_err(io_err)? {
-            let entry = entry.map_err(io_err)?;
-            if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
-                continue;
-            }
-            let message = Self::read_message_path(&entry.path())?;
-            if message.provider_message_id == provider_message_id {
-                return Ok(message);
-            }
-        }
-        Err(Error::MessageNotFound)
-    }
-
-    fn list_messages(&self, peer: &str, params: ListSmsParams) -> Result<ListSmsMessagesResult> {
+    fn list_messages_snapshot(
+        &self,
+        peer: &str,
+        params: &ListSmsParams,
+        committed: &std::collections::HashSet<String>,
+    ) -> Result<ListSmsMessagesResult> {
         let mut messages = self
             .message_ids_for_peer(peer)?
             .into_iter()
-            .map(|message_id| self.get_message(&message_id))
+            .filter_map(|message_id| {
+                #[cfg(test)]
+                capture::test_listing_phase();
+                let message = match Self::read_message_path(&self.message_path(&message_id).ok()?) {
+                    Ok(message) => message,
+                    // A returned-error rollback may remove the canonical file
+                    // after this reader enumerated its pending index.
+                    Err(Error::MessageNotFound) => return None,
+                    Err(error) => return Some(Err(error)),
+                };
+                let id = message
+                    .metadata
+                    .get(TRANSACTION_METADATA)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                (id.is_empty() || committed.contains(id)).then_some(Ok(message))
+            })
             .collect::<Result<Vec<_>>>()?;
         messages.sort_by(|a, b| {
             a.created_at
@@ -285,7 +324,62 @@ impl SmsStore for FilesystemSmsStore {
         })
     }
 
+    fn visible(&self, message: &SmsMessage) -> bool {
+        let id = message
+            .metadata
+            .get(TRANSACTION_METADATA)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        capture::is_committed(&self.root, id)
+    }
+}
+
+impl SmsStore for FilesystemSmsStore {
+    fn capture_batch(
+        &self,
+        messages: Vec<NewSmsMessage>,
+        records: &[RepeatabilityRecord],
+    ) -> Result<Option<Vec<SmsMessage>>> {
+        self.capture_messages(messages, records).map(Some)
+    }
+
+    fn get_repeatability_record(&self, key: &str) -> Result<Option<RepeatabilityRecord>> {
+        capture::load_record(&self.root, key)
+    }
+
+    fn store_message(&self, new: NewSmsMessage) -> Result<SmsMessage> {
+        Ok(self.capture_messages(vec![new], &[])?.remove(0))
+    }
+
+    fn get_message(&self, message_id: &str) -> Result<SmsMessage> {
+        let message = Self::read_message_path(&self.message_path(message_id)?)?;
+        if self.visible(&message) {
+            Ok(message)
+        } else {
+            Err(Error::MessageNotFound)
+        }
+    }
+
+    fn get_message_by_provider_id(&self, provider_message_id: &str) -> Result<SmsMessage> {
+        for entry in fs::read_dir(self.root.join("messages")).map_err(io_err)? {
+            let entry = entry.map_err(io_err)?;
+            if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+                continue;
+            }
+            let message = Self::read_message_path(&entry.path())?;
+            if message.provider_message_id == provider_message_id && self.visible(&message) {
+                return Ok(message);
+            }
+        }
+        Err(Error::MessageNotFound)
+    }
+
+    fn list_messages(&self, peer: &str, params: ListSmsParams) -> Result<ListSmsMessagesResult> {
+        self.list_messages_snapshot(peer, &params, &capture::committed_snapshot(&self.root)?)
+    }
+
     fn list_conversations(&self) -> Result<Vec<SmsConversation>> {
+        let committed = capture::committed_snapshot(&self.root)?;
         let mut conversations = Vec::new();
         for entry in fs::read_dir(self.root.join("conversations")).map_err(io_err)? {
             let entry = entry.map_err(io_err)?;
@@ -294,7 +388,7 @@ impl SmsStore for FilesystemSmsStore {
             }
             let peer = fs::read_to_string(entry.path()).map_err(io_err)?;
             let messages = self
-                .list_messages(&peer, ListSmsParams::default())?
+                .list_messages_snapshot(&peer, &ListSmsParams::default(), &committed)?
                 .messages;
             let Some(last) = messages.last() else {
                 continue;

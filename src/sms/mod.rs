@@ -13,6 +13,28 @@ pub use model::{
 use crate::error::Result;
 
 pub trait SmsStore: Send + Sync {
+    /// Optional atomic message/repeatability batch publication.
+    ///
+    /// # Errors
+    /// Returns an error when validation or durable publication fails.
+    fn capture_batch(
+        &self,
+        _messages: Vec<NewSmsMessage>,
+        _records: &[crate::capture::RepeatabilityRecord],
+    ) -> Result<Option<Vec<SmsMessage>>> {
+        Ok(None)
+    }
+    /// Reads an immutable provider-scoped repeatability result.
+    ///
+    /// # Errors
+    /// Returns an error when a record cannot be read.
+    fn get_repeatability_record(
+        &self,
+        _key: &str,
+    ) -> Result<Option<crate::capture::RepeatabilityRecord>> {
+        Ok(None)
+    }
+
     /// Stores a canonical message and any inline media.
     ///
     /// # Errors
