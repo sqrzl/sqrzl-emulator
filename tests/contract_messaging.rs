@@ -259,6 +259,22 @@ async fn acs_poll_status(store: Arc<dyn MailStore>, operation_id: &str) -> Statu
 }
 
 #[tokio::test]
+async fn should_return_not_found_for_malformed_acs_operation_ids() {
+    // Arrange
+    let root =
+        std::env::temp_dir().join(format!("sqrzl-acs-invalid-poll-{}", uuid::Uuid::new_v4()));
+    let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+    // Act and Assert
+    for operation_id in ["unknown", "missing/path", "..", "bad..id", "missing%2Fpath"] {
+        assert_eq!(
+            acs_poll_status(store.clone(), operation_id).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn should_replay_and_poll_legacy_uppercase_acs_operations_after_restart() {
     // Arrange a pre-journal capture whose hash included the original header case.
     let root = std::env::temp_dir().join(format!("sqrzl-acs-legacy-{}", uuid::Uuid::new_v4()));

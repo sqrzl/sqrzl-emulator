@@ -309,7 +309,9 @@ impl AcsEmailAdapter {
     fn operation_exists(mail: &dyn MailStore, operation_id: &str) -> crate::error::Result<bool> {
         match mail.get_message_case_insensitive(ALL_MAILBOX, operation_id) {
             Ok(stored) => Ok(stored.message.source_protocol == SourceProtocol::Acs),
-            Err(crate::error::Error::MessageNotFound) => Ok(false),
+            Err(crate::error::Error::MessageNotFound | crate::error::Error::InvalidRequest(_)) => {
+                Ok(false)
+            }
             Err(error) => Err(error),
         }
     }
