@@ -350,10 +350,13 @@ mod tests {
     /// Only runs in the explicitly selected child process. Exit bypasses Drop,
     /// rollback and normal store cleanup at the requested filesystem boundary.
     #[test]
-    fn crash_worker() {
+    #[ignore = "subprocess worker invoked by the capture crash campaigns"]
+    fn should_exit_at_capture_crash_boundary() {
+        // Arrange
         let Ok(root) = std::env::var("SQRZL_CAPTURE_TEST_ROOT") else {
             return;
         };
+        // Act
         if std::env::var("SQRZL_CAPTURE_TEST_DOMAIN").as_deref() == Ok("mail") {
             let store = FilesystemMailStore::open(root).unwrap();
             store
@@ -380,15 +383,19 @@ mod tests {
                 )
                 .unwrap();
         }
+        // Assert
         panic!("configured crash boundary was not reached");
     }
 
     #[test]
-    fn should_publish_mail_batches_and_replay_records_together_at_every_crash_boundary() {
+    fn should_publish_complete_mail_captures_at_every_crash_boundary() {
+        // Arrange
         for (phase, index) in crash_boundaries(14) {
             let root = temp_root();
             let reader = FilesystemMailStore::open(&root).unwrap();
+            // Act
             crash_child(&root, "mail", phase, index);
+            // Assert
             let committed = matches!(phase, "commit" | "commit_marker");
             assert_mail_state(&reader, committed);
             drop(reader);
@@ -400,11 +407,14 @@ mod tests {
     }
 
     #[test]
-    fn should_publish_sms_indexes_media_and_replay_records_together_at_every_crash_boundary() {
+    fn should_publish_complete_sms_captures_at_every_crash_boundary() {
+        // Arrange
         for (phase, index) in crash_boundaries(8) {
             let root = temp_root();
             let reader = FilesystemSmsStore::open(&root).unwrap();
+            // Act
             crash_child(&root, "sms", phase, index);
+            // Assert
             let committed = matches!(phase, "commit" | "commit_marker");
             assert_sms_state(&reader, committed);
             drop(reader);
@@ -498,7 +508,11 @@ mod tests {
 
     fn crash_child(root: &Path, domain: &str, phase: &str, index: usize) {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "capture::tests::crash_worker"])
+            .args([
+                "--exact",
+                "capture::tests::should_exit_at_capture_crash_boundary",
+                "--ignored",
+            ])
             .env("SQRZL_CAPTURE_TEST_ROOT", root)
             .env("SQRZL_CAPTURE_TEST_DOMAIN", domain)
             .env("SQRZL_CAPTURE_TEST_PHASE", phase)
@@ -594,6 +608,7 @@ mod tests {
 
     #[test]
     fn should_roll_back_every_file_when_persistence_returns_an_error() {
+        // Arrange
         let root = temp_root();
         fs::create_dir_all(&root).unwrap();
         for phase in ["intent", "stage", "publish", "file"] {
@@ -602,6 +617,7 @@ mod tests {
                 (root.join("first.json"), b"first".to_vec()),
                 (root.join("second.json"), b"second".to_vec()),
             ];
+            // Act
             let result = commit_with_hook(&root, &id, &files, |step, index| {
                 if step == phase && index == 0 {
                     Err(Error::InternalError(
@@ -611,6 +627,7 @@ mod tests {
                     Ok(())
                 }
             });
+            // Assert
             assert!(result.is_err());
             assert!(!root.join("first.json").exists());
             assert!(!root.join("second.json").exists());
