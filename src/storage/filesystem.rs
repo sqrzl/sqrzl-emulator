@@ -1755,6 +1755,8 @@ impl FilesystemStorage {
         }
         Self::validate_version_id(version_id)?;
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
+        Self::recover_publication(&self.version_dir(bucket, &object_id, version_id))?;
         let version_path = self.version_data_path(bucket, &object_id, version_id);
         let (mut object, path) = if version_path.exists() {
             (

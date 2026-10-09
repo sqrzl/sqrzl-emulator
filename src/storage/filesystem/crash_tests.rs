@@ -517,6 +517,49 @@ fn should_reject_invalid_committed_journal_before_mutating_public_files() {
 }
 
 #[test]
+fn should_fail_closed_on_pending_publications_before_selected_version_reads() {
+    let root = std::env::temp_dir().join(format!("sqrzl-version-recovery-{}", Uuid::new_v4()));
+    let storage = FilesystemStorage::open(&root).unwrap();
+    storage.create_bucket(BUCKET.to_string()).unwrap();
+    storage.enable_versioning(BUCKET).unwrap();
+    storage
+        .put_object(BUCKET, "item".to_string(), generation(OLD, "old"))
+        .unwrap();
+    let version = storage
+        .get_object_metadata(BUCKET, "item")
+        .unwrap()
+        .version_id
+        .unwrap();
+    storage
+        .put_object(BUCKET, "item".to_string(), generation(NEW, "new"))
+        .unwrap();
+    let object_id = FilesystemStorage::compute_object_id(BUCKET, "item");
+    for directory in [
+        storage.object_id_dir(BUCKET, &object_id),
+        storage.version_dir(BUCKET, &object_id, &version),
+    ] {
+        let journal = directory.join(".publication.json");
+        fs::write(&journal, br#"{"stage":"../escape","publish":true,"clear_current":false,"remove_versions":[],"marker":null}"#).unwrap();
+        assert!(storage
+            .get_object_version_metadata(BUCKET, "item", &version)
+            .is_err());
+        assert!(storage
+            .get_object_version_range(BUCKET, "item", &version, 0, Some(2))
+            .is_err());
+        fs::remove_file(journal).unwrap();
+    }
+    assert_eq!(
+        storage
+            .get_object_version_range(BUCKET, "item", &version, 0, Some(2))
+            .unwrap()
+            .1,
+        b"old"
+    );
+    drop(storage);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn should_copy_payload_through_a_private_synced_path_without_changing_source() {
     // Arrange
     let root = std::env::temp_dir().join(format!("sqrzl-object-copy-{}", Uuid::new_v4()));
