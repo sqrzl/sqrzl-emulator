@@ -1962,6 +1962,60 @@ mod tests {
         Arc::new(FilesystemStorage::new(dir))
     }
 
+    #[tokio::test]
+    async fn should_preserve_gcs_bucket_creation_time_in_get_list_and_restart() {
+        let base =
+            std::env::temp_dir().join(format!("sqrzl-gcs-identity-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let create = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[],
+            br#"{"name":"stable-gcs-time"}"#,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &create)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = parse_json_body(response).await;
+        let created = body["timeCreated"].clone();
+        let updated = body["updated"].clone();
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        for _ in 0..2 {
+            let get = parsed_request(
+                "GET",
+                "http://localhost/storage/v1/b/stable-gcs-time",
+                &[],
+                b"",
+            )
+            .await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &get)
+                .unwrap();
+            let body = parse_json_body(response).await;
+            assert_eq!(body["timeCreated"], created);
+            assert_eq!(body["updated"], updated);
+        }
+        let list = parsed_request(
+            "GET",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[],
+            b"",
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &list)
+            .unwrap();
+        assert_eq!(
+            parse_json_body(response).await["items"][0]["timeCreated"],
+            created
+        );
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
+    }
+
     fn auth_disabled() -> Arc<AuthConfig> {
         Arc::new(Config {
             access_key_id: None,
@@ -8140,6 +8194,7 @@ impl GcsAdapter {
                 "kind": "storage#bucket",
                 "name": namespace.name,
                 "timeCreated": namespace.created_at.to_rfc3339(),
+                "updated": namespace.modified_at.to_rfc3339(),
                 "softDeletePolicy": soft_delete,
                 "retentionPolicy": retention,
             })

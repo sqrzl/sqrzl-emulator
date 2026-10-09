@@ -1012,6 +1012,9 @@ mod tests {
             created_at: chrono::DateTime::parse_from_rfc3339(created_at)
                 .expect("timestamp should parse")
                 .with_timezone(&chrono::Utc),
+            modified_at: chrono::DateTime::parse_from_rfc3339(created_at)
+                .expect("timestamp should parse")
+                .with_timezone(&chrono::Utc),
             versioning_enabled: false,
             policy: None,
             lifecycle_rules: Vec::new(),

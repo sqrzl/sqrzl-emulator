@@ -424,9 +424,10 @@ impl AzureBlobAdapter {
     }
 
     fn namespace_etag(namespace: &crate::blob::Namespace) -> String {
+        let identity = format!("{}:{}", namespace.name, namespace.modified_at.to_rfc3339());
         format!(
             "\"{}\"",
-            crate::utils::headers::compute_etag(namespace.name.as_bytes())
+            crate::utils::headers::compute_etag(identity.as_bytes())
         )
     }
 
@@ -438,7 +439,7 @@ impl AzureBlobAdapter {
             .header("etag", &Self::namespace_etag(namespace))
             .header(
                 "last-modified",
-                &crate::utils::headers::format_last_modified_at(&namespace.created_at),
+                &crate::utils::headers::format_last_modified_at(&namespace.modified_at),
             )
     }
 
@@ -590,13 +591,11 @@ impl AzureBlobAdapter {
             push_escaped_xml(&mut xml, &namespace.name);
             xml.push_str("</Name><Properties><Last-Modified>");
             xml.push_str(&crate::utils::headers::format_last_modified_at(
-                &namespace.created_at,
+                &namespace.modified_at,
             ));
-            xml.push_str("</Last-Modified><Etag>\"");
-            xml.push_str(&crate::utils::headers::compute_etag(
-                namespace.name.as_bytes(),
-            ));
-            xml.push_str("\"</Etag></Properties></Container>");
+            xml.push_str("</Last-Modified><Etag>");
+            xml.push_str(&Self::namespace_etag(namespace));
+            xml.push_str("</Etag></Properties></Container>");
         }
 
         xml.push_str("</Containers><NextMarker>");
@@ -4313,6 +4312,54 @@ mod tests {
     use http_body_util::BodyExt;
     use hyper::Request as HyperRequest;
     use std::fs;
+
+    #[tokio::test]
+    async fn should_use_container_modification_identity_for_properties_and_listing() {
+        let created = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let modified = chrono::DateTime::parse_from_rfc3339("2021-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let namespace = crate::blob::Namespace {
+            name: "container-identity".to_string(),
+            created_at: created,
+            modified_at: modified,
+            metadata: HashMap::new(),
+        };
+        let response = AzureBlobAdapter::namespace_response(StatusCode::OK, &namespace).empty();
+        let etag = response.headers().get("etag").unwrap().to_str().unwrap();
+        let expected_date = crate::utils::headers::format_last_modified_at(&modified);
+        assert_eq!(
+            response
+                .headers()
+                .get("last-modified")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            expected_date
+        );
+        let request = parsed_request(
+            "GET",
+            "http://localhost/devstoreaccount1?comp=list",
+            &[],
+            b"",
+        )
+        .await;
+        let listing = AzureBlobAdapter::list_containers_xml(
+            &request,
+            "devstoreaccount1",
+            std::slice::from_ref(&namespace),
+            None,
+        );
+        assert!(listing.contains(&format!("<Last-Modified>{expected_date}</Last-Modified>")));
+        assert!(listing.contains(&format!("<Etag>{etag}</Etag>")));
+        let changed = crate::blob::Namespace {
+            modified_at: modified + chrono::Duration::seconds(1),
+            ..namespace
+        };
+        assert_ne!(AzureBlobAdapter::namespace_etag(&changed), etag);
+    }
 
     fn temp_storage() -> Arc<dyn Storage> {
         let dir = std::env::temp_dir().join(format!("sqrzl-azure-test-{}", uuid::Uuid::new_v4()));

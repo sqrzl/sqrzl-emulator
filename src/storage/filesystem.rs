@@ -44,12 +44,23 @@ pub struct FilesystemStorage {
     index: Arc<LockFreeIndex>,
     uploads_cache: Mutex<HashMap<String, HashMap<String, MultipartUpload>>>,
     object_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    bucket_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     #[cfg(test)]
     test_hook: Mutex<Option<TestHook>>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BucketIdentity {
+    created_at: chrono::DateTime<chrono::Utc>,
+    modified_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl BucketStore for FilesystemStorage {
     fn create_bucket(&self, name: String) -> Result<()> {
+        let lock = self.bucket_lock(&name)?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock bucket for creation".to_string()))?;
         let bucket_dir = self.bucket_dir(&name);
 
         if bucket_dir.exists() {
@@ -60,6 +71,21 @@ impl BucketStore for FilesystemStorage {
             .map_err(|e| Error::InternalError(format!("Failed to create bucket: {e}")))?;
         fs::write(bucket_dir.join(".bucket.name"), name.as_bytes())
             .map_err(|e| Error::InternalError(format!("Failed to persist bucket identity: {e}")))?;
+        let now = chrono::Utc::now();
+        if let Err(error) = self.write_bucket_identity(
+            &name,
+            &BucketIdentity {
+                created_at: now,
+                modified_at: now,
+            },
+        ) {
+            fs::remove_dir_all(&bucket_dir).map_err(|rollback| {
+                Error::InternalError(format!(
+                    "{error}; failed to roll back bucket creation: {rollback}"
+                ))
+            })?;
+            return Err(error);
+        }
 
         // Update index
         self.index.get_or_create_bucket(name);
@@ -68,6 +94,10 @@ impl BucketStore for FilesystemStorage {
     }
 
     fn delete_bucket(&self, name: &str) -> Result<()> {
+        let lock = self.bucket_lock(name)?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock bucket for deletion".to_string()))?;
         let bucket_dir = self.bucket_dir(name);
 
         if !bucket_dir.exists() {
@@ -96,16 +126,11 @@ impl BucketStore for FilesystemStorage {
     }
 
     fn get_bucket(&self, name: &str) -> Result<Bucket> {
-        let bucket_dir = self.bucket_dir(name);
-
-        if !bucket_dir.exists() {
-            return Err(Error::BucketNotFound);
-        }
-
-        let mut bucket = Bucket::new(name.to_string());
-        bucket.versioning_enabled = self.versioning_enabled(name);
-        bucket.metadata = self.read_bucket_metadata(name)?;
-        Ok(bucket)
+        let lock = self.bucket_lock(name)?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| Error::InternalError("Failed to lock bucket for reading".to_string()))?;
+        self.get_bucket_locked(name)
     }
 
     fn list_buckets(&self) -> Result<Vec<Bucket>> {
@@ -123,10 +148,7 @@ impl BucketStore for FilesystemStorage {
 
             if metadata.is_dir() {
                 if let Ok(bucket_name) = fs::read_to_string(entry.path().join(".bucket.name")) {
-                    let mut bucket = Bucket::new(bucket_name.clone());
-                    bucket.versioning_enabled = self.versioning_enabled(&bucket_name);
-                    bucket.metadata = self.read_bucket_metadata(&bucket_name)?;
-                    buckets.push(bucket);
+                    buckets.push(self.get_bucket(&bucket_name)?);
                 }
             }
         }
@@ -144,19 +166,45 @@ impl BucketStore for FilesystemStorage {
         bucket: &str,
         metadata: HashMap<String, String>,
     ) -> Result<Bucket> {
+        let lock = self.bucket_lock(bucket)?;
+        let _guard = lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock bucket for metadata update".to_string())
+        })?;
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
         }
 
-        self.write_bucket_metadata(bucket, &metadata)?;
-
-        let mut bucket_record = self.get_bucket(bucket)?;
-        bucket_record.metadata = metadata;
-        Ok(bucket_record)
+        let mut record = self.get_bucket_locked(bucket)?;
+        if record.metadata != metadata {
+            self.write_bucket_metadata(bucket, &metadata)?;
+            record.metadata = metadata;
+            record.modified_at = chrono::Utc::now();
+            self.write_bucket_identity(
+                bucket,
+                &BucketIdentity {
+                    created_at: record.created_at,
+                    modified_at: record.modified_at,
+                },
+            )?;
+        }
+        Ok(record)
     }
 }
 
 impl FilesystemStorage {
+    fn get_bucket_locked(&self, name: &str) -> Result<Bucket> {
+        if !self.bucket_dir(name).exists() {
+            return Err(Error::BucketNotFound);
+        }
+        let identity = self.read_bucket_identity_locked(name)?;
+        let mut bucket = Bucket::new(name.to_string());
+        bucket.created_at = identity.created_at;
+        bucket.modified_at = identity.modified_at;
+        bucket.versioning_enabled = self.versioning_enabled(name);
+        bucket.metadata = self.read_bucket_metadata(name)?;
+        Ok(bucket)
+    }
+
     #[cfg(test)]
     fn test_phase(&self, phase: TestPhase) {
         let hook = self.test_hook.lock().unwrap().clone();
@@ -741,7 +789,8 @@ impl AclStore for FilesystemStorage {
         let path = self.bucket_acl_path(bucket);
         let json = serde_json::to_vec(&acl)
             .map_err(|e| Error::InternalError(format!("Failed to serialize bucket ACL: {e}")))?;
-        Self::atomic_write(&path, &json)
+        Self::atomic_write(&path, &json)?;
+        self.touch_bucket_identity(bucket)
     }
 
     fn get_object_acl(&self, bucket: &str, key: &str) -> Result<Acl> {
@@ -812,7 +861,8 @@ impl LifecycleStore for FilesystemStorage {
         let json = serde_json::to_vec(&config).map_err(|e| {
             Error::InternalError(format!("Failed to serialize lifecycle config: {e}"))
         })?;
-        Self::atomic_write(&lifecycle_path, &json)
+        Self::atomic_write(&lifecycle_path, &json)?;
+        self.touch_bucket_identity(bucket)
     }
 
     fn delete_bucket_lifecycle(&self, bucket: &str) -> Result<()> {
@@ -826,6 +876,7 @@ impl LifecycleStore for FilesystemStorage {
             fs::remove_file(&lifecycle_path).map_err(|e| {
                 Error::InternalError(format!("Failed to delete lifecycle config: {e}"))
             })?;
+            self.touch_bucket_identity(bucket)?;
         }
         Ok(())
     }
@@ -867,7 +918,8 @@ impl PolicyStore for FilesystemStorage {
         let policy_json = serde_json::to_vec(&policy)
             .map_err(|e| Error::InternalError(format!("Failed to serialize policy: {e}")))?;
 
-        Self::atomic_write(&policy_path, &policy_json)
+        Self::atomic_write(&policy_path, &policy_json)?;
+        self.touch_bucket_identity(bucket)
     }
 
     fn delete_bucket_policy(&self, bucket: &str) -> Result<()> {
@@ -880,6 +932,7 @@ impl PolicyStore for FilesystemStorage {
         if policy_path.exists() {
             fs::remove_file(&policy_path)
                 .map_err(|e| Error::InternalError(format!("Failed to delete policy: {e}")))?;
+            self.touch_bucket_identity(bucket)?;
         }
         Ok(())
     }
@@ -1747,8 +1800,12 @@ impl VersionStore for FilesystemStorage {
 
         // Mark bucket as versioning-enabled by creating a marker file
         let versioning_marker = self.versioning_marker(bucket);
+        let changed = !fs::read(&versioning_marker).is_ok_and(|value| value == b"enabled");
         Self::atomic_write(&versioning_marker, b"enabled")?;
         self.assign_null_version_ids_to_unversioned_objects(bucket)?;
+        if changed {
+            self.touch_bucket_identity(bucket)?;
+        }
         Ok(())
     }
 
@@ -1761,8 +1818,12 @@ impl VersionStore for FilesystemStorage {
         // versioning is suspended. Suspended buckets retain non-null history and
         // replace a single null version on subsequent writes and deletes.
         let versioning_marker = self.versioning_marker(bucket);
+        let changed = !fs::read(&versioning_marker).is_ok_and(|value| value == b"suspended");
         Self::atomic_write(&versioning_marker, b"suspended")?;
         self.assign_null_version_ids_to_unversioned_objects(bucket)?;
+        if changed {
+            self.touch_bucket_identity(bucket)?;
+        }
         Ok(())
     }
 
@@ -2570,6 +2631,57 @@ mod tests {
     }
 
     #[test]
+    fn should_preserve_bucket_creation_identity_across_get_list_and_restart() {
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        storage
+            .create_bucket("stable-identity".to_string())
+            .unwrap();
+        let first = storage.get_bucket("stable-identity").unwrap().created_at;
+        assert_eq!(
+            storage.get_bucket("stable-identity").unwrap().created_at,
+            first
+        );
+        assert_eq!(storage.list_buckets().unwrap()[0].created_at, first);
+        drop(storage);
+        let storage = FilesystemStorage::new(&base);
+        assert_eq!(
+            storage.get_bucket("stable-identity").unwrap().created_at,
+            first
+        );
+        assert_eq!(storage.list_buckets().unwrap()[0].created_at, first);
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn should_migrate_legacy_bucket_identity_once_from_filesystem_creation() {
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        let bucket_dir = storage.bucket_dir("legacy-identity");
+        fs::create_dir_all(&bucket_dir).unwrap();
+        fs::write(bucket_dir.join(".bucket.name"), b"legacy-identity").unwrap();
+        let metadata = fs::metadata(bucket_dir.join(".bucket.name")).unwrap();
+        let expected: chrono::DateTime<chrono::Utc> = metadata
+            .created()
+            .or_else(|_| metadata.modified())
+            .unwrap()
+            .into();
+        let first = storage.get_bucket("legacy-identity").unwrap().created_at;
+        assert_eq!(first, expected);
+        assert!(bucket_dir.join(".bucket.identity.json").exists());
+        fs::write(bucket_dir.join(".bucket.name"), b"legacy-identity").unwrap();
+        drop(storage);
+        let storage = FilesystemStorage::new(&base);
+        assert_eq!(
+            storage.get_bucket("legacy-identity").unwrap().created_at,
+            first
+        );
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn should_persist_bucket_metadata_sidecar() {
         // Arrange
         let base = temp_path();
@@ -2596,6 +2708,59 @@ mod tests {
 
         // Assert
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn should_preserve_creation_and_update_only_modification_for_bucket_changes() {
+        let base = temp_path();
+        let storage = FilesystemStorage::new(&base);
+        storage.create_bucket("bucket-changes".to_string()).unwrap();
+        let initial = storage.get_bucket("bucket-changes").unwrap();
+        assert_eq!(initial.created_at, initial.modified_at);
+        storage
+            .put_object(
+                "bucket-changes",
+                "data".to_string(),
+                Object::new(
+                    "data".to_string(),
+                    b"data".to_vec(),
+                    "text/plain".to_string(),
+                ),
+            )
+            .unwrap();
+        let after_object = storage.get_bucket("bucket-changes").unwrap();
+        assert_eq!(after_object.modified_at, initial.modified_at);
+        let metadata = HashMap::from([("owner".to_string(), "sdk".to_string())]);
+        let updated = storage
+            .update_bucket_metadata("bucket-changes", metadata.clone())
+            .unwrap();
+        assert_eq!(updated.created_at, initial.created_at);
+        assert!(updated.modified_at > initial.modified_at);
+        assert_eq!(
+            storage
+                .update_bucket_metadata("bucket-changes", metadata)
+                .unwrap()
+                .modified_at,
+            updated.modified_at
+        );
+        assert_eq!(
+            storage.list_buckets().unwrap()[0].modified_at,
+            updated.modified_at
+        );
+        drop(storage);
+        let storage = FilesystemStorage::new(&base);
+        let reopened = storage.get_bucket("bucket-changes").unwrap();
+        assert_eq!(reopened.created_at, initial.created_at);
+        assert_eq!(reopened.modified_at, updated.modified_at);
+        let before_acl = reopened.modified_at;
+        storage
+            .put_bucket_acl("bucket-changes", Acl::default())
+            .unwrap();
+        let after_acl = storage.get_bucket("bucket-changes").unwrap();
+        assert_eq!(after_acl.created_at, initial.created_at);
+        assert!(after_acl.modified_at > before_acl);
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
