@@ -3,6 +3,10 @@ use crate::auth::{AuthConfig, HttpRequestLike};
 use crate::blob::BlobBackend;
 use crate::body::Body;
 use crate::server::{RequestExt as Request, ResponseBuilder};
+use crate::storage::upload_cancellation::{
+    UploadCancellation, GCS_ACTIVE_SESSION_STATE as GCS_RESUMABLE_SESSION_STATE,
+    GCS_XML_CANCELLATION_STATE,
+};
 use crate::storage::ObjectCondition;
 use crate::storage::Storage;
 use crate::utils::request_origin;
@@ -24,11 +28,12 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 
+mod bounded;
+
 const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
 const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
 const GCS_UPDATED_KEY: &str = "__sqrzl_gcs_updated";
 const GCS_CRC32C_KEY: &str = "__sqrzl_gcs_crc32c";
-const GCS_RESUMABLE_SESSION_STATE: &str = "gcs-resumable-session-v2";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
 const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
 const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
@@ -45,6 +50,10 @@ const GCS_RESUMABLE_SESSION_LIFETIME_DAYS: i64 = 7;
 struct ResumableSession {
     bucket: String,
     key: String,
+    // Older sessions did not record their origin; retain their original 204
+    // cancellation contract rather than treating an XML session as JSON.
+    #[serde(default)]
+    initiated_via_json: Option<bool>,
     content_type: String,
     metadata: HashMap<String, String>,
     #[serde(default)]
@@ -957,24 +966,6 @@ impl GcsAdapter {
             }
         }
         Ok(())
-    }
-
-    fn parse_range_header(value: &str, size: u64) -> Option<(usize, usize)> {
-        let range = value.strip_prefix("bytes=")?;
-        let (start, end) = range.split_once('-')?;
-        let start = start.parse::<u64>().ok()?;
-        if start >= size {
-            return None;
-        }
-        let end = if end.is_empty() {
-            size.saturating_sub(1)
-        } else {
-            end.parse::<u64>().ok()?.min(size.saturating_sub(1))
-        };
-        if end < start {
-            return None;
-        }
-        Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
     }
 
     fn metadata_from_headers(req: &Request) -> HashMap<String, String> {
@@ -1971,6 +1962,415 @@ mod tests {
             assert!(String::from_utf8(read_test_body(response).await).unwrap().contains("<Code>NotImplemented</Code>"));
             assert!(!storage.bucket_exists("xml-config").unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn should_return_native_cancel_status_given_reopened_json_and_xml_uploads() {
+        // Arrange
+        for (json_origin, expected_status) in [(true, 499), (false, 204)] {
+            let base =
+                std::env::temp_dir().join(format!("sqrzl-gcs-cancel-{}", uuid::Uuid::new_v4()));
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            storage.create_bucket("cancel".to_string()).unwrap();
+            storage
+                .put_object(
+                    "cancel",
+                    "item".to_string(),
+                    crate::models::Object::new(
+                        "item".to_string(),
+                        b"original".to_vec(),
+                        "text/plain".to_string(),
+                    ),
+                )
+                .unwrap();
+            let location = stage_cancellable_upload(&storage, json_origin).await;
+            let session_id = location.rsplit('/').next().unwrap();
+            assert!(state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_some());
+            drop(storage);
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            let adapter = GcsAdapter::new();
+            let cancel = parsed_request("DELETE", &location, &[], b"").await;
+
+            // Act
+            let response = adapter
+                .handle_request(&storage, &auth_disabled(), &cancel)
+                .unwrap();
+
+            // Assert
+            assert_eq!(response.status().as_u16(), expected_status);
+            assert_eq!(read_test_body(response).await, [] as [u8; 0]);
+            assert!(adapter.resumable_sessions.lock().unwrap().is_empty());
+            assert!(state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_none());
+            for provider in fs::read_dir(base.join(".provider-uploads")).unwrap() {
+                assert!(fs::read_dir(provider.unwrap().path())
+                    .unwrap()
+                    .next()
+                    .is_none());
+            }
+            assert_eq!(
+                storage.get_object("cancel", "item").unwrap().data,
+                b"original"
+            );
+            drop(storage);
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            assert_cancelled_upload_requests(
+                &storage,
+                &location,
+                if json_origin {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::NO_CONTENT
+                },
+            )
+            .await;
+            assert_eq!(
+                storage.get_object("cancel", "item").unwrap().data,
+                b"original"
+            );
+            drop(storage);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn should_preserve_cancel_status_given_legacy_session_without_protocol_origin() {
+        // Arrange
+        let base =
+            std::env::temp_dir().join(format!("sqrzl-gcs-legacy-cancel-{}", uuid::Uuid::new_v4()));
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        storage.create_bucket("cancel".to_string()).unwrap();
+        let location = stage_cancellable_upload(&storage, true).await;
+        let session_id = location.rsplit('/').next().unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_slice(
+            &storage
+                .get_provider_state(GCS_RESUMABLE_SESSION_STATE, session_id)
+                .unwrap(),
+        )
+        .unwrap();
+        legacy.as_object_mut().unwrap().remove("initiated_via_json");
+        state::save_json(
+            storage.as_ref(),
+            GCS_RESUMABLE_SESSION_STATE,
+            session_id,
+            &legacy,
+        )
+        .unwrap();
+        drop(storage);
+        let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        let request = parsed_request("DELETE", &location, &[], b"").await;
+
+        // Act
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(state::load_json::<ResumableSession>(
+            storage.as_ref(),
+            GCS_RESUMABLE_SESSION_STATE,
+            session_id
+        )
+        .unwrap()
+        .is_none());
+        for provider in fs::read_dir(base.join(".provider-uploads")).unwrap() {
+            assert!(fs::read_dir(provider.unwrap().path())
+                .unwrap()
+                .next()
+                .is_none());
+        }
+        assert_cancelled_upload_requests(&storage, &location, StatusCode::NOT_FOUND).await;
+        assert_cancelled_upload_requests(
+            &storage,
+            "http://localhost/upload/resumable/absent-session",
+            StatusCode::NOT_FOUND,
+        )
+        .await;
+        drop(storage);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_recover_xml_cancel_cleanup_given_a_durable_decision_before_cleanup() {
+        // Arrange
+        for reopen in [false, true] {
+            let base = std::env::temp_dir().join(format!(
+                "sqrzl-gcs-cancel-recovery-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            storage.create_bucket("cancel".to_string()).unwrap();
+            storage
+                .put_object(
+                    "cancel",
+                    "item".to_string(),
+                    crate::models::Object::new(
+                        "item".to_string(),
+                        b"original".to_vec(),
+                        "text/plain".to_string(),
+                    ),
+                )
+                .unwrap();
+            let location = stage_cancellable_upload(&storage, false).await;
+            let session_id = location.rsplit('/').next().unwrap();
+            let session = state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .unwrap();
+            // Persist the exact decision boundary, leaving active state and chunks
+            // present as they are when interruption precedes their retirement.
+            state::save_json(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+                &UploadCancellation {
+                    session_id: session_id.to_string(),
+                    bucket: session.bucket.clone(),
+                    bucket_created_at: storage.get_namespace("cancel").unwrap().created_at,
+                    expires_at: session.initiated_at
+                        + chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS),
+                },
+            )
+            .unwrap();
+            let provider = fs::read_dir(base.join(".provider-uploads"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            let payloads = fs::read_dir(provider.path())
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(fs::read_dir(payloads.path()).unwrap().count(), 1);
+            // Act
+            let storage = if reopen {
+                drop(storage);
+                Arc::new(FilesystemStorage::new(&base)) as Arc<dyn Storage>
+            } else {
+                let query =
+                    parsed_request("PUT", &location, &[("content-range", "bytes */*")], b"").await;
+                assert_eq!(
+                    GcsAdapter::new()
+                        .handle_request(&storage, &auth_disabled(), &query)
+                        .unwrap()
+                        .status(),
+                    StatusCode::NO_CONTENT
+                );
+                storage
+            };
+
+            // Assert
+            assert!(state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_none());
+            for provider in fs::read_dir(base.join(".provider-uploads")).unwrap() {
+                assert!(fs::read_dir(provider.unwrap().path())
+                    .unwrap()
+                    .next()
+                    .is_none());
+            }
+            assert_cancelled_upload_requests(&storage, &location, StatusCode::NO_CONTENT).await;
+            assert_eq!(
+                storage.get_object("cancel", "item").unwrap().data,
+                b"original"
+            );
+            drop(storage);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn should_expire_xml_cancellation_decisions_at_the_original_session_deadline() {
+        // Arrange
+        for reopen in [false, true] {
+            let base = std::env::temp_dir()
+                .join(format!("sqrzl-gcs-cancel-expiry-{}", uuid::Uuid::new_v4()));
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            storage.create_bucket("cancel".to_string()).unwrap();
+            let location = stage_cancellable_upload(&storage, false).await;
+            let session_id = location.rsplit('/').next().unwrap();
+            let session = state::load_json::<ResumableSession>(
+                storage.as_ref(),
+                GCS_RESUMABLE_SESSION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .unwrap();
+            let request = parsed_request("DELETE", &location, &[], b"").await;
+            GcsAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            let mut decision = state::load_json::<UploadCancellation>(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                decision.expires_at,
+                session.initiated_at + chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS)
+            );
+            decision.expires_at = chrono::Utc::now() - chrono::Duration::days(1);
+            state::save_json(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+                &decision,
+            )
+            .unwrap();
+            let storage = if reopen {
+                drop(storage);
+                Arc::new(FilesystemStorage::new(&base)) as Arc<dyn Storage>
+            } else {
+                storage
+            };
+
+            // Act
+            assert_cancelled_upload_requests(&storage, &location, StatusCode::NOT_FOUND).await;
+
+            // Assert
+            assert!(state::load_json::<UploadCancellation>(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_none());
+            assert!(!storage.object_exists("cancel", "item").unwrap());
+            drop(storage);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn should_discard_cancelled_xml_identity_when_its_bucket_is_deleted_or_recreated() {
+        // Arrange
+        for (recreate, reopen) in [(false, false), (false, true), (true, false), (true, true)] {
+            let base = std::env::temp_dir()
+                .join(format!("sqrzl-gcs-cancel-bucket-{}", uuid::Uuid::new_v4()));
+            let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+            storage.create_bucket("cancel".to_string()).unwrap();
+            let location = stage_cancellable_upload(&storage, false).await;
+            let session_id = location.rsplit('/').next().unwrap();
+            let adapter = GcsAdapter::new();
+            let request = parsed_request("DELETE", &location, &[], b"").await;
+            assert_eq!(
+                adapter
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap()
+                    .status(),
+                StatusCode::NO_CONTENT
+            );
+            let request = parsed_request("DELETE", "http://localhost/cancel", &[], b"").await;
+            assert_eq!(
+                adapter
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap()
+                    .status(),
+                StatusCode::NO_CONTENT
+            );
+            if recreate {
+                storage.create_bucket("cancel".to_string()).unwrap();
+            }
+            let storage = if reopen {
+                drop(storage);
+                Arc::new(FilesystemStorage::new(&base)) as Arc<dyn Storage>
+            } else {
+                storage
+            };
+
+            // Act
+            assert_cancelled_upload_requests(&storage, &location, StatusCode::NOT_FOUND).await;
+
+            // Assert
+            assert!(state::load_json::<UploadCancellation>(
+                storage.as_ref(),
+                GCS_XML_CANCELLATION_STATE,
+                session_id,
+            )
+            .unwrap()
+            .is_none());
+            assert_eq!(storage.bucket_exists("cancel").unwrap(), recreate);
+            drop(storage);
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    async fn assert_cancelled_upload_requests(
+        storage: &Arc<dyn Storage>,
+        location: &str,
+        expected: StatusCode,
+    ) {
+        for (range, body) in [
+            ("bytes */*", b"".as_slice()),
+            ("bytes 262144-262147/262148", b"tail".as_slice()),
+        ] {
+            let request = parsed_request("PUT", location, &[("content-range", range)], body).await;
+            let response = GcsAdapter::new()
+                .handle_request(storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::NO_CONTENT {
+                assert_eq!(read_test_body(response).await, [] as [u8; 0]);
+            }
+        }
+    }
+
+    async fn stage_cancellable_upload(storage: &Arc<dyn Storage>, json_origin: bool) -> String {
+        let adapter = GcsAdapter::new();
+        let uri = if json_origin {
+            "http://localhost/upload/storage/v1/b/cancel/o?uploadType=resumable&name=item"
+        } else {
+            "http://localhost/cancel/item"
+        };
+        let headers = if json_origin {
+            Vec::new()
+        } else {
+            vec![("x-goog-resumable", "start")]
+        };
+        let request = parsed_request("POST", uri, &headers, b"").await;
+        let response = adapter
+            .handle_request(storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            if json_origin { 200 } else { 201 }
+        );
+        let location = header_value(&response, "location").unwrap().to_string();
+        let chunk = vec![b'n'; 256 * 1024];
+        let request = parsed_request(
+            "PUT",
+            &location,
+            &[("content-range", "bytes 0-262143/*")],
+            &chunk,
+        )
+        .await;
+        let response = adapter
+            .handle_request(storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        location
     }
 
     fn temp_storage() -> Arc<dyn Storage> {
@@ -6366,6 +6766,7 @@ impl GcsAdapter {
         let session = ResumableSession {
             bucket: bucket.to_string(),
             key: object.to_string(),
+            initiated_via_json: Some(false),
             content_type: req
                 .header("x-upload-content-type")
                 .or_else(|| req.header("content-type"))
@@ -6541,53 +6942,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        if let Some(range_header) = req.header("range") {
-            return Self::object_range_response(storage, None, bucket, object, range_header);
-        }
-        let blob = match storage.as_ref().get_blob(bucket, object) {
-            Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound) => {
-                return Ok(Self::error_response(
-                    StatusCode::NOT_FOUND,
-                    "NoSuchKey",
-                    "The specified key does not exist.",
-                ));
-            }
-            Err(crate::error::Error::BucketNotFound) => {
-                return Ok(Self::xml_bucket_not_found(bucket));
-            }
-            Err(err) => {
-                return Ok(Self::error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "InternalError",
-                    &err.to_string(),
-                ));
-            }
-        };
-        Self::object_media_response_for_blob(req, blob)
-    }
-
-    fn object_media_response_for_blob(
-        req: &Request,
-        blob: crate::models::Object,
-    ) -> Result<Response<Body>, String> {
-        if let Some(range_header) = req.header("range") {
-            if let Some((start, end)) = Self::parse_range_header(range_header, blob.size) {
-                return Ok(Self::object_response(
-                    StatusCode::PARTIAL_CONTENT,
-                    &blob,
-                    end - start + 1,
-                    Some(format!("bytes {start}-{end}/{}", blob.size)),
-                )
-                .body(blob.data[start..=end].to_vec())
-                .build());
-            }
-            return Ok(Self::invalid_range_response());
-        }
-        let body_len = Self::response_body_len(blob.size)?;
-        Ok(Self::object_response(StatusCode::OK, &blob, body_len, None)
-            .body(blob.data)
-            .build())
+        Self::bounded_media_response(storage, req, bucket, object, false)
     }
 
     fn object_head_response(
@@ -6610,78 +6965,6 @@ impl GcsAdapter {
         };
         let body_len = Self::response_body_len(blob.size)?;
         Ok(Self::object_response(StatusCode::OK, &blob, body_len, None).empty())
-    }
-
-    fn object_range_response(
-        storage: &Arc<dyn Storage>,
-        json_request: Option<&Request>,
-        bucket: &str,
-        object: &str,
-        range_header: &str,
-    ) -> Result<Response<Body>, String> {
-        if let Some((start, end)) = crate::utils::request::parse_byte_range(range_header) {
-            let (blob, data) = match storage.get_object_range(bucket, object, start, end) {
-                Ok(payload) => payload,
-                Err(crate::error::Error::InvalidRequest(_)) => {
-                    return Self::object_range_error_response(storage, json_request, bucket, object)
-                }
-                Err(crate::error::Error::KeyNotFound) => {
-                    if json_request.is_some() {
-                        return Ok(Self::json_not_found(object));
-                    }
-                    return Ok(Self::error_response(
-                        StatusCode::NOT_FOUND,
-                        "NoSuchKey",
-                        "The specified key does not exist.",
-                    ));
-                }
-                Err(error) => return Err(error.to_string()),
-            };
-            if let Some(req) = json_request {
-                if let Err(response) = Self::check_current_generation_selector(req, &blob) {
-                    return Ok(*response);
-                }
-                if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
-                    return Ok(response);
-                }
-            }
-            let end = start + data.len() as u64 - 1;
-            return Ok(Self::object_response(
-                StatusCode::PARTIAL_CONTENT,
-                &blob,
-                data.len(),
-                Some(format!("bytes {start}-{end}/{}", blob.size)),
-            )
-            .body(data)
-            .build());
-        }
-        Self::object_range_error_response(storage, json_request, bucket, object)
-    }
-
-    fn object_range_error_response(
-        storage: &Arc<dyn Storage>,
-        json_request: Option<&Request>,
-        bucket: &str,
-        object: &str,
-    ) -> Result<Response<Body>, String> {
-        if let Some(req) = json_request {
-            return Ok(
-                match Self::checked_json_blob(storage, req, bucket, object, false) {
-                    Ok(_) => Self::invalid_range_response(),
-                    Err(response) => *response,
-                },
-            );
-        }
-        match storage.get_object_metadata(bucket, object) {
-            Ok(_) => Ok(Self::invalid_range_response()),
-            Err(crate::error::Error::KeyNotFound) => Ok(Self::error_response(
-                StatusCode::NOT_FOUND,
-                "NoSuchKey",
-                "The specified key does not exist.",
-            )),
-            Err(crate::error::Error::BucketNotFound) => Ok(Self::xml_bucket_not_found(bucket)),
-            Err(error) => Err(error.to_string()),
-        }
     }
 
     fn invalid_range_response() -> Response<Body> {
@@ -7145,6 +7428,7 @@ impl GcsAdapter {
         let session = ResumableSession {
             bucket: bucket.to_string(),
             key,
+            initiated_via_json: Some(true),
             content_type: upload_metadata.content_type.unwrap_or_else(|| {
                 req.header("x-upload-content-type")
                     .unwrap_or("application/octet-stream")
@@ -7183,16 +7467,44 @@ impl GcsAdapter {
         req: &Request,
         session_id: &str,
     ) -> Result<Response<Body>, String> {
+        if matches!(*req.method(), Method::PUT | Method::DELETE)
+            && self.finish_cancelled_xml_upload(storage, session_id)?
+        {
+            return Ok(Self::response(StatusCode::NO_CONTENT).empty());
+        }
         if req.method() == Method::DELETE {
-            let Some(_) = self.load_resumable_session(storage, session_id)? else {
+            let Some(session) = self.load_resumable_session(storage, session_id)? else {
                 return Ok(Self::json_upload_error(
                     StatusCode::NOT_FOUND,
                     "NOT_FOUND",
                     "The resumable upload session does not exist.",
                 ));
             };
+            if session.initiated_via_json == Some(false) {
+                let bucket = storage
+                    .get_namespace(&session.bucket)
+                    .map_err(|error| error.to_string())?;
+                let decision = UploadCancellation {
+                    session_id: session_id.to_string(),
+                    bucket: session.bucket.clone(),
+                    bucket_created_at: bucket.created_at,
+                    expires_at: session.initiated_at
+                        + chrono::Duration::days(GCS_RESUMABLE_SESSION_LIFETIME_DAYS),
+                };
+                state::save_json(
+                    storage.as_ref(),
+                    GCS_XML_CANCELLATION_STATE,
+                    session_id,
+                    &decision,
+                )?;
+            }
             self.remove_resumable_session(storage, session_id)?;
-            return Ok(Self::response(StatusCode::NO_CONTENT).empty());
+            let status = if session.initiated_via_json == Some(true) {
+                StatusCode::from_u16(499).expect("499 is a valid GCS cancellation status")
+            } else {
+                StatusCode::NO_CONTENT
+            };
+            return Ok(Self::response(status).empty());
         }
         if req.method() != Method::PUT {
             return Ok(Self::json_upload_error(
@@ -7424,6 +7736,39 @@ impl GcsAdapter {
             return Ok(None);
         }
         Ok(session)
+    }
+
+    fn finish_cancelled_xml_upload(
+        &self,
+        storage: &Arc<dyn Storage>,
+        session_id: &str,
+    ) -> Result<bool, String> {
+        let Some(decision) = state::load_json::<UploadCancellation>(
+            storage.as_ref(),
+            GCS_XML_CANCELLATION_STATE,
+            session_id,
+        )?
+        else {
+            return Ok(false);
+        };
+        if decision.session_id != session_id {
+            return Err("Cancelled upload identity does not match its session".to_string());
+        }
+        // The decision takes precedence even if interruption left active state.
+        self.remove_resumable_session(storage, session_id)?;
+        let current_bucket = match storage.get_namespace(&decision.bucket) {
+            Ok(bucket) => Some(bucket),
+            Err(crate::error::Error::BucketNotFound) => None,
+            Err(error) => return Err(error.to_string()),
+        };
+        let active = decision.expires_at > chrono::Utc::now()
+            && current_bucket.is_some_and(|bucket| bucket.created_at == decision.bucket_created_at);
+        if !active {
+            storage
+                .delete_provider_state(GCS_XML_CANCELLATION_STATE, session_id)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(active)
     }
 
     fn remove_resumable_session(
@@ -8466,28 +8811,13 @@ impl GcsAdapter {
         object: &str,
         alt_media: bool,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::checked_json_blob(storage, req, bucket, object, false) {
+        if alt_media {
+            return Self::bounded_media_response(storage, req, bucket, object, true);
+        }
+        let blob = match Self::checked_json_blob(storage, req, bucket, object) {
             Ok(blob) => blob,
             Err(response) => return Ok(*response),
         };
-        if alt_media {
-            if let Some(range_header) = req.header("range") {
-                return Self::object_range_response(
-                    storage,
-                    Some(req),
-                    bucket,
-                    object,
-                    range_header,
-                );
-            }
-        }
-        if alt_media {
-            let blob = match Self::checked_json_blob(storage, req, bucket, object, true) {
-                Ok(blob) => blob,
-                Err(response) => return Ok(*response),
-            };
-            return Self::object_media_response_for_blob(req, blob);
-        }
         Ok(Self::json_response(
             StatusCode::OK,
             &Self::json_object_metadata(bucket, &blob).to_string(),
@@ -8500,7 +8830,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::checked_json_blob(storage, req, bucket, object, false) {
+        let blob = match Self::checked_json_blob(storage, req, bucket, object) {
             Ok(blob) => blob,
             Err(response) => return Ok(*response),
         };
@@ -8583,7 +8913,7 @@ impl GcsAdapter {
         bucket: &str,
         object: &str,
     ) -> Result<Response<Body>, String> {
-        let blob = match Self::checked_json_blob(storage, req, bucket, object, false) {
+        let blob = match Self::checked_json_blob(storage, req, bucket, object) {
             Ok(blob) => blob,
             Err(response) => return Ok(*response),
         };
@@ -8669,13 +8999,8 @@ impl GcsAdapter {
         req: &Request,
         bucket: &str,
         object: &str,
-        with_payload: bool,
     ) -> Result<crate::models::Object, Box<Response<Body>>> {
-        let snapshot = if with_payload {
-            storage.get_object(bucket, object)
-        } else {
-            storage.get_object_metadata(bucket, object)
-        };
+        let snapshot = storage.get_object_metadata(bucket, object);
         let blob = match snapshot {
             Ok(blob) => blob,
             Err(crate::error::Error::KeyNotFound) => {
@@ -8822,28 +9147,6 @@ impl GcsAdapter {
         if Self::foreign_data_protection_active(storage, bucket) {
             return Ok(Self::foreign_data_protection_json_response());
         }
-        let blob = match storage.as_ref().get_blob(bucket, &object) {
-            Ok(blob) => blob,
-            Err(crate::error::Error::KeyNotFound) => {
-                return Ok(Self::json_not_found(&object));
-            }
-            Err(crate::error::Error::BucketNotFound) => {
-                return Ok(Self::json_bucket_not_found(bucket));
-            }
-            Err(err) => {
-                return Ok(Self::json_upload_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "INTERNAL",
-                    &err.to_string(),
-                ));
-            }
-        };
-        if let Err(response) = Self::check_current_generation_selector(req, &blob) {
-            return Ok(*response);
-        }
-        if let Err(response) = Self::check_gcs_preconditions(req, &blob) {
-            return Ok(response);
-        }
-        Self::object_media_response_for_blob(req, blob)
+        Self::bounded_media_response(storage, req, bucket, &object, true)
     }
 }

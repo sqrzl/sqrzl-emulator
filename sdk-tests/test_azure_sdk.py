@@ -18,6 +18,75 @@ def _service(sqrzl_server):
     )
 
 
+def test_azure_same_byte_writes_revise_etags(sqrzl_server):
+    from azure.core import MatchConditions
+    from azure.core.exceptions import HttpResponseError
+
+    sqrzl_server.require_provider("azure")
+    service = _service(sqrzl_server)
+    container = service.create_container(
+        sqrzl_server.bucket_name("sdk-azure-revisions"),
+        headers={"x-sqrzl-azure-versioning-enabled": "true"},
+    )
+    blob = container.get_blob_client("item")
+    first = blob.upload_blob(b"same bytes", overwrite=True, validate_content=True)
+    second = blob.upload_blob(
+        b"same bytes", overwrite=True, validate_content=True,
+        etag=first["etag"], match_condition=MatchConditions.IfNotModified,
+    )
+    assert first["etag"] != second["etag"]
+    assert first["version_id"] != second["version_id"]
+    for operation in [
+        lambda: blob.download_blob(etag=first["etag"], match_condition=MatchConditions.IfNotModified),
+        lambda: blob.get_blob_properties(etag=first["etag"], match_condition=MatchConditions.IfNotModified),
+        lambda: blob.upload_blob(b"bad", overwrite=True, etag=first["etag"], match_condition=MatchConditions.IfNotModified),
+    ]:
+        with pytest.raises(HttpResponseError) as error:
+            operation()
+        assert error.value.status_code == 412
+        assert error.value.error_code == "ConditionNotMet"
+    assert blob.download_blob().readall() == b"same bytes"
+    selected = container.get_blob_client("item", version_id=first["version_id"])
+    assert selected.get_blob_properties().etag == first["etag"]
+    assert selected.download_blob(etag=first["etag"], match_condition=MatchConditions.IfNotModified).readall() == b"same bytes"
+
+    page = container.get_blob_client("page")
+    original = page.create_page_blob(512)
+    revised = page.upload_page(bytes(512), offset=0, length=512, validate_content=True)
+    assert original["etag"] != revised["etag"]
+    cleared = page.clear_page(offset=0, length=512)
+    assert cleared["etag"] != revised["etag"]
+    assert page.download_blob().readall() == bytes(512)
+    service.delete_container(container.container_name)
+
+
+def test_azure_empty_block_list_commits(sqrzl_server):
+    from azure.core import MatchConditions
+    from azure.core.exceptions import HttpResponseError
+
+    sqrzl_server.require_provider("azure")
+    service = _service(sqrzl_server)
+    container = service.create_container(sqrzl_server.bucket_name("sdk-azure-empty-blocks"))
+    for existing in [False, True]:
+        blob = container.get_blob_client(f"empty-{existing}")
+        original = blob.upload_blob(b"previous") if existing else None
+        blob.stage_block(base64.b64encode(b"staged").decode(), b"staged", validate_content=True)
+        committed = blob.commit_block_list([], validate_content=True)
+        assert blob.get_blob_properties().size == 0
+        assert blob.download_blob().readall() == b""
+        assert blob.get_block_list(block_list_type="committed")[0] == []
+        if original:
+            assert committed["etag"] != original["etag"]
+            with pytest.raises(HttpResponseError) as error:
+                blob.commit_block_list([], etag=original["etag"], match_condition=MatchConditions.IfNotModified)
+            assert error.value.status_code == 412
+        # Put Blob explicitly discards remaining uncommitted blocks.
+        blob.upload_blob(b"", overwrite=True)
+        assert blob.get_block_list(block_list_type="all") == ([], [])
+        blob.delete_blob()
+    service.delete_container(container.container_name)
+
+
 def test_azure_conditional_current_snapshot_and_version_reads(sqrzl_server):
     from azure.core import MatchConditions
     from azure.core.exceptions import HttpResponseError

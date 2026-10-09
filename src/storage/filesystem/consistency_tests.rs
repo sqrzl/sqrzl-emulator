@@ -92,6 +92,237 @@ async fn should_keep_gcs_json_range_reads_bounded_to_the_requested_bytes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn should_keep_gcs_download_ranges_bounded_to_the_requested_bytes() {
+    // Arrange
+    let path = "/download/storage/v1/b/coherent/o/lease?generation=1&ifGenerationMatch=1";
+
+    // Act
+    // Assert
+    let bytes = verify_request_read_path(
+        path,
+        &[("range", "bytes=0-2")],
+        false,
+        http::StatusCode::PARTIAL_CONTENT,
+        TestPhase::FullPayload,
+    )
+    .await;
+    assert_eq!(bytes.as_ref(), b"{\"v");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_reject_gcs_download_conditions_before_reading_payloads() {
+    // Arrange
+    let path = "/download/storage/v1/b/coherent/o/lease?ifGenerationNotMatch=1";
+
+    // Act
+    // Assert
+    verify_request_read_path(
+        path,
+        &[],
+        true,
+        http::StatusCode::NOT_MODIFIED,
+        TestPhase::ReadPayloadMetadata,
+    )
+    .await;
+}
+
+fn sparse_gcs_storage() -> (PathBuf, Arc<FilesystemStorage>) {
+    let base = std::env::temp_dir().join(format!("sqrzl-gcs-bounded-{}", Uuid::new_v4()));
+    let storage = Arc::new(FilesystemStorage::new(&base));
+    storage.create_bucket("sparse".to_string()).unwrap();
+    let source = base.join("source");
+    fs::File::create(&source)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 3)
+        .unwrap();
+    let mut object = Object::new(
+        "large".to_string(),
+        Vec::new(),
+        "application/octet-stream".to_string(),
+    );
+    object.size = 64 * 1024 * 1024 + 3;
+    object
+        .metadata
+        .insert("__sqrzl_gcs_generation".to_string(), "1".to_string());
+    object
+        .metadata
+        .insert("__sqrzl_gcs_metageneration".to_string(), "1".to_string());
+    storage
+        .put_object_streamed("sparse", "large".to_string(), object, &source)
+        .unwrap();
+    (base, storage)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_read_only_requested_gcs_download_bytes_from_a_sparse_object() {
+    // Arrange
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (base, storage) = sparse_gcs_storage();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let observed = reads.clone();
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if phase == TestPhase::FullPayload {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+
+    // Act
+    let (status, headers, bytes) = wire_get(
+        storage,
+        "/download/storage/v1/b/sparse/o/large?generation=1",
+        &[("range", "bytes=67108864-67108866")],
+        false,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(status, http::StatusCode::PARTIAL_CONTENT);
+    assert_eq!(bytes.as_ref(), &[0_u8; 3]);
+    assert_eq!(headers["content-range"], "bytes 67108864-67108866/67108867");
+    assert_eq!(headers["content-length"], "3");
+    assert_eq!(headers["x-goog-generation"], "1");
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_admit_gcs_media_extents_before_materializing_sparse_payloads() {
+    // Arrange
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (base, storage) = sparse_gcs_storage();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let observed = reads.clone();
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if phase == TestPhase::FullPayload || phase == TestPhase::ReadPayloadMetadata {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+    let json_routes = [
+        "/download/storage/v1/b/sparse/o/large?generation=1",
+        "/storage/v1/b/sparse/o/large?alt=media&generation=1",
+    ];
+
+    // Act
+    // Assert
+    for path in json_routes {
+        for (headers, expected, reason) in [
+            (&[][..], http::StatusCode::NOT_IMPLEMENTED, "notImplemented"),
+            (
+                &[("range", "bytes=0-")][..],
+                http::StatusCode::NOT_IMPLEMENTED,
+                "notImplemented",
+            ),
+            (
+                &[("range", "bytes=0-67108864")][..],
+                http::StatusCode::NOT_IMPLEMENTED,
+                "notImplemented",
+            ),
+            (
+                &[("range", "bytes=999999999-")][..],
+                http::StatusCode::RANGE_NOT_SATISFIABLE,
+                "requestedRangeNotSatisfiable",
+            ),
+            (
+                &[("range", "bytes=3-2")][..],
+                http::StatusCode::RANGE_NOT_SATISFIABLE,
+                "requestedRangeNotSatisfiable",
+            ),
+        ] {
+            let (status, _, bytes) = wire_get(storage.clone(), path, headers, false).await;
+            assert_eq!(status, expected, "{path}: {headers:?}");
+            let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(error["error"]["errors"][0]["reason"], reason);
+            assert_eq!(reads.load(Ordering::SeqCst), 0);
+        }
+    }
+    let (status, _, bytes) = wire_get(
+        storage.clone(),
+        "/sparse/large",
+        &[("host", "storage.googleapis.com")],
+        false,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_IMPLEMENTED);
+    assert!(std::str::from_utf8(&bytes)
+        .unwrap()
+        .contains("<Code>NotImplemented</Code>"));
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    let (status, _, bytes) = wire_get(
+        storage,
+        "/download/storage/v1/b/sparse/o/large?generation=1",
+        &[("range", "bytes=0-67108863")],
+        false,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::PARTIAL_CONTENT);
+    assert_eq!(bytes.len(), 64 * 1024 * 1024);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_keep_gcs_sparse_metadata_and_rejected_generation_reads_payload_free() {
+    // Arrange
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (base, storage) = sparse_gcs_storage();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let observed = reads.clone();
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if phase == TestPhase::FullPayload || phase == TestPhase::ReadPayloadMetadata {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+    let cases = [
+        (
+            "/download/storage/v1/b/sparse/o/large?ifGenerationNotMatch=1",
+            304,
+        ),
+        (
+            "/download/storage/v1/b/sparse/o/large?ifGenerationMatch=2",
+            412,
+        ),
+        (
+            "/download/storage/v1/b/sparse/o/large?ifMetagenerationNotMatch=1",
+            304,
+        ),
+        (
+            "/download/storage/v1/b/sparse/o/large?ifMetagenerationMatch=2",
+            412,
+        ),
+        ("/download/storage/v1/b/sparse/o/large?generation=2", 501),
+        (
+            "/download/storage/v1/b/sparse/o/large?generation=invalid",
+            400,
+        ),
+        ("/download/storage/v1/b/sparse/o/absent", 404),
+        ("/download/storage/v1/b/absent/o/large", 404),
+    ];
+
+    // Act
+    // Assert
+    for (path, expected) in cases {
+        for headers in [&[][..], &[("range", "bytes=0-2")][..]] {
+            let (status, _, _) = wire_get(storage.clone(), path, headers, false).await;
+            assert_eq!(status.as_u16(), expected, "{path}");
+            assert_eq!(reads.load(Ordering::SeqCst), 0);
+        }
+    }
+    let (status, _, bytes) = wire_get(
+        storage,
+        "/storage/v1/b/sparse/o/large?generation=1",
+        &[],
+        false,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(metadata["size"], "67108867");
+    assert_eq!(metadata["generation"], "1");
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn should_reject_read_conditions_without_materializing_payloads() {
     // Arrange
     let surfaces: [(&str, &[(&str, &str)]); 2] = [
@@ -191,7 +422,7 @@ async fn wire_get(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn should_keep_held_http_reads_on_the_generation_used_for_response_conditions() {
     // Arrange
-    let surfaces: [(&str, &[(&str, &str)]); 5] = [
+    let surfaces: [(&str, &[(&str, &str)]); 6] = [
         (
             "/coherent/lease",
             &[("if-match", "\"6811fbc0e37e7eb14fdf61ff13ca76de\"")],
@@ -205,6 +436,10 @@ async fn should_keep_held_http_reads_on_the_generation_used_for_response_conditi
         ),
         (
             "/storage/v1/b/coherent/o/lease?alt=media&ifGenerationMatch=1",
+            &[],
+        ),
+        (
+            "/download/storage/v1/b/coherent/o/lease?generation=1&ifGenerationMatch=1",
             &[],
         ),
         ("/coherent/lease", &[("host", "storage.googleapis.com")]),

@@ -1651,7 +1651,7 @@ async fn should_route_non_upload_gcs_methods_before_enforcing_upload_framing() {
     // Assert
     assert_eq!(media_get.status(), StatusCode::METHOD_NOT_ALLOWED);
     assert_gcs_json_error(&body_text(media_get).await, "methodNotAllowed");
-    assert_eq!(session_delete.status(), StatusCode::NO_CONTENT);
+    assert_eq!(session_delete.status(), StatusCode::from_u16(499).unwrap());
     assert!(storage.get_object("method-gcs-json", "get-object").is_err());
     assert!(storage
         .get_object("method-gcs-json", "session-object")

@@ -8,6 +8,7 @@ pub mod filesystem;
 pub mod indexed;
 pub mod lockfree_index;
 pub mod ownership;
+pub(crate) mod upload_cancellation;
 
 pub use filesystem::FilesystemStorage;
 pub use indexed::IndexedStorage;

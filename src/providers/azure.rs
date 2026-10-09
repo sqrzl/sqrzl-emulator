@@ -15,9 +15,10 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use hyper::Response;
+use quick_xml::encoding::Decoder;
 use quick_xml::escape::unescape;
-use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::events::{BytesDecl, BytesStart, Event};
+use quick_xml::{Reader, XmlVersion};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::{HashMap, HashSet};
@@ -1781,18 +1782,160 @@ impl AzureBlobAdapter {
         })
     }
 
+    // XML 1.0 fifth-edition Char and Name productions:
+    // https://www.w3.org/TR/xml/#NT-Char and #NT-NameStartChar.
+    fn valid_xml_characters(xml: &str) -> bool {
+        xml.chars().all(|character| {
+            matches!(character, '\t' | '\n' | '\r' | '\u{20}'..='\u{d7ff}'
+                | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
+        })
+    }
+
+    fn xml_name_start(character: char) -> bool {
+        matches!(character, ':' | '_' | 'A'..='Z' | 'a'..='z'
+            | '\u{c0}'..='\u{d6}' | '\u{d8}'..='\u{f6}' | '\u{f8}'..='\u{2ff}'
+            | '\u{370}'..='\u{37d}' | '\u{37f}'..='\u{1fff}' | '\u{200c}'..='\u{200d}'
+            | '\u{2070}'..='\u{218f}' | '\u{2c00}'..='\u{2fef}' | '\u{3001}'..='\u{d7ff}'
+            | '\u{f900}'..='\u{fdcf}' | '\u{fdf0}'..='\u{fffd}' | '\u{10000}'..='\u{effff}')
+    }
+
+    fn valid_xml_name(bytes: &[u8]) -> bool {
+        let Ok(name) = std::str::from_utf8(bytes) else {
+            return false;
+        };
+        let mut characters = name.chars();
+        characters.next().is_some_and(Self::xml_name_start)
+            && characters.all(|character| {
+                Self::xml_name_start(character)
+                    || matches!(character, '-' | '.' | '0'..='9' | '\u{b7}'
+                        | '\u{300}'..='\u{36f}' | '\u{203f}'..='\u{2040}')
+            })
+    }
+
+    fn valid_xml_attributes(event: &BytesStart<'_>, decoder: Decoder) -> bool {
+        let raw = event.attributes_raw();
+        let mut quote = None;
+        for (index, byte) in raw.iter().copied().enumerate() {
+            if let Some(delimiter) = quote {
+                if byte == delimiter {
+                    quote = None;
+                    if raw
+                        .get(index + 1)
+                        .is_some_and(|next| !matches!(next, b' ' | b'\t' | b'\n' | b'\r'))
+                    {
+                        return false;
+                    }
+                }
+            } else if matches!(byte, b'\'' | b'"') {
+                quote = Some(byte);
+            }
+        }
+        quote.is_none()
+            && event.attributes().all(|attribute| {
+                attribute.is_ok_and(|attribute| {
+                    Self::valid_xml_name(attribute.key.as_ref())
+                        && !attribute.value.contains(&b'<')
+                        && attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                            .is_ok_and(|value| Self::valid_xml_characters(&value))
+                })
+            })
+    }
+
+    fn valid_xml_declaration(event: &BytesDecl<'_>, decoder: Decoder) -> bool {
+        let Ok(content) = std::str::from_utf8(event) else {
+            return false;
+        };
+        let declaration = BytesStart::from_content(content, 3);
+        if !Self::valid_xml_attributes(&declaration, decoder) {
+            return false;
+        }
+        let mut position = 0;
+        for attribute in declaration.attributes() {
+            let Ok(attribute) = attribute else {
+                return false;
+            };
+            let value = attribute.value.as_ref();
+            position = match attribute.key.as_ref() {
+                b"version"
+                    if position == 0
+                        && value.strip_prefix(b"1.").is_some_and(|digits| {
+                            !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
+                        }) =>
+                {
+                    1
+                }
+                b"encoding"
+                    if position == 1
+                        && value.first().is_some_and(u8::is_ascii_alphabetic)
+                        && value.iter().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                        }) =>
+                {
+                    2
+                }
+                b"standalone" if matches!(position, 1 | 2) && matches!(value, b"yes" | b"no") => 3,
+                _ => return false,
+            };
+        }
+        position != 0
+    }
+
+    fn block_selector(name: &[u8]) -> Result<AzureBlockSelector, AzureBlockListError> {
+        match name {
+            b"Latest" => Ok(AzureBlockSelector::Latest),
+            b"Committed" => Ok(AzureBlockSelector::Committed),
+            b"Uncommitted" => Ok(AzureBlockSelector::Uncommitted),
+            _ => Err(AzureBlockListError::InvalidBlockList),
+        }
+    }
+
+    fn xml_space(value: &str) -> bool {
+        value
+            .chars()
+            .all(|character| matches!(character, ' ' | '\t' | '\n' | '\r'))
+    }
+
+    fn append_block_text(
+        value: &str,
+        selecting_block: bool,
+        block_id: &mut String,
+    ) -> Result<(), AzureBlockListError> {
+        if !Self::valid_xml_characters(value) {
+            return Err(AzureBlockListError::InvalidXmlDocument);
+        }
+        if selecting_block {
+            block_id.push_str(value);
+        } else if !Self::xml_space(value) {
+            return Err(AzureBlockListError::InvalidBlockList);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)] // One state machine validates XML grammar and block selection before publication.
     fn parse_block_list(xml: &str) -> Result<Vec<AzureBlockReference>, AzureBlockListError> {
+        if !Self::valid_xml_characters(xml) {
+            return Err(AzureBlockListError::InvalidXmlDocument);
+        }
+        let xml = xml.strip_prefix('\u{feff}').unwrap_or(xml);
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
+        reader.config_mut().check_comments = true;
         let mut buf = Vec::new();
         let mut root_seen = false;
         let mut root_closed = false;
         let mut current_element: Option<Vec<u8>> = None;
         let mut current_block_id = String::new();
         let mut block_references = Vec::new();
+        let mut declaration_allowed = true;
 
         loop {
             match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(event) | Event::Empty(event))
+                    if !Self::valid_xml_attributes(&event, reader.decoder()) =>
+                {
+                    return Err(AzureBlockListError::InvalidXmlDocument);
+                }
                 Ok(Event::Start(event)) => {
                     let name = event.name().as_ref().to_vec();
                     if !root_seen && name == b"BlockList" {
@@ -1800,7 +1943,7 @@ impl AzureBlobAdapter {
                     } else if root_seen
                         && !root_closed
                         && current_element.is_none()
-                        && matches!(name.as_slice(), b"Latest" | b"Committed" | b"Uncommitted")
+                        && Self::block_selector(&name).is_ok()
                     {
                         current_element = Some(name);
                         current_block_id.clear();
@@ -1808,18 +1951,17 @@ impl AzureBlobAdapter {
                         return Err(AzureBlockListError::InvalidBlockList);
                     }
                 }
+                Ok(Event::Empty(event)) if !root_seen && event.name().as_ref() == b"BlockList" => {
+                    root_seen = true;
+                    root_closed = true;
+                }
                 Ok(Event::End(event)) => {
                     let name = event.name().as_ref().to_vec();
                     if current_element.as_deref() == Some(name.as_slice()) {
                         if current_block_id.is_empty() {
                             return Err(AzureBlockListError::InvalidBlockList);
                         }
-                        let selector = match name.as_slice() {
-                            b"Latest" => AzureBlockSelector::Latest,
-                            b"Committed" => AzureBlockSelector::Committed,
-                            b"Uncommitted" => AzureBlockSelector::Uncommitted,
-                            _ => return Err(AzureBlockListError::InvalidBlockList),
-                        };
+                        let selector = Self::block_selector(&name)?;
                         block_references.push(AzureBlockReference {
                             id: std::mem::take(&mut current_block_id),
                             selector,
@@ -1835,14 +1977,50 @@ impl AzureBlobAdapter {
                         return Err(AzureBlockListError::InvalidXmlDocument);
                     }
                 }
-                Ok(Event::Text(text)) if current_element.is_some() => {
+                Ok(Event::Text(text)) => {
                     let decoded = text
                         .decode()
                         .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
-                    let value = unescape(&decoded)
+                    if !root_seen || root_closed {
+                        // Outside the root, XML Misc admits literal S only;
+                        // character references and Unicode trim characters are not S.
+                        if !Self::xml_space(&decoded) {
+                            return Err(AzureBlockListError::InvalidXmlDocument);
+                        }
+                    } else {
+                        let value = unescape(&decoded)
+                            .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
+                        Self::append_block_text(
+                            &value,
+                            current_element.is_some(),
+                            &mut current_block_id,
+                        )?;
+                    }
+                }
+                Ok(Event::GeneralRef(reference)) => {
+                    if !root_seen || root_closed {
+                        return Err(AzureBlockListError::InvalidXmlDocument);
+                    }
+                    let character = match reference
+                        .resolve_char_ref()
                         .map_err(|_| AzureBlockListError::InvalidXmlDocument)?
-                        .to_string();
-                    current_block_id.push_str(&value);
+                    {
+                        Some(character) => character,
+                        None => match reference.as_ref() {
+                            b"lt" => '<',
+                            b"gt" => '>',
+                            b"amp" => '&',
+                            b"apos" => '\'',
+                            b"quot" => '"',
+                            _ => return Err(AzureBlockListError::InvalidXmlDocument),
+                        },
+                    };
+                    let mut encoded = [0; 4];
+                    Self::append_block_text(
+                        character.encode_utf8(&mut encoded),
+                        current_element.is_some(),
+                        &mut current_block_id,
+                    )?;
                 }
                 Ok(Event::CData(text)) if current_element.is_some() => {
                     let decoded = text
@@ -1850,26 +2028,30 @@ impl AzureBlobAdapter {
                         .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
                     current_block_id.push_str(&decoded);
                 }
-                Ok(Event::Text(text)) => {
-                    let decoded = text
-                        .decode()
-                        .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
-                    if !decoded.trim().is_empty() {
-                        return Err(AzureBlockListError::InvalidBlockList);
-                    }
-                }
                 Ok(Event::Eof) => break,
-                Err(_) => return Err(AzureBlockListError::InvalidXmlDocument),
-                Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_)) => {}
+                // A declaration must occur once, at the start, before any other node.
+                Ok(Event::Decl(event))
+                    if declaration_allowed
+                        && xml.starts_with("<?xml")
+                        && Self::valid_xml_declaration(&event, reader.decoder()) => {}
+                Err(_) | Ok(Event::Decl(_)) => return Err(AzureBlockListError::InvalidXmlDocument),
+                Ok(Event::PI(event))
+                    if !Self::valid_xml_name(event.target())
+                        || event.target().eq_ignore_ascii_case(b"xml") =>
+                {
+                    return Err(AzureBlockListError::InvalidXmlDocument);
+                }
+                Ok(Event::Comment(_) | Event::PI(_)) => {}
                 _ => return Err(AzureBlockListError::InvalidBlockList),
             }
+            declaration_allowed = false;
             buf.clear();
         }
 
         if current_element.is_some() || (root_seen && !root_closed) {
             return Err(AzureBlockListError::InvalidXmlDocument);
         }
-        if !root_seen || block_references.is_empty() {
+        if !root_seen {
             return Err(AzureBlockListError::InvalidBlockList);
         }
 
@@ -3670,7 +3852,7 @@ impl AzureBlobAdapter {
         let observed_etag = blob.etag.clone();
         blob.data.extend_from_slice(&req.body);
         blob.size = blob.data.len() as u64;
-        blob.etag = crate::models::object::compute_etag(&blob.data);
+        blob.etag = uuid::Uuid::new_v4().simple().to_string();
         blob.last_modified = Utc::now();
         if !storage
             .put_object_if(
@@ -3777,7 +3959,7 @@ impl AzureBlobAdapter {
         } else {
             blob.data[start..=end].copy_from_slice(&req.body);
         }
-        blob.etag = crate::models::object::compute_etag(&blob.data);
+        blob.etag = uuid::Uuid::new_v4().simple().to_string();
         blob.last_modified = Utc::now();
         if !storage
             .put_object_if(
@@ -4021,12 +4203,12 @@ impl AzureBlobAdapter {
                 Vec::new(),
                 Self::content_type(req),
                 Self::metadata_from_headers(req),
-                hex::encode(req.payload_md5()),
+                uuid::Uuid::new_v4().simple().to_string(),
             );
             object.size = req.payload_len();
             object
         } else {
-            crate::models::Object::new_with_metadata(
+            crate::models::Object::new_with_metadata_and_etag(
                 blob_key.to_string(),
                 if blob_type == "PageBlob" {
                     vec![0_u8; Self::page_blob_declared_len(req)]
@@ -4035,6 +4217,7 @@ impl AzureBlobAdapter {
                 },
                 Self::content_type(req),
                 Self::metadata_from_headers(req),
+                uuid::Uuid::new_v4().simple().to_string(),
             )
         };
         Self::set_blob_type(&mut object, blob_type);
@@ -4530,6 +4713,301 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sqrzl-azure-test-{}", uuid::Uuid::new_v4()));
         let _ = fs::create_dir_all(&dir);
         Arc::new(FilesystemStorage::new(dir))
+    }
+
+    fn spool_test_request(mut request: Request, root: &std::path::Path) -> Request {
+        let path = root.join(format!("request-{}", uuid::Uuid::new_v4()));
+        fs::write(&path, &request.body).unwrap();
+        request.spooled_body = Some(crate::server::SpooledPayload::new(
+            path,
+            request.payload_len(),
+            request.payload_md5(),
+            hex::encode(request.payload_sha256()),
+            request.payload_sha384(),
+            request.payload_crc32c(),
+            request.payload_crc64_nvme(),
+            request.payload_sha1(),
+            request.payload_crc32(),
+        ));
+        request.body = bytes::Bytes::new();
+        request
+    }
+
+    #[tokio::test]
+    async fn should_revise_buffered_azure_etags_for_same_byte_overwrites() {
+        verify_same_byte_azure_etags(false).await;
+    }
+
+    #[tokio::test]
+    async fn should_revise_streamed_azure_etags_for_same_byte_overwrites() {
+        verify_same_byte_azure_etags(true).await;
+    }
+
+    #[allow(clippy::too_many_lines)] // One revision fixture verifies current/history identity and restart.
+    async fn verify_same_byte_azure_etags(streamed: bool) {
+        let root = std::env::temp_dir().join(format!("azure-etags-{}", uuid::Uuid::new_v4()));
+        let mut storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::open(&root).unwrap());
+        storage.create_bucket("revisions".to_string()).unwrap();
+        storage.enable_versioning("revisions").unwrap();
+        storage
+            .update_bucket_metadata(
+                "revisions",
+                HashMap::from([(AZURE_VERSIONING_KEY.to_string(), "true".to_string())]),
+            )
+            .unwrap();
+        let adapter = AzureBlobAdapter::new();
+        let uri = "/devstoreaccount1/revisions/item";
+        let body = b"same bytes";
+        let md5 = BASE64.encode(md5::compute(body).0);
+        let mut etags: Vec<String> = Vec::new();
+        let mut versions = Vec::new();
+        for _ in 0..2 {
+            let mut headers = vec![
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-blob-type", "BlockBlob"),
+                ("content-md5", md5.as_str()),
+            ];
+            if let Some(etag) = etags.last() {
+                headers.push(("if-match", etag));
+            }
+            let request = parsed_request("PUT", uri, &headers, body).await;
+            let request = if streamed {
+                spool_test_request(request, &root)
+            } else {
+                request
+            };
+            let response = adapter
+                .handle(storage.clone(), auth_disabled(), request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            assert_eq!(header_value(&response, "content-md5"), Some(md5.as_str()));
+            etags.push(header_value(&response, "etag").unwrap().to_string());
+            versions.push(
+                header_value(&response, "x-ms-version-id")
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        assert_ne!(
+            etags[0], etags[1],
+            "each successful write must revise the ETag"
+        );
+        assert_ne!(versions[0], versions[1]);
+        for method in ["GET", "HEAD", "PUT"] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        method,
+                        uri,
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                            ("if-match", &etags[0]),
+                        ],
+                        b"replacement",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::PRECONDITION_FAILED,
+                "{method}"
+            );
+            assert_eq!(
+                header_value(&response, "x-ms-error-code"),
+                Some("ConditionNotMet")
+            );
+        }
+        assert_eq!(storage.get_object("revisions", "item").unwrap().data, body);
+        assert_eq!(
+            storage
+                .list_object_versions_for_key("revisions", "item")
+                .unwrap()
+                .len(),
+            2
+        );
+        storage = Arc::new(FilesystemStorage::open(&root).unwrap());
+        for (suffix, etag) in [
+            (String::new(), &etags[1]),
+            (format!("?versionid={}", versions[0]), &etags[0]),
+        ] {
+            let response = AzureBlobAdapter::new()
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "GET",
+                        &format!("{uri}{suffix}"),
+                        &[("x-ms-version", AZURE_VERSION), ("if-match", etag)],
+                        b"",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(header_value(&response, "etag"), Some(etag.as_str()));
+            assert_eq!(read_test_body(response).await, body);
+        }
+        let metadata = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=metadata"),
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("if-match", &etags[1]),
+                        ("x-ms-meta-note", "same payload"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(metadata.status(), StatusCode::OK);
+        assert_ne!(header_value(&metadata, "etag"), Some(etags[1].as_str()));
+        assert_eq!(storage.get_object("revisions", "item").unwrap().data, body);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_revise_azure_page_etags_for_noop_writes() {
+        let storage = temp_storage();
+        storage.create_bucket("page-revisions".to_string()).unwrap();
+        let adapter = AzureBlobAdapter::new();
+        let uri = "/devstoreaccount1/page-revisions/item";
+        let created = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    uri,
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "PageBlob"),
+                        ("x-ms-blob-content-length", "512"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let mut etag = header_value(&created, "etag").unwrap().to_string();
+        for (mode, body) in [("update", vec![0; 512]), ("clear", Vec::new())] {
+            let headers = [
+                ("x-ms-version", AZURE_VERSION),
+                ("x-ms-page-write", mode),
+                ("x-ms-range", "bytes=0-511"),
+                ("if-match", etag.as_str()),
+            ];
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request("PUT", &format!("{uri}?comp=page"), &headers, &body).await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let revised = header_value(&response, "etag").unwrap().to_string();
+            assert_ne!(revised, etag, "a successful {mode} must revise the ETag");
+            let stale = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request("PUT", &format!("{uri}?comp=page"), &headers, &body).await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+            assert_eq!(
+                storage.get_object("page-revisions", "item").unwrap().data,
+                vec![0; 512]
+            );
+            etag = revised;
+        }
+    }
+
+    #[tokio::test]
+    async fn should_keep_azure_append_revision_separate_from_transactional_md5() {
+        let storage = temp_storage();
+        storage
+            .create_bucket("append-revisions".to_string())
+            .unwrap();
+        let adapter = AzureBlobAdapter::new();
+        let uri = "/devstoreaccount1/append-revisions/item";
+        let created = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    uri,
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "AppendBlob"),
+                    ],
+                    b"",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let etag = header_value(&created, "etag").unwrap();
+        let md5 = BASE64.encode(md5::compute(b"append").0);
+        let headers = [
+            ("x-ms-version", AZURE_VERSION),
+            ("if-match", etag),
+            ("content-md5", md5.as_str()),
+        ];
+        let request = parsed_request(
+            "PUT",
+            &format!("{uri}?comp=appendblock"),
+            &headers,
+            b"append",
+        )
+        .await;
+        let response = adapter
+            .handle(storage.clone(), auth_disabled(), request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let stored = storage.get_object("append-revisions", "item").unwrap();
+        assert_ne!(
+            stored.etag,
+            crate::models::object::compute_etag(&stored.data)
+        );
+        let stale = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=appendblock"),
+                    &headers,
+                    b"append",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            storage.get_object("append-revisions", "item").unwrap().data,
+            b"append"
+        );
     }
 
     #[tokio::test]
@@ -5163,6 +5641,204 @@ mod tests {
         assert_eq!(body.as_ref(), b"abcdef");
     }
 
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Empty commits cover both XML encodings, existing/missing targets, and restart.
+    async fn should_commit_empty_azure_block_lists_with_native_conditions_and_checksums() {
+        let root = std::env::temp_dir().join(format!("azure-empty-list-{}", uuid::Uuid::new_v4()));
+        let mut storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::open(&root).unwrap());
+        storage.create_bucket("empty-commits".to_string()).unwrap();
+        storage.enable_versioning("empty-commits").unwrap();
+        storage
+            .update_bucket_metadata(
+                "empty-commits",
+                HashMap::from([(AZURE_VERSIONING_KEY.to_string(), "true".to_string())]),
+            )
+            .unwrap();
+        for (key, xml, existing) in [
+            ("new-paired", "<BlockList></BlockList>", false),
+            (
+                "new-self-closing",
+                "<?xml version=\"1.0\"?><BlockList />",
+                false,
+            ),
+            ("existing-paired", "<BlockList></BlockList>", true),
+            ("existing-self-closing", "<BlockList/>", true),
+        ] {
+            let adapter = AzureBlobAdapter::new();
+            let uri = format!("/devstoreaccount1/empty-commits/{key}");
+            let prior = if existing {
+                let response = adapter
+                    .handle(
+                        storage.clone(),
+                        auth_disabled(),
+                        parsed_request(
+                            "PUT",
+                            &uri,
+                            &[
+                                ("x-ms-version", AZURE_VERSION),
+                                ("x-ms-blob-type", "BlockBlob"),
+                            ],
+                            b"previous",
+                        )
+                        .await,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::CREATED);
+                Some((
+                    header_value(&response, "etag").unwrap().to_string(),
+                    header_value(&response, "x-ms-version-id")
+                        .unwrap()
+                        .to_string(),
+                ))
+            } else {
+                None
+            };
+            let stage = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}?comp=block&blockid=YQ=="),
+                        &[("x-ms-version", AZURE_VERSION)],
+                        b"staged",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(stage.status(), StatusCode::CREATED);
+            let session_key =
+                AzureBlobAdapter::blob_state_key("devstoreaccount1", "empty-commits", key);
+            for (extra_header, status, code) in [
+                (
+                    ("content-md5", "AAAAAAAAAAAAAAAAAAAAAA=="),
+                    StatusCode::BAD_REQUEST,
+                    "Md5Mismatch",
+                ),
+                (
+                    ("if-match", "\"stale\""),
+                    StatusCode::PRECONDITION_FAILED,
+                    "ConditionNotMet",
+                ),
+            ] {
+                let response = adapter
+                    .handle(
+                        storage.clone(),
+                        auth_disabled(),
+                        parsed_request(
+                            "PUT",
+                            &format!("{uri}?comp=blocklist"),
+                            &[("x-ms-version", AZURE_VERSION), extra_header],
+                            xml.as_bytes(),
+                        )
+                        .await,
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status);
+                assert_eq!(header_value(&response, "x-ms-error-code"), Some(code));
+                assert_eq!(
+                    adapter
+                        .load_block_session(&storage, &session_key)
+                        .unwrap()
+                        .unwrap()
+                        .blocks
+                        .len(),
+                    1
+                );
+                if existing {
+                    assert_eq!(
+                        storage.get_object("empty-commits", key).unwrap().data,
+                        b"previous"
+                    );
+                } else {
+                    assert!(matches!(
+                        storage.get_object_metadata("empty-commits", key),
+                        Err(crate::error::Error::KeyNotFound)
+                    ));
+                }
+            }
+            let md5 = BASE64.encode(md5::compute(xml.as_bytes()).0);
+            let mut headers = vec![("x-ms-version", AZURE_VERSION), ("content-md5", &md5)];
+            if let Some((etag, _)) = &prior {
+                headers.push(("if-match", etag));
+            }
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}?comp=blocklist"),
+                        &headers,
+                        xml.as_bytes(),
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED, "{key}");
+            assert_eq!(header_value(&response, "content-md5"), Some(md5.as_str()));
+            let etag = header_value(&response, "etag").unwrap().to_string();
+            if let Some((prior_etag, version)) = &prior {
+                assert_ne!(&etag, prior_etag);
+                assert_eq!(
+                    storage
+                        .get_object_version("empty-commits", key, version)
+                        .unwrap()
+                        .data,
+                    b"previous"
+                );
+            }
+            storage = Arc::new(FilesystemStorage::open(&root).unwrap());
+            let head = AzureBlobAdapter::new()
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request("HEAD", &uri, &[("x-ms-version", AZURE_VERSION)], b"").await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(head.status(), StatusCode::OK);
+            assert_eq!(header_value(&head, "content-length"), Some("0"));
+            assert_eq!(header_value(&head, "etag"), Some(etag.as_str()));
+            assert_eq!(
+                storage.get_object("empty-commits", key).unwrap().data,
+                Vec::<u8>::new()
+            );
+            assert!(AzureBlobAdapter::new()
+                .load_committed_blocks(&storage, &session_key)
+                .unwrap()
+                .is_empty());
+            // Put Blob is the documented operation that discards staged blocks.
+            let replaced = AzureBlobAdapter::new()
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &uri,
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                        ],
+                        b"",
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(replaced.status(), StatusCode::CREATED);
+            assert!(AzureBlobAdapter::new()
+                .load_block_session(&storage, &session_key)
+                .unwrap()
+                .is_none());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn should_discard_block_upload_state_after_a_direct_blob_overwrite() {
         // Arrange
@@ -5525,6 +6201,207 @@ mod tests {
             storage.get_object("invalid-blocks", "report.txt"),
             Err(crate::error::Error::KeyNotFound)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::too_many_lines)] // One leased versioned fixture proves malformed XML has no publication or staging effects.
+    async fn should_reject_misplaced_azure_xml_declarations_without_mutating() {
+        // Arrange a current blob, prior history, an active lease, and an acknowledged staged block.
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        let container = "invalid-declarations";
+        storage.create_bucket(container.to_string()).unwrap();
+        storage.enable_versioning(container).unwrap();
+        storage
+            .update_bucket_metadata(
+                container,
+                HashMap::from([(AZURE_VERSIONING_KEY.to_string(), "true".to_string())]),
+            )
+            .unwrap();
+        let uri = format!("/devstoreaccount1/{container}/item");
+        for body in [b"historical".as_slice(), b"current".as_slice()] {
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &uri,
+                        &[
+                            ("x-ms-version", AZURE_VERSION),
+                            ("x-ms-blob-type", "BlockBlob"),
+                        ],
+                        body,
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+        let lease_id = "c7fbf6ab-6848-4b49-b4a9-168d816f6697";
+        acquire_azure_lease_for(&adapter, &storage, &uri, lease_id).await;
+        let headers = [("x-ms-version", AZURE_VERSION), ("x-ms-lease-id", lease_id)];
+        let staged = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=block&blockid=YQ=="),
+                    &headers,
+                    b"staged",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(staged.status(), StatusCode::CREATED);
+        let session_key = AzureBlobAdapter::blob_state_key("devstoreaccount1", container, "item");
+        let current = serde_json::to_value(storage.get_object(container, "item").unwrap()).unwrap();
+        let history = serde_json::to_value(
+            storage
+                .list_object_versions_for_key(container, "item")
+                .unwrap(),
+        )
+        .unwrap();
+        let session = serde_json::to_value(
+            adapter
+                .load_block_session(&storage, &session_key)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+
+        for body in [
+            "<BlockList/><?xml version=\"1.0\"?>",
+            "<?xml version=\"1.0\"?><?xml version=\"1.0\"?><BlockList/>",
+            "<BlockList><?xml version=\"1.0\"?></BlockList>",
+            "<!--before--><?xml version=\"1.0\"?><BlockList/>",
+            " \n<?xml version=\"1.0\"?><BlockList/>",
+            "<?xml?><BlockList/>",
+            "<?xml version='garbage'?><BlockList/>",
+            "<?xml encoding='utf-8'?><BlockList/>",
+            "<?xml version='1.0' standalone='garbage'?><BlockList/>",
+            "<?xml version='1.0' standalone='yes' encoding='utf-8'?><BlockList/>",
+            "<?xml version='1.0' version='1.0'?><BlockList/>",
+            "<?xml version='1.0' extra='unknown'?><BlockList/>",
+            "<?xml version='1.0' encoding='bad encoding'?><BlockList/>",
+            "<?xml version='1.0'encoding='utf-8'?><BlockList/>",
+            "<BlockList bogus=>",
+            "<BlockList bogus='one' bogus='two'/>",
+            "<BlockList xmlns='&unknown;'/>",
+            "<BlockList bogus='one'two='two'/>",
+            "<BlockList bogus='<bad>'/>",
+            "<!--bad--comment--><BlockList/>",
+            "<?XML version='1.0'?><BlockList/>",
+            "<BlockList bo@gus='x'/>",
+            "<BlockList bogus='\u{0}'/>",
+            "<!--\u{0}--><BlockList/>",
+            "<?fixture \u{0}?><BlockList/>",
+            "<?bo@gus allowed?><BlockList/>",
+            "<BlockList \u{b7}note='x'/>",
+            "<BlockList bogus='\u{fffe}'/>",
+            "<BlockList bogus='&#x1;'/>",
+            "<BlockList bogus='&#xB;'/>",
+            "<BlockList bogus='&#xFFFE;'/>",
+            "<BlockList bogus='&#65535;'/>",
+            "<BlockList>&#x1;</BlockList>",
+            "\u{a0}<BlockList/>",
+            "<BlockList/>\u{a0}",
+            "<BlockList/>\u{85}",
+            "<BlockList/>\u{2000}",
+            "&#x20;<BlockList/>",
+            "<BlockList/>&#x20;",
+        ] {
+            // Act with malformed XML and the correct lease, so protection cannot mask parsing defects.
+            let response = adapter
+                .handle(
+                    storage.clone(),
+                    auth_disabled(),
+                    parsed_request(
+                        "PUT",
+                        &format!("{uri}?comp=blocklist"),
+                        &headers,
+                        body.as_bytes(),
+                    )
+                    .await,
+                )
+                .await
+                .unwrap();
+
+            // Assert the native error and all captured state remain unchanged.
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(
+                header_value(&response, "x-ms-error-code"),
+                Some("InvalidXmlDocument"),
+                "{body}"
+            );
+            assert_eq!(
+                serde_json::to_value(storage.get_object(container, "item").unwrap()).unwrap(),
+                current,
+                "{body}"
+            );
+            assert_eq!(
+                serde_json::to_value(
+                    storage
+                        .list_object_versions_for_key(container, "item")
+                        .unwrap()
+                )
+                .unwrap(),
+                history,
+                "{body}"
+            );
+            assert_eq!(
+                serde_json::to_value(
+                    adapter
+                        .load_block_session(&storage, &session_key)
+                        .unwrap()
+                        .unwrap()
+                )
+                .unwrap(),
+                session,
+                "{body}"
+            );
+        }
+
+        // Act with a valid empty declaration-bearing document and then the retained block.
+        let empty = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=blocklist"),
+                    &headers,
+                    "\u{feff}<?xml version='1.0' encoding='utf-8' standalone='yes'?><!--valid--><?fixture allowed?><BlockList xmlns='urn:fixture' note='a&amp;b' éxtra='valid\u{fffd}' n·1='value' refs='&#x9;&#xFFFD;'>&#x9;&#x20;</BlockList>".as_bytes(),
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert_eq!(empty.status(), StatusCode::CREATED);
+        let restored = adapter
+            .handle(
+                storage.clone(),
+                auth_disabled(),
+                parsed_request(
+                    "PUT",
+                    &format!("{uri}?comp=blocklist"),
+                    &headers,
+                    b"<BlockList><Uncommitted>&#x59;Q==</Uncommitted></BlockList>",
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+
+        // Assert valid empties remain supported and malformed attempts preserved the staged bytes and lease.
+        assert_eq!(restored.status(), StatusCode::CREATED);
+        let blob = storage.get_object(container, "item").unwrap();
+        assert_eq!(blob.data, b"staged");
+        assert_eq!(AzureBlobAdapter::lease_id(&blob), Some(lease_id));
+        assert!(AzureBlobAdapter::has_active_lease(&blob));
     }
 
     #[tokio::test(flavor = "multi_thread")]
