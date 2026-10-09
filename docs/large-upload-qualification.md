@@ -15,7 +15,7 @@ SQRZL_BINARY_PROVENANCE=/tmp/sqrzl-measured-binary/build-provenance.json \
 SQRZL_RUN_LARGE_UPLOAD_QUALIFICATION=1 SQRZL_LARGE_UPLOAD_BYTES=1073741824 \
 SQRZL_SDK_ENFORCE_AUTH=1 SQRZL_SDK_PROVIDERS=s3,azure,gcs,oci \
 SQRZL_SDK_LANE=measured-upload \
-  .venv-sdk/bin/python -m pytest -q sdk-tests/test_large_upload_qualification.py
+  .venv-sdk/bin/python -u -m pytest -vv -s sdk-tests/test_large_upload_qualification.py
 .venv-sdk/bin/python scripts/validate_contract_evidence.py \
   --sdk-evidence target/sdk-evidence/measured-upload.json \
   --results-source-sha "$(git rev-parse HEAD)" \
@@ -46,6 +46,15 @@ calculates SHA256, performs a normal process stop/start against the same
 storage root, and repeats the complete bounded readback. Range requests
 avoid treating a buffered full-object download as a streaming guarantee.
 
+Measured SDK requests use one attempt so a failed transfer remains visible.
+The direct GCS media upload has an explicit zero-retry strategy and a 60-second
+bulk-send/read timeout, matching the main upload. Requests also applies the
+connect timeout during a contiguous body's `sendall`; a five-second value
+can expire while a 64 MiB chunk is still making progress on a debug build.
+OCI's no-retry strategy is configured before namespace discovery and covers
+its upload and control calls. These deadlines do not change payload sizes,
+resource budgets, or recovery and cleanup requirements.
+
 A separate incomplete session acknowledges its first 64 MiB part/chunk. The
 campaign instruments the official SDK transport **after preparation and
 signing**, sending identical file bytes and pausing the next 64 MiB request
@@ -72,6 +81,16 @@ UI health connections. Linux checks socket inodes and endpoint pairs in
 response cannot establish readiness. Failed startup reaps the attempted child
 and closes its log. Unexpected process exits fail the run and cannot be
 recorded as normal termination.
+
+The interrupted SDK worker must finish within 15 seconds after the prefix gate
+is released and must be joined before restoring its transport or restarting
+the service. A stuck worker fails the campaign, releases the reader, and kills
+and reaps only its owned service. Its daemon fallback prevents an unresponsive
+SDK thread from blocking interpreter shutdown; it cannot establish acceptance.
+The workflow streams test and phase progress, dumps Python thread stacks if a
+test lasts more than five minutes, and retains `measured-pytest.log` and the
+per-provider `campaign-progress/*.jsonl` files alongside the acceptance data.
+These diagnostic logs are separate from the validated resource measurements.
 
 GCS JSON uses the local bearer convenience credential. Native GCS V2 HMAC
 qualification runs separately in the SDK authentication lane; this resource
