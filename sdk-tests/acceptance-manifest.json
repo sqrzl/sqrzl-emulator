@@ -192,6 +192,54 @@
         ]
       }
     },
+    "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits": {
+      "provider": "azure",
+      "operations": [
+        "PutBlock",
+        "PutBlockList",
+        "GetBlockList",
+        "GetBlob",
+        "GetBlobProperties",
+        "PutBlob",
+        "DeleteBlob"
+      ],
+      "checks": [
+        "positive",
+        "boundary",
+        "condition",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Native empty block-list commits create or replace a zero-byte blob, stale ETag rejects without mutation, and subsequent PutBlob discards uncommitted blocks. Partial-list omitted-block retention is not qualified.",
+      "operation_checks": {
+        "PutBlock": [
+          "positive"
+        ],
+        "PutBlockList": [
+          "positive",
+          "boundary",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "GetBlockList": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ],
+        "GetBlobProperties": [
+          "positive"
+        ],
+        "PutBlob": [
+          "positive"
+        ],
+        "DeleteBlob": [
+          "positive"
+        ]
+      }
+    },
     "sdk-tests/test_azure_sdk.py::test_azure_native_page_blob_extent_and_range_mutation": {
       "provider": "azure",
       "operations": [
@@ -266,6 +314,54 @@
         ]
       }
     },
+    "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags": {
+      "provider": "azure",
+      "operations": [
+        "PutBlob",
+        "GetBlob",
+        "GetBlobProperties",
+        "PutPageBlob",
+        "PutPage",
+        "ClearPage"
+      ],
+      "checks": [
+        "positive",
+        "condition",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Same-byte BlockBlob writes revise ETag/version, stale GET/HEAD/write selectors fail natively, selected history remains readable; zero page writes and clears revise ETags. SDK normal restart is not asserted.",
+      "operation_checks": {
+        "PutBlob": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "GetBlob": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "GetBlobProperties": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "PutPageBlob": [
+          "positive"
+        ],
+        "PutPage": [
+          "positive"
+        ],
+        "ClearPage": [
+          "positive"
+        ]
+      }
+    },
     "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow": {
       "provider": "azure",
       "operations": [
@@ -294,6 +390,28 @@
         ]
       }
     },
+    "sdk-tests/test_email_sdk.py::test_acs_email_sdk_rejects_projected_capture_limit": {
+      "provider": "acs-email",
+      "operations": [
+        "SendEmail"
+      ],
+      "checks": [
+        "negative",
+        "boundary",
+        "native-error",
+        "positive"
+      ],
+      "auth_mode": "native-if-messaging-auth-lane",
+      "scope": "Projected local 64 MiB aggregate capture admission rejects fan-out through the official client, creates no first-recipient mailbox record, and permits a smaller subsequent capture. This is an admission bound, not measured RSS qualification.",
+      "operation_checks": {
+        "SendEmail": [
+          "negative",
+          "boundary",
+          "native-error",
+          "positive"
+        ]
+      }
+    },
     "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send": {
       "provider": "acs",
       "operations": [
@@ -310,6 +428,28 @@
           "positive"
         ],
         "EmailGetSendResult": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_rejects_projected_capture_limit": {
+      "provider": "sendgrid",
+      "operations": [
+        "SendMail"
+      ],
+      "checks": [
+        "negative",
+        "boundary",
+        "native-error",
+        "positive"
+      ],
+      "auth_mode": "native-if-messaging-auth-lane",
+      "scope": "Projected local 64 MiB aggregate capture admission rejects fan-out through the official client, creates no first-recipient mailbox record, and permits a smaller subsequent capture. This is an admission bound, not measured RSS qualification.",
+      "operation_checks": {
+        "SendMail": [
+          "negative",
+          "boundary",
+          "native-error",
           "positive"
         ]
       }
@@ -342,6 +482,28 @@
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
       "operation_checks": {
         "SendEmail": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_email_sdk.py::test_smtp_sdk_rejects_projected_capture_limit": {
+      "provider": "smtp",
+      "operations": [
+        "SMTPData"
+      ],
+      "checks": [
+        "negative",
+        "boundary",
+        "native-error",
+        "positive"
+      ],
+      "auth_mode": "local-smtp",
+      "scope": "Projected local 64 MiB aggregate capture admission rejects fan-out through the official client, creates no first-recipient mailbox record, and permits a smaller subsequent capture. This is an admission bound, not measured RSS qualification.",
+      "operation_checks": {
+        "SMTPData": [
+          "negative",
+          "boundary",
+          "native-error",
           "positive"
         ]
       }

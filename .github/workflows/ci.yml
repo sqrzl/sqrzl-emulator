@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Update Rust toolchain
         run: rustup update stable
@@ -47,7 +49,8 @@ jobs:
         run: cargo build --workspace --all-targets
 
       - name: Test
-        run: cargo test --workspace --all-targets --all-features
+        shell: bash
+        run: cargo test --workspace --all-targets --all-features 2>&1 | tee target/rust-contract-results.log
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -69,6 +72,12 @@ jobs:
       - name: SDK provenance boundary checks
         run: python sdk-tests/provenance_checks.py
 
+      - name: Contract evidence validator boundary checks
+        run: python -m unittest discover -s scripts -p 'test_contract_evidence.py'
+
+      - name: Measured campaign oracle checks
+        run: python sdk-tests/campaign_checks.py
+
       - name: Authenticated provider SDK tests
         env:
           SQRZL_SDK_ENFORCE_AUTH: "1"
@@ -83,12 +92,25 @@ jobs:
           SQRZL_SDK_LANE: messaging-auth
         run: python -m pytest sdk-tests/test_email_sdk.py sdk-tests/test_sms_sdk.py sdk-tests/test_messaging_acceptance.py
 
+      - name: Validate exact operation references and qualification results
+        run: |
+          python scripts/validate_contract_evidence.py \
+            --rust-results target/rust-contract-results.log \
+            --sdk-evidence target/sdk-evidence/functional.json \
+            --sdk-evidence target/sdk-evidence/storage-auth.json \
+            --sdk-evidence target/sdk-evidence/messaging-auth.json \
+            --results-source-sha "$(git rev-parse HEAD)" \
+            --output target/contract-acceptance.json
+
       - name: Preserve SDK qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: sdk-qualification-${{ github.sha }}
-          path: target/sdk-evidence/*.json
+          path: |
+            target/sdk-evidence/*.json
+            target/rust-contract-results.log
+            target/contract-acceptance.json
           retention-days: 14
 
   sdk-upgrade:
@@ -96,6 +118,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -141,6 +165,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -174,6 +200,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Build container image
         run: docker build -t sqrzl-emulator:smoke .

@@ -1,6 +1,12 @@
 name: Measured large upload qualification
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - sdk-tests/**
+      - scripts/**
+      - .github/workflows/large-upload-qualification.yml
   workflow_dispatch:
     inputs:
       providers:
@@ -27,9 +33,11 @@ jobs:
       SQRZL_MAX_REQUEST_BYTES: "134217728"
       SQRZL_SDK_ENFORCE_AUTH: "1"
       SQRZL_SDK_LANE: measured-upload
-      SQRZL_SDK_PROVIDERS: ${{ inputs.providers }}
+      SQRZL_SDK_PROVIDERS: ${{ inputs.providers || 's3,azure,gcs,oci' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -57,6 +65,12 @@ jobs:
           echo "SQRZL_BINARY_PROVENANCE=$PWD/target/measured-binary/build-provenance.json" >> "$GITHUB_ENV"
       - name: Measure selected 1 GiB workflows, readback and process recovery
         run: python -m pytest -q sdk-tests/test_large_upload_qualification.py
+      - name: Validate exact-source measured resource evidence
+        run: |
+          python scripts/validate_contract_evidence.py \
+            --sdk-evidence target/sdk-evidence/measured-upload.json \
+            --results-source-sha "$(git rev-parse HEAD)" \
+            --output target/measured-contract-acceptance.json
       - name: Preserve measured resource and recovery evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -65,4 +79,5 @@ jobs:
           path: |
             target/sdk-evidence/measured-upload.json
             target/measured-binary/build-provenance.json
+            target/measured-contract-acceptance.json
           retention-days: 30

@@ -18,9 +18,13 @@ SQRZL_SDK_LANE=measured-upload \
   .venv-sdk/bin/python -m pytest -q sdk-tests/test_large_upload_qualification.py
 ```
 
-The separate `Measured large upload qualification` workflow is manually
-triggered. Its provider selector records disabled providers as skipped gates;
-full four-provider acceptance requires all four tests to pass.
+The separate `Measured large upload qualification` workflow runs on pull
+requests that change the SDK harness or evidence validators, and can also be
+triggered manually. Its manual provider selector records disabled providers as
+skipped gates; full four-provider acceptance requires all four tests to pass.
+It checks out the exact pull-request head and retains the measured JSON, build
+manifest and mechanically validated operation evidence. The immutable build
+output directory must be new for each run.
 
 Each test writes dense, index-dependent bytes with a bounded 1 MiB generator
 and an independent SHA256 oracle. It uploads through official SDK operations,
@@ -86,3 +90,10 @@ build manifest; its existence alone does not count as a measured run. The
 requires the exact 1 GiB kind/size, completed=true, eligible=true, nonempty
 resource samples within budgets, two complete SHA256 readbacks, distinct normal
 and abrupt process events, acknowledged staging recovery and abort cleanup.
+
+The validator also recomputes peaks from the samples, checks their timing and
+PID coverage, links restart phases to reaped child-process events, and requires
+the configured 64 MiB parts and 8 MiB read ranges. A smaller successful preflight,
+a JUnit pass without measurements, or inconsistent cleanup/source records cannot
+qualify this scope. Artifact authors are trusted runners; these consistency
+checks are not cryptographic attestation or instantaneous OS resource limits.

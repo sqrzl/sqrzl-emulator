@@ -74,6 +74,14 @@ AWS SigV4 and ACS HMAC. A storage-auth pass does not establish messaging-auth
 coverage. ACS signing uses an explicitly local 15-minute freshness policy; the
 emulator does not claim ACS OAuth or RBAC parity.
 
+AWS header SigV4 validates timestamp, credential date/service, signed headers,
+access identity and payload hash before mutation. The allowed skew is fifteen
+minutes for S3 and five minutes for SES, SNS and SMS Voice v2. S3 presigned URLs
+respect their signed expiry and reject creation times over fifteen minutes in
+the future. S3 alone accepts `UNSIGNED-PAYLOAD`; a supplied SHA256 digest is
+checked against buffered or spooled bytes. Streaming signature chains and
+checksum trailers remain unsupported.
+
 Azure accepts service versions `2023-11-03`, `2025-01-05`, `2026-04-06`,
 `2026-06-06` and `2026-10-06`. Other well-formed versions receive an unsupported
 error; malformed versions are rejected. Service SAS uses HTTP localhost.
@@ -113,6 +121,9 @@ Measured large-upload campaigns have separate payload sizes, service/client
 RSS budgets, disk budgets, digest readback, restart/interruption and staging
 cleanup evidence. Routine functional or SDK smoke runs do not establish those
 resource bounds. See [large-upload qualification](large-upload-qualification.md).
+That separate workflow runs the selected four-provider 1 GiB scope when the
+qualification harness changes and on manual dispatch; routine CI retains the
+functional, native-auth and raw Rust results and validates exact references.
 
 ## Ownership and durability
 
