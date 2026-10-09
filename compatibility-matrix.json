@@ -1006,6 +1006,7 @@
             "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
           ]
         },
@@ -1036,9 +1037,7 @@
           "rust": [
             "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -1068,6 +1067,7 @@
             "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
           ]
         },
@@ -1127,9 +1127,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -1188,7 +1186,8 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows",
+            "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -1247,9 +1246,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -1308,7 +1305,10 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows",
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
+            "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object"
           ]
         },
         "acceptance_gates": {
@@ -1368,7 +1368,7 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_direct_put_native_checksums_and_rejection"
           ]
         },
         "acceptance_gates": {
@@ -1428,7 +1428,13 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_direct_put_native_checksums_and_rejection",
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
+            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
+            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
+            "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object"
           ]
         },
         "acceptance_gates": {
@@ -1488,6 +1494,7 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
           ]
         },
@@ -1548,7 +1555,11 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
+            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows",
+            "sdk-tests/test_s3_sdk.py::test_s3_direct_put_native_checksums_and_rejection",
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
           ]
         },
         "acceptance_gates": {
@@ -1608,7 +1619,9 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
+            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows",
+            "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -1668,7 +1681,7 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart"
           ]
         },
         "acceptance_gates": {
@@ -1728,7 +1741,7 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart"
           ]
         },
         "acceptance_gates": {
@@ -1765,9 +1778,11 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication"
           ]
         },
         "acceptance_gates": {
@@ -1804,9 +1819,7 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
           ]
         },
         "acceptance_gates": {
@@ -1843,9 +1856,11 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication"
           ]
         },
         "acceptance_gates": {
@@ -1882,9 +1897,7 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
           ]
         },
         "acceptance_gates": {
@@ -1921,8 +1934,6 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
             "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
           ]
         },
@@ -1960,6 +1971,8 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
+            "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
             "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
             "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
@@ -1999,9 +2012,9 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
           ]
         },
         "acceptance_gates": {
@@ -2038,9 +2051,9 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
           ]
         },
         "acceptance_gates": {
@@ -2077,9 +2090,9 @@
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
           ]
         },
         "acceptance_gates": {
@@ -2170,9 +2183,7 @@
             "storage::filesystem::tests::should_reject_unsafe_version_ids_without_aliasing_current_or_historical_data",
             "server::handlers::object::s3_contract_tests::should_not_alias_or_delete_version_data_given_unsafe_version_ids"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -2216,9 +2227,7 @@
             "storage::filesystem::tests::should_reject_unsafe_version_ids_without_aliasing_current_or_historical_data",
             "server::handlers::object::s3_contract_tests::should_not_alias_or_delete_version_data_given_unsafe_version_ids"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -2262,9 +2271,7 @@
             "storage::filesystem::tests::should_reject_unsafe_version_ids_without_aliasing_current_or_historical_data",
             "server::handlers::object::s3_contract_tests::should_not_alias_or_delete_version_data_given_unsafe_version_ids"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -2374,9 +2381,7 @@
             "storage::filesystem::tests::should_reject_unsafe_version_ids_without_aliasing_current_or_historical_data",
             "server::handlers::object::s3_contract_tests::should_not_alias_or_delete_version_data_given_unsafe_version_ids"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -2788,9 +2793,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -2848,9 +2851,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -2908,9 +2909,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -2968,9 +2967,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3028,9 +3025,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3088,9 +3083,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3148,9 +3141,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3208,9 +3199,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3268,9 +3257,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3328,9 +3315,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3388,9 +3373,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3449,7 +3432,7 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
           ]
         },
         "acceptance_gates": {
@@ -3509,7 +3492,7 @@
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_direct_put_native_checksums_and_rejection"
           ]
         },
         "acceptance_gates": {
@@ -3568,9 +3551,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3628,9 +3609,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3688,9 +3667,7 @@
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
             "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
           ],
-          "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -3934,7 +3911,7 @@
             "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object"
           ]
         },
         "acceptance_gates": {
@@ -3967,7 +3944,7 @@
             "interop_s3::should_round_trip_bucket_and_object_operations_given_basic_s3_requests_when_using_crud_flows"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication"
           ]
         },
         "acceptance_gates": {
@@ -4038,7 +4015,9 @@
             "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
           ]
         },
         "acceptance_gates": {
@@ -4076,7 +4055,8 @@
             "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
           ]
         },
         "acceptance_gates": {
@@ -4114,7 +4094,8 @@
             "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
+            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints"
           ]
         },
         "acceptance_gates": {
@@ -4151,9 +4132,7 @@
             "providers::tests::should_serialize_conflicting_azure_and_s3_protection_creation",
             "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation"
           ],
-          "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -4186,7 +4165,11 @@
             "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -4219,9 +4202,7 @@
             "interop_azure::should_page_azure_blob_prefixes_without_exposing_snapshot_storage_keys",
             "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -4280,8 +4261,15 @@
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
-            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
+            "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
+            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
+            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob"
           ]
         },
         "acceptance_gates": {
@@ -4341,8 +4329,16 @@
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
-            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
+            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
+            "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
+            "sdk-tests/test_azure_sdk.py::test_azure_native_page_blob_extent_and_range_mutation",
+            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
+            "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
+            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
+            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob"
           ]
         },
         "acceptance_gates": {
@@ -4375,7 +4371,8 @@
             "interop_azure::should_read_selected_azure_version_bytes_given_a_range_request"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
           ]
         },
         "acceptance_gates": {
@@ -4408,8 +4405,12 @@
             "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
-            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
+            "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
+            "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
           ]
         },
         "acceptance_gates": {
@@ -4469,7 +4470,12 @@
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
+            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+            "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
+            "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -4502,7 +4508,7 @@
             "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
           ]
         },
         "acceptance_gates": {
@@ -4543,7 +4549,11 @@
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow"
+            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
+            "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
+            "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
           ]
         },
         "acceptance_gates": {
@@ -4584,7 +4594,10 @@
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow"
+            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
+            "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
+            "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
           ]
         },
         "acceptance_gates": {
@@ -4625,7 +4638,10 @@
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow"
+            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
+            "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
           ]
         },
         "acceptance_gates": {
@@ -4690,7 +4706,9 @@
             "interop_azure::should_persist_append_and_page_blob_writes_given_specialized_blob_types_when_uploading_content",
             "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -4723,6 +4741,7 @@
             "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_native_page_blob_extent_and_range_mutation",
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
@@ -4757,6 +4776,7 @@
             "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_native_page_blob_extent_and_range_mutation",
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
@@ -4791,6 +4811,7 @@
             "interop_azure::should_require_real_blob_type_and_specialized_blob_creation_headers"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_native_page_blob_extent_and_range_mutation",
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
@@ -4882,9 +4903,7 @@
             "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
-          "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -4919,7 +4938,9 @@
             "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
             "interop_azure::should_not_apply_azure_subresource_mutations_given_stale_or_weak_conditions"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -4989,7 +5010,9 @@
             "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
             "interop_azure::should_not_apply_azure_subresource_mutations_given_stale_or_weak_conditions"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5091,7 +5114,9 @@
             "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
             "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5123,7 +5148,9 @@
             "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
             "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5155,7 +5182,9 @@
             "interop_azure::should_enforce_leases_and_retention_given_snapshot_and_immutability_operations_when_deleting_blob",
             "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5435,7 +5464,7 @@
             "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob"
           ]
         },
         "acceptance_gates": {
@@ -5467,6 +5496,7 @@
             "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow"
           ]
         },
@@ -5526,9 +5556,7 @@
             "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
-          "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -5563,7 +5591,7 @@
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
           ]
         },
         "acceptance_gates": {
@@ -5599,7 +5627,7 @@
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
           ]
         },
         "acceptance_gates": {
@@ -5634,9 +5662,7 @@
             "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5698,7 +5724,7 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
           ]
         },
         "acceptance_gates": {
@@ -5761,7 +5787,7 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
           ]
         },
         "acceptance_gates": {
@@ -5794,9 +5820,7 @@
             "provider_conformance::should_report_gcs_json_metadata_document_length_separately_from_object_size",
             "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5858,7 +5882,7 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
           ]
         },
         "acceptance_gates": {
@@ -5890,9 +5914,7 @@
             "interop_gcs::should_list_matching_objects_given_existing_keys_when_querying_gcs_bucket_contents",
             "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5935,9 +5957,7 @@
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -5972,7 +5992,8 @@
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
           ]
         },
         "acceptance_gates": {
@@ -6007,9 +6028,7 @@
             "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6052,9 +6071,7 @@
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6089,7 +6106,8 @@
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
           ]
         },
         "acceptance_gates": {
@@ -6122,7 +6140,8 @@
             "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -6156,7 +6175,9 @@
             "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -6218,9 +6239,7 @@
             "providers::gcs::tests::should_reject_invalid_gcs_json_media_x_goog_hash_without_mutation",
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6263,9 +6282,7 @@
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6327,7 +6344,9 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -6371,9 +6390,7 @@
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6417,7 +6434,8 @@
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -6458,7 +6476,8 @@
             "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
           ]
         },
         "acceptance_gates": {
@@ -6499,7 +6518,8 @@
             "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
           ]
         },
         "acceptance_gates": {
@@ -6540,7 +6560,7 @@
             "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
           ]
         },
         "acceptance_gates": {
@@ -6584,9 +6604,7 @@
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -6629,9 +6647,7 @@
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -6662,7 +6678,9 @@
             "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access",
             "providers::gcs::tests::should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6767,9 +6785,7 @@
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6836,6 +6852,7 @@
             "interop_oci::should_reject_oci_mutations_on_gcs_retained_bucket_without_committing"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
             "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
           ]
         },
@@ -6871,9 +6888,7 @@
             "interop_oci::should_inherit_and_validate_oci_storage_tiers",
             "interop_oci::should_reject_oci_mutations_on_gcs_retained_bucket_without_committing"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6907,9 +6922,7 @@
             "interop_oci::should_inherit_and_validate_oci_storage_tiers",
             "interop_oci::should_reject_oci_mutations_on_gcs_retained_bucket_without_committing"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6944,6 +6957,7 @@
             "interop_oci::should_reject_oci_mutations_on_gcs_retained_bucket_without_committing"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
             "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
           ]
         },
@@ -6995,7 +7009,9 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows",
+            "sdk-tests/test_storage_acceptance.py::test_oci_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_storage_auth_acceptance.py::test_oci_native_signature_error_preserves_object"
           ]
         },
         "acceptance_gates": {
@@ -7046,7 +7062,9 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
+            "sdk-tests/test_storage_acceptance.py::test_oci_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_storage_auth_acceptance.py::test_oci_native_signature_error_preserves_object"
           ]
         },
         "acceptance_gates": {
@@ -7079,6 +7097,7 @@
             "interop_oci::should_echo_oci_client_request_id_and_use_http_dates"
           ],
           "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
             "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
           ]
         },
@@ -7130,7 +7149,9 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
+            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows",
+            "sdk-tests/test_storage_acceptance.py::test_oci_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -7165,7 +7186,8 @@
             "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows",
+            "sdk-tests/test_storage_acceptance.py::test_oci_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -7203,8 +7225,8 @@
             "providers::oci::tests::should_upload_directly_and_in_parts_through_an_object_par"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
-            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
+            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
           ]
         },
         "acceptance_gates": {
@@ -7242,8 +7264,8 @@
             "providers::oci::tests::should_upload_directly_and_in_parts_through_an_object_par"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
-            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
+            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
           ]
         },
         "acceptance_gates": {
@@ -7281,8 +7303,8 @@
             "providers::oci::tests::should_upload_directly_and_in_parts_through_an_object_par"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
-            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
+            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
           ]
         },
         "acceptance_gates": {
@@ -7320,8 +7342,7 @@
             "providers::oci::tests::should_upload_directly_and_in_parts_through_an_object_par"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
-            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification"
           ]
         },
         "acceptance_gates": {
@@ -7358,10 +7379,7 @@
             "providers::oci::tests::should_reject_unsupported_oci_multipart_conditions_without_consuming_session",
             "providers::oci::tests::should_upload_directly_and_in_parts_through_an_object_par"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
-            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -7397,10 +7415,7 @@
             "providers::oci::tests::should_reject_unsupported_oci_multipart_conditions_without_consuming_session",
             "providers::oci::tests::should_upload_directly_and_in_parts_through_an_object_par"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow",
-            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -7450,7 +7465,7 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
           ]
         },
         "acceptance_gates": {
@@ -7500,9 +7515,7 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -7551,9 +7564,7 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -7603,7 +7614,7 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
           ]
         },
         "acceptance_gates": {
@@ -7654,7 +7665,7 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
           ]
         },
         "acceptance_gates": {
@@ -7705,7 +7716,7 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow"
           ]
         },
         "acceptance_gates": {
@@ -7755,9 +7766,7 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -7789,8 +7798,7 @@
             "interop_auth::should_reject_unsigned_oci_request_given_auth_enforced_when_request_is_missing_signature"
           ],
           "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows",
-            "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow"
+            "sdk-tests/test_storage_auth_acceptance.py::test_oci_native_signature_error_preserves_object"
           ]
         },
         "acceptance_gates": {
@@ -7824,7 +7832,7 @@
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
           ]
         },
         "acceptance_gates": {
@@ -7858,7 +7866,8 @@
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
+            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message",
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
           ]
         },
         "acceptance_gates": {
@@ -7892,8 +7901,9 @@
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
           "sdk": [
+            "sdk-tests/test_email_sdk.py::test_smtp_sdk_rejects_projected_capture_limit",
             "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message",
-            "sdk-tests/test_email_sdk.py::test_smtp_sdk_rejects_projected_capture_limit"
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
           ]
         },
         "acceptance_gates": {
@@ -7927,8 +7937,9 @@
             "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
           ],
           "sdk": [
+            "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_rejects_projected_capture_limit",
             "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send",
-            "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_rejects_projected_capture_limit"
+            "sdk-tests/test_messaging_acceptance.py::test_sendgrid_native_auth_and_attachment_error"
           ]
         },
         "acceptance_gates": {
@@ -7961,7 +7972,8 @@
             "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_ses_sdk_send"
+            "sdk-tests/test_email_sdk.py::test_ses_sdk_send",
+            "sdk-tests/test_messaging_acceptance.py::test_ses_native_auth_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -7995,8 +8007,9 @@
             "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
           ],
           "sdk": [
+            "sdk-tests/test_email_sdk.py::test_acs_email_sdk_rejects_projected_capture_limit",
             "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send",
-            "sdk-tests/test_email_sdk.py::test_acs_email_sdk_rejects_projected_capture_limit"
+            "sdk-tests/test_messaging_acceptance.py::test_acs_email_native_auth_repeatability_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -8064,7 +8077,7 @@
             "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send"
+            "sdk-tests/test_messaging_acceptance.py::test_acs_email_native_auth_repeatability_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -8098,6 +8111,7 @@
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
           "sdk": [
+            "sdk-tests/test_messaging_acceptance.py::test_acs_sms_native_auth_and_process_restart",
             "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk"
           ]
         },
@@ -8131,9 +8145,7 @@
             "sms::providers::tests::should_validate_acs_sms_options_and_repeatability_without_duplicate_capture",
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8165,9 +8177,7 @@
             "sms::providers::tests::should_validate_acs_sms_options_and_repeatability_without_duplicate_capture",
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8199,9 +8209,7 @@
             "sms::providers::tests::should_validate_acs_sms_options_and_repeatability_without_duplicate_capture",
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_azure_communication_sms_sdk"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8236,6 +8244,7 @@
             "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
           ],
           "sdk": [
+            "sdk-tests/test_messaging_acceptance.py::test_twilio_native_auth_and_body_boundary",
             "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
           ]
         },
@@ -8271,9 +8280,7 @@
             "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
             "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -8307,9 +8314,7 @@
             "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
             "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8343,9 +8348,7 @@
             "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
             "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8377,6 +8380,7 @@
             "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing"
           ],
           "sdk": [
+            "sdk-tests/test_messaging_acceptance.py::test_sns_native_auth_and_subject_boundary",
             "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish"
           ]
         },
@@ -8409,9 +8413,7 @@
             "sms::providers::tests::should_apply_sns_json_protocol_selection_and_reject_malformed_structures",
             "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8442,9 +8444,7 @@
             "sms::providers::tests::should_apply_sns_json_protocol_selection_and_reject_malformed_structures",
             "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8477,6 +8477,7 @@
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
           "sdk": [
+            "sdk-tests/test_messaging_acceptance.py::test_sms_voice_native_auth_and_destination_error",
             "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2"
           ]
         },
@@ -8544,9 +8545,7 @@
             "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing",
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8578,9 +8577,7 @@
             "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing",
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8638,7 +8635,7 @@
             "interop_gcs::should_return_requested_slice_given_range_header_when_reading_gcs_object_content"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
           ]
         },
         "acceptance_gates": {
@@ -8669,9 +8666,7 @@
             "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
             "interop_gcs::should_return_requested_slice_given_range_header_when_reading_gcs_object_content"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8710,9 +8705,7 @@
             "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
             "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
           ],
-          "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8744,9 +8737,7 @@
             "mail::smtp::tests::should_accept_the_rfc_5321_null_reverse_path",
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
-          "sdk": [
-            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8779,7 +8770,7 @@
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
           "sdk": [
-            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
           ]
         },
         "acceptance_gates": {
@@ -8812,9 +8803,7 @@
             "mail::smtp::tests::should_accept_the_rfc_5321_null_reverse_path",
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
-          "sdk": [
-            "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8846,9 +8835,7 @@
             "sms::providers::tests::should_claim_malformed_provider_requests_before_storage_routing",
             "sms::simulator::tests::should_render_provider_specific_event_batches"
           ],
-          "sdk": [
-            "sdk-tests/test_sms_sdk.py::test_boto3_sms_voice_v2"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8897,9 +8884,7 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8948,9 +8933,7 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8999,9 +8982,7 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -9050,9 +9031,7 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door"
           ],
-          "sdk": [
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
-          ]
+          "sdk": []
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -9114,7 +9093,8 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -9177,7 +9157,8 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
           ]
         },
         "acceptance_gates": {
@@ -9218,7 +9199,6 @@
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
             "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits"
           ]
         },
@@ -9253,6 +9233,7 @@
             "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
@@ -9287,6 +9268,7 @@
             "interop_azure::should_require_snapshot_delete_mode_and_preserve_base_on_only"
           ],
           "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags"
           ]
         },
@@ -9301,6 +9283,100 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
+        }
+      },
+      {
+        "id": "oci-object.GetObject.get.range",
+        "provider": "oci-object",
+        "family": "range_reads",
+        "operation": "GetObject",
+        "method": "GET",
+        "path": "/n/{namespace}/b/{bucket}/o/{object}",
+        "variant": "range",
+        "support_tier": "partial",
+        "boundary": "Native current-object single byte range; coherent generation read capped at 64 MiB per materialized response. Selected SDK ranges, including 8 MiB campaign readback, do not qualify whole-object reads above the local cap or multi-range responses.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::oci::tests::should_support_oci_range_reads"
+          ],
+          "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
+            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "gcs.QueryUpload.put.resumable-status",
+        "provider": "gcs",
+        "family": "resumable_upload",
+        "operation": "QueryUpload",
+        "method": "PUT",
+        "path": "/upload/resumable/{id}",
+        "variant": "resumable-status",
+        "support_tier": "partial",
+        "boundary": "Zero-byte PUT to a persisted JSON resumable session with Content-Range bytes */total queries the acknowledged offset: native308 plus Range while active, native404 after cancellation. Selected local bearer convenience; no XML initiation or native HMAC claim.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::gcs::tests::should_resume_and_complete_a_multi_chunk_resumable_upload"
+          ],
+          "sdk": [
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "s3-family.CompleteMultipartUpload.post.additional-checksum",
+        "provider": "s3-family",
+        "family": "multipart",
+        "operation": "CompleteMultipartUpload",
+        "method": "POST",
+        "path": "/{bucket}/{key}?uploadId={id}",
+        "variant": "additional-checksum",
+        "support_tier": "unsupported",
+        "boundary": "Additional-checksum fields in the completion manifest receive native501 NotImplemented before consuming the upload or replacing the object; selected SDK verifies uploaded parts remain available.",
+        "evidence_candidates": {
+          "rust": [
+            "server::handlers::object::s3_contract_tests::should_explicitly_reject_s3_multipart_checksums_without_mutating_uploads"
+          ],
+          "sdk": [
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "not-applicable",
+          "negative": "pending",
+          "boundary": "not-applicable",
+          "condition": "not-applicable",
+          "pages": "not-applicable",
+          "restart": "not-applicable",
+          "native-error": "pending",
+          "native-auth": "not-applicable",
+          "process-crash": "not-applicable",
+          "resources": "not-applicable"
         }
       }
     ],

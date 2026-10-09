@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope_policy": "Evidence is per selected operation. Normal restart, abrupt process termination, and measured resource campaigns are separate gates. No provider-wide support promotion.",
+  "scope_policy": "Evidence is per selected operation. Normal restart, abrupt process termination, and measured resource campaigns are separate gates. No provider-wide support promotion. Exact operation_ids join every selected SDK scope to matrix candidates; operation_id_aliases retain display-name mappings, and operation_id_checks restrict assertion categories per method/variant. Candidate links remain unproven until matching eligible evidence is reviewed; authentication modes are independent.",
   "api_versions": {
     "s3": "2006-03-01",
     "sns": "2010-03-31",
@@ -41,6 +41,40 @@
           "positive"
         ],
         "GetBlob": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.GetBlockList.get.default",
+        "azure-blob.PutBlock.put.default",
+        "azure-blob.PutBlockList.put.default"
+      ],
+      "operation_id_aliases": {
+        "PutBlock": [
+          "azure-blob.PutBlock.put.default"
+        ],
+        "PutBlockList": [
+          "azure-blob.PutBlockList.put.default"
+        ],
+        "GetBlockList": [
+          "azure-blob.GetBlockList.get.default"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.GetBlob.get.current": [
+          "positive"
+        ],
+        "azure-blob.GetBlockList.get.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlock.put.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlockList.put.default": [
           "positive"
         ]
       }
@@ -106,6 +140,120 @@
           "boundary",
           "native-error"
         ]
+      },
+      "operation_ids": [
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.GetBlob.get.snapshot",
+        "azure-blob.GetBlob.get.version",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlobProperties.head.snapshot",
+        "azure-blob.GetBlobProperties.head.version",
+        "azure-blob.GetBlockList.get.default",
+        "azure-blob.LeaseBlob.put.acquire",
+        "azure-blob.LeaseBlob.put.release",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.SetBlobMetadata.put.default",
+        "azure-blob.SnapshotBlob.put.create"
+      ],
+      "operation_id_aliases": {
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current",
+          "azure-blob.GetBlob.get.snapshot",
+          "azure-blob.GetBlob.get.version"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current",
+          "azure-blob.GetBlobProperties.head.snapshot",
+          "azure-blob.GetBlobProperties.head.version"
+        ],
+        "CreateSnapshot": [
+          "azure-blob.SnapshotBlob.put.create"
+        ],
+        "LeaseBlob": [
+          "azure-blob.LeaseBlob.put.acquire",
+          "azure-blob.LeaseBlob.put.release"
+        ],
+        "GetBlockList": [
+          "azure-blob.GetBlockList.get.default"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "SetBlobMetadata": [
+          "azure-blob.SetBlobMetadata.put.default"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.DeleteBlob.delete.current": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive",
+          "condition",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.GetBlob.get.snapshot": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.GetBlob.get.version": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.GetBlobProperties.head.snapshot": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.GetBlobProperties.head.version": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.GetBlockList.get.default": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.LeaseBlob.put.acquire": [
+          "positive"
+        ],
+        "azure-blob.LeaseBlob.put.release": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.SetBlobMetadata.put.default": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.SnapshotBlob.put.create": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract": {
@@ -117,7 +265,8 @@
         "GetBlobProperties",
         "ListBlobs",
         "PutBlock",
-        "PutBlockList"
+        "PutBlockList",
+        "GetBlob"
       ],
       "checks": [
         "positive"
@@ -144,6 +293,71 @@
           "positive"
         ],
         "PutBlockList": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.CreateContainer.put.default",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetContainerProperties.head.default",
+        "azure-blob.ListBlobs.get.flat",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.PutBlock.put.default",
+        "azure-blob.PutBlockList.put.default"
+      ],
+      "operation_id_aliases": {
+        "CreateContainer": [
+          "azure-blob.CreateContainer.put.default"
+        ],
+        "GetContainerProperties": [
+          "azure-blob.GetContainerProperties.head.default"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ],
+        "PutBlock": [
+          "azure-blob.PutBlock.put.default"
+        ],
+        "PutBlockList": [
+          "azure-blob.PutBlockList.put.default"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.CreateContainer.put.default": [
+          "positive"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive"
+        ],
+        "azure-blob.GetContainerProperties.head.default": [
+          "positive"
+        ],
+        "azure-blob.ListBlobs.get.flat": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive"
+        ],
+        "azure-blob.PutBlock.put.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlockList.put.default": [
           "positive"
         ]
       }
@@ -188,6 +402,68 @@
           "positive"
         ],
         "DeleteContainer": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.CreateContainer.put.default",
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.DeleteContainer.delete.default",
+        "azure-blob.GetBlob.get.range",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.ListBlobs.get.flat",
+        "azure-blob.ListContainers.get.default",
+        "azure-blob.PutBlob.put.BlockBlob"
+      ],
+      "operation_id_aliases": {
+        "CreateContainer": [
+          "azure-blob.CreateContainer.put.default"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.range"
+        ],
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ],
+        "ListContainers": [
+          "azure-blob.ListContainers.get.default"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ],
+        "DeleteContainer": [
+          "azure-blob.DeleteContainer.delete.default"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.CreateContainer.put.default": [
+          "positive"
+        ],
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive"
+        ],
+        "azure-blob.DeleteContainer.delete.default": [
+          "positive"
+        ],
+        "azure-blob.GetBlob.get.range": [
+          "positive"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive"
+        ],
+        "azure-blob.ListBlobs.get.flat": [
+          "positive"
+        ],
+        "azure-blob.ListContainers.get.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
           "positive"
         ]
       }
@@ -238,6 +514,64 @@
         "DeleteBlob": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlockList.get.default",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.PutBlock.put.default",
+        "azure-blob.PutBlockList.put.empty-list"
+      ],
+      "operation_id_aliases": {
+        "PutBlock": [
+          "azure-blob.PutBlock.put.default"
+        ],
+        "PutBlockList": [
+          "azure-blob.PutBlockList.put.empty-list"
+        ],
+        "GetBlockList": [
+          "azure-blob.GetBlockList.get.default"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive"
+        ],
+        "azure-blob.GetBlockList.get.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive"
+        ],
+        "azure-blob.PutBlock.put.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlockList.put.empty-list": [
+          "positive",
+          "boundary",
+          "condition",
+          "negative"
+        ]
       }
     },
     "sdk-tests/test_azure_sdk.py::test_azure_native_page_blob_extent_and_range_mutation": {
@@ -272,6 +606,43 @@
         "GetBlob": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.PutBlob.put.PageBlob",
+        "azure-blob.PutPage.put.clear",
+        "azure-blob.PutPage.put.update"
+      ],
+      "operation_id_aliases": {
+        "PutPageBlob": [
+          "azure-blob.PutBlob.put.PageBlob"
+        ],
+        "PutPage": [
+          "azure-blob.PutPage.put.update"
+        ],
+        "ClearPage": [
+          "azure-blob.PutPage.put.clear"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.GetBlob.get.current": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.PageBlob": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.PutPage.put.clear": [
+          "positive"
+        ],
+        "azure-blob.PutPage.put.update": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints": {
@@ -281,7 +652,8 @@
         "ListBlobs",
         "GetBlob",
         "GetContainerProperties",
-        "AppendBlock"
+        "AppendBlock",
+        "Authenticate(service SAS)"
       ],
       "checks": [
         "positive",
@@ -311,6 +683,66 @@
         ],
         "AppendBlock": [
           "positive"
+        ],
+        "Authenticate(service SAS)": [
+          "positive",
+          "negative",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.AppendBlock.put.default",
+        "azure-blob.Authenticate.http.service-sas",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.GetContainerProperties.head.default",
+        "azure-blob.ListBlobs.get.flat",
+        "azure-blob.PutBlob.put.BlockBlob"
+      ],
+      "operation_id_aliases": {
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ],
+        "GetContainerProperties": [
+          "azure-blob.GetContainerProperties.head.default"
+        ],
+        "AppendBlock": [
+          "azure-blob.AppendBlock.put.default"
+        ],
+        "Authenticate(service SAS)": [
+          "azure-blob.Authenticate.http.service-sas"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.AppendBlock.put.default": [
+          "positive"
+        ],
+        "azure-blob.Authenticate.http.service-sas": [
+          "positive",
+          "negative",
+          "native-auth"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive",
+          "negative",
+          "native-auth"
+        ],
+        "azure-blob.GetContainerProperties.head.default": [
+          "negative",
+          "native-auth"
+        ],
+        "azure-blob.ListBlobs.get.flat": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "negative",
+          "native-auth"
         ]
       }
     },
@@ -320,7 +752,8 @@
         "PutBlob",
         "GetBlob",
         "GetBlobProperties",
-        "PutPage"
+        "PutPage",
+        "PutPageBlob"
       ],
       "checks": [
         "positive",
@@ -351,18 +784,77 @@
         ],
         "PutPage": [
           "positive"
+        ],
+        "PutPageBlob": [
+          "positive"
         ]
       },
       "operation_ids": [
-        "azure-blob.PutBlob.put.BlockBlob",
-        "azure-blob.PutBlob.put.PageBlob",
-        "azure-blob.PutPage.put.update",
-        "azure-blob.PutPage.put.clear",
         "azure-blob.GetBlob.get.current",
         "azure-blob.GetBlob.get.version",
         "azure-blob.GetBlobProperties.head.current",
-        "azure-blob.GetBlobProperties.head.version"
-      ]
+        "azure-blob.GetBlobProperties.head.version",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.PutBlob.put.PageBlob",
+        "azure-blob.PutPage.put.clear",
+        "azure-blob.PutPage.put.update"
+      ],
+      "operation_id_aliases": {
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "PutPageBlob": [
+          "azure-blob.PutBlob.put.PageBlob"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current",
+          "azure-blob.GetBlob.get.version"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current",
+          "azure-blob.GetBlobProperties.head.version"
+        ],
+        "PutPage": [
+          "azure-blob.PutPage.put.update",
+          "azure-blob.PutPage.put.clear"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.GetBlob.get.current": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.GetBlob.get.version": [
+          "positive",
+          "condition"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.GetBlobProperties.head.version": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "condition",
+          "negative",
+          "native-error"
+        ],
+        "azure-blob.PutBlob.put.PageBlob": [
+          "positive"
+        ],
+        "azure-blob.PutPage.put.clear": [
+          "positive"
+        ],
+        "azure-blob.PutPage.put.update": [
+          "positive"
+        ]
+      }
     },
     "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow": {
       "provider": "azure",
@@ -370,10 +862,12 @@
         "PutBlock",
         "PutBlockList",
         "GetBlob",
-        "DeleteBlob"
+        "DeleteBlob",
+        "Authenticate(service SAS)"
       ],
       "checks": [
-        "positive"
+        "positive",
+        "native-auth"
       ],
       "auth_mode": "native-if-auth-lane",
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
@@ -388,6 +882,52 @@
           "positive"
         ],
         "DeleteBlob": [
+          "positive"
+        ],
+        "Authenticate(service SAS)": [
+          "positive",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.Authenticate.http.service-sas",
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.PutBlock.put.default",
+        "azure-blob.PutBlockList.put.default"
+      ],
+      "operation_id_aliases": {
+        "PutBlock": [
+          "azure-blob.PutBlock.put.default"
+        ],
+        "PutBlockList": [
+          "azure-blob.PutBlockList.put.default"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ],
+        "Authenticate(service SAS)": [
+          "azure-blob.Authenticate.http.service-sas"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.Authenticate.http.service-sas": [
+          "positive",
+          "native-auth"
+        ],
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive"
+        ],
+        "azure-blob.PutBlock.put.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlockList.put.default": [
           "positive"
         ]
       }
@@ -415,7 +955,20 @@
       },
       "operation_ids": [
         "acs.SendEmail.post.send"
-      ]
+      ],
+      "operation_id_aliases": {
+        "SendEmail": [
+          "acs.SendEmail.post.send"
+        ]
+      },
+      "operation_id_checks": {
+        "acs.SendEmail.post.send": [
+          "negative",
+          "boundary",
+          "native-error",
+          "positive"
+        ]
+      }
     },
     "sdk-tests/test_email_sdk.py::test_azure_communication_email_sdk_send": {
       "provider": "acs",
@@ -433,6 +986,26 @@
           "positive"
         ],
         "EmailGetSendResult": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "acs.GetSendStatus.get.poll",
+        "acs.SendEmail.post.send"
+      ],
+      "operation_id_aliases": {
+        "EmailSend": [
+          "acs.SendEmail.post.send"
+        ],
+        "EmailGetSendResult": [
+          "acs.GetSendStatus.get.poll"
+        ]
+      },
+      "operation_id_checks": {
+        "acs.GetSendStatus.get.poll": [
+          "positive"
+        ],
+        "acs.SendEmail.post.send": [
           "positive"
         ]
       }
@@ -460,7 +1033,20 @@
       },
       "operation_ids": [
         "sendgrid.Send.post.personalizations"
-      ]
+      ],
+      "operation_id_aliases": {
+        "Send": [
+          "sendgrid.Send.post.personalizations"
+        ]
+      },
+      "operation_id_checks": {
+        "sendgrid.Send.post.personalizations": [
+          "negative",
+          "boundary",
+          "native-error",
+          "positive"
+        ]
+      }
     },
     "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send": {
       "provider": "sendgrid",
@@ -474,6 +1060,19 @@
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
       "operation_checks": {
         "POST /v3/mail/send": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "sendgrid.Send.post.personalizations"
+      ],
+      "operation_id_aliases": {
+        "POST /v3/mail/send": [
+          "sendgrid.Send.post.personalizations"
+        ]
+      },
+      "operation_id_checks": {
+        "sendgrid.Send.post.personalizations": [
           "positive"
         ]
       }
@@ -490,6 +1089,19 @@
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
       "operation_checks": {
         "SendEmail": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "ses.SendEmail.post.Simple"
+      ],
+      "operation_id_aliases": {
+        "SendEmail": [
+          "ses.SendEmail.post.Simple"
+        ]
+      },
+      "operation_id_checks": {
+        "ses.SendEmail.post.Simple": [
           "positive"
         ]
       }
@@ -517,7 +1129,20 @@
       },
       "operation_ids": [
         "smtp.Data.smtp.default"
-      ]
+      ],
+      "operation_id_aliases": {
+        "Data": [
+          "smtp.Data.smtp.default"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.Data.smtp.default": [
+          "negative",
+          "boundary",
+          "native-error",
+          "positive"
+        ]
+      }
     },
     "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message": {
       "provider": "smtp",
@@ -539,6 +1164,29 @@
           "positive"
         ],
         "DATA": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "smtp.Data.smtp.default",
+        "smtp.Envelope.smtp.default"
+      ],
+      "operation_id_aliases": {
+        "MAIL": [
+          "smtp.Envelope.smtp.default"
+        ],
+        "RCPT": [
+          "smtp.Envelope.smtp.default"
+        ],
+        "DATA": [
+          "smtp.Data.smtp.default"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.Data.smtp.default": [
+          "positive"
+        ],
+        "smtp.Envelope.smtp.default": [
           "positive"
         ]
       }
@@ -577,6 +1225,59 @@
         "buckets.delete": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "gcs.CreateBucket.post.json",
+        "gcs.DeleteBucket.delete.json",
+        "gcs.DeleteObject.delete.json",
+        "gcs.GetObject.get.json-download-range",
+        "gcs.GetObject.get.json-metadata",
+        "gcs.InsertObject.post.json-multipart",
+        "gcs.ListObjects.get.json"
+      ],
+      "operation_id_aliases": {
+        "buckets.insert": [
+          "gcs.CreateBucket.post.json"
+        ],
+        "objects.insert": [
+          "gcs.InsertObject.post.json-multipart"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-metadata",
+          "gcs.GetObject.get.json-download-range"
+        ],
+        "objects.list": [
+          "gcs.ListObjects.get.json"
+        ],
+        "objects.delete": [
+          "gcs.DeleteObject.delete.json"
+        ],
+        "buckets.delete": [
+          "gcs.DeleteBucket.delete.json"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.CreateBucket.post.json": [
+          "positive"
+        ],
+        "gcs.DeleteBucket.delete.json": [
+          "positive"
+        ],
+        "gcs.DeleteObject.delete.json": [
+          "positive"
+        ],
+        "gcs.GetObject.get.json-download-range": [
+          "positive"
+        ],
+        "gcs.GetObject.get.json-metadata": [
+          "positive"
+        ],
+        "gcs.InsertObject.post.json-multipart": [
+          "positive"
+        ],
+        "gcs.ListObjects.get.json": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract": {
@@ -586,14 +1287,15 @@
         "PUT Object",
         "GET Object",
         "DELETE Object",
-        "DELETE Bucket"
+        "DELETE Bucket",
+        "Authenticate(V2 HMAC signed URL)"
       ],
       "checks": [
         "positive",
+        "native-auth",
         "negative",
-        "boundary",
         "native-error",
-        "native-auth"
+        "boundary"
       ],
       "auth_mode": "native-v2-hmac-official-signed-url-api",
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
@@ -620,6 +1322,77 @@
         "DELETE Bucket": [
           "positive",
           "native-auth"
+        ],
+        "Authenticate(V2 HMAC signed URL)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "gcs.Authenticate.http.v2-signed-url",
+        "gcs.CreateBucket.put.xml",
+        "gcs.DeleteBucket.delete.xml",
+        "gcs.DeleteObject.delete.xml",
+        "gcs.GetObject.get.xml",
+        "gcs.GetObject.get.xml-range",
+        "gcs.PutObject.put.xml"
+      ],
+      "operation_id_aliases": {
+        "PUT Bucket": [
+          "gcs.CreateBucket.put.xml"
+        ],
+        "PUT Object": [
+          "gcs.PutObject.put.xml"
+        ],
+        "GET Object": [
+          "gcs.GetObject.get.xml",
+          "gcs.GetObject.get.xml-range"
+        ],
+        "DELETE Object": [
+          "gcs.DeleteObject.delete.xml"
+        ],
+        "DELETE Bucket": [
+          "gcs.DeleteBucket.delete.xml"
+        ],
+        "Authenticate(V2 HMAC signed URL)": [
+          "gcs.Authenticate.http.v2-signed-url"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.Authenticate.http.v2-signed-url": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "gcs.CreateBucket.put.xml": [
+          "positive",
+          "native-auth"
+        ],
+        "gcs.DeleteBucket.delete.xml": [
+          "positive",
+          "native-auth"
+        ],
+        "gcs.DeleteObject.delete.xml": [
+          "positive",
+          "native-auth"
+        ],
+        "gcs.GetObject.get.xml": [
+          "positive",
+          "native-auth"
+        ],
+        "gcs.GetObject.get.xml-range": [
+          "positive",
+          "boundary",
+          "native-auth"
+        ],
+        "gcs.PutObject.put.xml": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
         ]
       }
     },
@@ -645,6 +1418,33 @@
         "objects.get": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "gcs.GetObject.get.json-download",
+        "gcs.InsertObject.post.json-resumable",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_id_aliases": {
+        "resumable.start": [
+          "gcs.InsertObject.post.json-resumable"
+        ],
+        "resumable.upload": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-download"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.GetObject.get.json-download": [
+          "positive"
+        ],
+        "gcs.InsertObject.post.json-resumable": [
+          "positive"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification": {
@@ -663,10 +1463,10 @@
       ],
       "checks": [
         "positive",
-        "range",
-        "restart",
         "resource",
         "interrupted-transfer",
+        "restart",
+        "range",
         "cleanup"
       ],
       "auth_mode": "native-shared-key",
@@ -715,6 +1515,95 @@
           "positive",
           "cleanup"
         ]
+      },
+      "operation_ids": [
+        "azure-blob.CreateContainer.put.default",
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.DeleteContainer.delete.default",
+        "azure-blob.GetBlob.get.range",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlockList.get.default",
+        "azure-blob.ListBlobs.get.flat",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.PutBlock.put.default",
+        "azure-blob.PutBlockList.put.default"
+      ],
+      "operation_id_aliases": {
+        "PutContainer": [
+          "azure-blob.CreateContainer.put.default"
+        ],
+        "PutBlock": [
+          "azure-blob.PutBlock.put.default"
+        ],
+        "PutBlockList": [
+          "azure-blob.PutBlockList.put.default"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "GetBlob(range)": [
+          "azure-blob.GetBlob.get.range"
+        ],
+        "GetBlockList": [
+          "azure-blob.GetBlockList.get.default"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ],
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ],
+        "DeleteContainer": [
+          "azure-blob.DeleteContainer.delete.default"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.CreateContainer.put.default": [
+          "positive"
+        ],
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive",
+          "cleanup"
+        ],
+        "azure-blob.DeleteContainer.delete.default": [
+          "positive",
+          "cleanup"
+        ],
+        "azure-blob.GetBlob.get.range": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "restart"
+        ],
+        "azure-blob.GetBlockList.get.default": [
+          "positive",
+          "restart",
+          "interrupted-transfer"
+        ],
+        "azure-blob.ListBlobs.get.flat": [
+          "positive",
+          "cleanup"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "cleanup"
+        ],
+        "azure-blob.PutBlock.put.default": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ],
+        "azure-blob.PutBlockList.put.default": [
+          "positive",
+          "resource"
+        ]
       }
     },
     "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification": {
@@ -732,10 +1621,10 @@
       ],
       "checks": [
         "positive",
-        "range",
-        "restart",
         "resource",
         "interrupted-transfer",
+        "restart",
+        "range",
         "cleanup"
       ],
       "auth_mode": "local-bearer-convenience",
@@ -779,6 +1668,86 @@
           "positive",
           "cleanup"
         ]
+      },
+      "operation_ids": [
+        "gcs.CancelUpload.delete.resumable",
+        "gcs.CreateBucket.post.json",
+        "gcs.DeleteBucket.delete.json",
+        "gcs.DeleteObject.delete.json",
+        "gcs.GetObject.get.json-download-range",
+        "gcs.GetObject.get.json-metadata",
+        "gcs.InsertObject.post.json-resumable",
+        "gcs.QueryUpload.put.resumable-status",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_id_aliases": {
+        "Bucket.insert": [
+          "gcs.CreateBucket.post.json"
+        ],
+        "Object.resumable-start": [
+          "gcs.InsertObject.post.json-resumable"
+        ],
+        "Object.resumable-chunk": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "Object.get(metadata)": [
+          "gcs.GetObject.get.json-metadata"
+        ],
+        "Object.get(media-range)": [
+          "gcs.GetObject.get.json-download-range"
+        ],
+        "Object.resumable-status": [
+          "gcs.QueryUpload.put.resumable-status"
+        ],
+        "Object.resumable-cancel": [
+          "gcs.CancelUpload.delete.resumable"
+        ],
+        "Object.delete": [
+          "gcs.DeleteObject.delete.json"
+        ],
+        "Bucket.delete": [
+          "gcs.DeleteBucket.delete.json"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.CancelUpload.delete.resumable": [
+          "positive",
+          "cleanup"
+        ],
+        "gcs.CreateBucket.post.json": [
+          "positive"
+        ],
+        "gcs.DeleteBucket.delete.json": [
+          "positive",
+          "cleanup"
+        ],
+        "gcs.DeleteObject.delete.json": [
+          "positive",
+          "cleanup"
+        ],
+        "gcs.GetObject.get.json-download-range": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "gcs.GetObject.get.json-metadata": [
+          "positive",
+          "restart"
+        ],
+        "gcs.InsertObject.post.json-resumable": [
+          "positive"
+        ],
+        "gcs.QueryUpload.put.resumable-status": [
+          "positive",
+          "restart",
+          "interrupted-transfer"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ]
       }
     },
     "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification": {
@@ -796,10 +1765,10 @@
       ],
       "checks": [
         "positive",
-        "range",
-        "restart",
         "resource",
         "interrupted-transfer",
+        "restart",
+        "range",
         "cleanup"
       ],
       "auth_mode": "native-rsa",
@@ -842,6 +1811,85 @@
           "positive",
           "cleanup"
         ]
+      },
+      "operation_ids": [
+        "oci-object.AbortMultipartUpload.delete.default",
+        "oci-object.CommitMultipartUpload.post.default",
+        "oci-object.CreateBucket.post.default",
+        "oci-object.CreateMultipartUpload.post.default",
+        "oci-object.DeleteBucket.delete.default",
+        "oci-object.DeleteObject.delete.default",
+        "oci-object.GetObject.get.range",
+        "oci-object.HeadObject.head.default",
+        "oci-object.UploadPart.put.default"
+      ],
+      "operation_id_aliases": {
+        "CreateBucket": [
+          "oci-object.CreateBucket.post.default"
+        ],
+        "CreateMultipartUpload": [
+          "oci-object.CreateMultipartUpload.post.default"
+        ],
+        "UploadPart": [
+          "oci-object.UploadPart.put.default"
+        ],
+        "CommitMultipartUpload": [
+          "oci-object.CommitMultipartUpload.post.default"
+        ],
+        "HeadObject": [
+          "oci-object.HeadObject.head.default"
+        ],
+        "GetObject(range)": [
+          "oci-object.GetObject.get.range"
+        ],
+        "AbortMultipartUpload": [
+          "oci-object.AbortMultipartUpload.delete.default"
+        ],
+        "DeleteObject": [
+          "oci-object.DeleteObject.delete.default"
+        ],
+        "DeleteBucket": [
+          "oci-object.DeleteBucket.delete.default"
+        ]
+      },
+      "operation_id_checks": {
+        "oci-object.AbortMultipartUpload.delete.default": [
+          "positive",
+          "cleanup"
+        ],
+        "oci-object.CommitMultipartUpload.post.default": [
+          "positive",
+          "resource"
+        ],
+        "oci-object.CreateBucket.post.default": [
+          "positive"
+        ],
+        "oci-object.CreateMultipartUpload.post.default": [
+          "positive"
+        ],
+        "oci-object.DeleteBucket.delete.default": [
+          "positive",
+          "cleanup"
+        ],
+        "oci-object.DeleteObject.delete.default": [
+          "positive",
+          "cleanup"
+        ],
+        "oci-object.GetObject.get.range": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "oci-object.HeadObject.head.default": [
+          "positive",
+          "restart"
+        ],
+        "oci-object.UploadPart.put.default": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ]
       }
     },
     "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification": {
@@ -861,10 +1909,10 @@
       ],
       "checks": [
         "positive",
-        "range",
-        "restart",
         "resource",
         "interrupted-transfer",
+        "restart",
+        "range",
         "cleanup"
       ],
       "auth_mode": "native-sigv4",
@@ -916,6 +1964,102 @@
           "positive",
           "cleanup"
         ]
+      },
+      "operation_ids": [
+        "s3-family.AbortMultipartUpload.delete.default",
+        "s3-family.CompleteMultipartUpload.post.ordered-parts",
+        "s3-family.CreateBucket.put.default",
+        "s3-family.CreateMultipartUpload.post.plain",
+        "s3-family.DeleteBucket.delete.empty",
+        "s3-family.DeleteObject.delete.current",
+        "s3-family.GetObject.get.range",
+        "s3-family.HeadObject.head.current",
+        "s3-family.ListMultipartUploads.get.default",
+        "s3-family.ListParts.get.default",
+        "s3-family.UploadPart.put.plain"
+      ],
+      "operation_id_aliases": {
+        "CreateBucket": [
+          "s3-family.CreateBucket.put.default"
+        ],
+        "CreateMultipartUpload": [
+          "s3-family.CreateMultipartUpload.post.plain"
+        ],
+        "UploadPart": [
+          "s3-family.UploadPart.put.plain"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.ordered-parts"
+        ],
+        "HeadObject": [
+          "s3-family.HeadObject.head.current"
+        ],
+        "GetObject(range)": [
+          "s3-family.GetObject.get.range"
+        ],
+        "ListParts": [
+          "s3-family.ListParts.get.default"
+        ],
+        "AbortMultipartUpload": [
+          "s3-family.AbortMultipartUpload.delete.default"
+        ],
+        "ListMultipartUploads": [
+          "s3-family.ListMultipartUploads.get.default"
+        ],
+        "DeleteObject": [
+          "s3-family.DeleteObject.delete.current"
+        ],
+        "DeleteBucket": [
+          "s3-family.DeleteBucket.delete.empty"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.AbortMultipartUpload.delete.default": [
+          "positive",
+          "cleanup"
+        ],
+        "s3-family.CompleteMultipartUpload.post.ordered-parts": [
+          "positive",
+          "resource"
+        ],
+        "s3-family.CreateBucket.put.default": [
+          "positive"
+        ],
+        "s3-family.CreateMultipartUpload.post.plain": [
+          "positive"
+        ],
+        "s3-family.DeleteBucket.delete.empty": [
+          "positive",
+          "cleanup"
+        ],
+        "s3-family.DeleteObject.delete.current": [
+          "positive",
+          "cleanup"
+        ],
+        "s3-family.GetObject.get.range": [
+          "positive",
+          "range",
+          "restart",
+          "resource"
+        ],
+        "s3-family.HeadObject.head.current": [
+          "positive",
+          "restart"
+        ],
+        "s3-family.ListMultipartUploads.get.default": [
+          "positive",
+          "cleanup"
+        ],
+        "s3-family.ListParts.get.default": [
+          "positive",
+          "restart",
+          "interrupted-transfer"
+        ],
+        "s3-family.UploadPart.put.plain": [
+          "positive",
+          "resource",
+          "interrupted-transfer"
+        ]
       }
     },
     "sdk-tests/test_messaging_acceptance.py::test_acs_email_native_auth_repeatability_and_process_restart": {
@@ -939,6 +2083,31 @@
           "negative",
           "condition",
           "restart",
+          "native-error",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "acs.SendEmail.post.repeatability",
+        "acs.SendEmail.post.send"
+      ],
+      "operation_id_aliases": {
+        "EmailSend": [
+          "acs.SendEmail.post.send",
+          "acs.SendEmail.post.repeatability"
+        ]
+      },
+      "operation_id_checks": {
+        "acs.SendEmail.post.repeatability": [
+          "positive",
+          "negative",
+          "condition",
+          "restart",
+          "native-error"
+        ],
+        "acs.SendEmail.post.send": [
+          "positive",
+          "negative",
           "native-error",
           "native-auth"
         ]
@@ -966,6 +2135,23 @@
           "native-error",
           "native-auth"
         ]
+      },
+      "operation_ids": [
+        "acs.SendSms.post.batch"
+      ],
+      "operation_id_aliases": {
+        "SmsSend": [
+          "acs.SendSms.post.batch"
+        ]
+      },
+      "operation_id_checks": {
+        "acs.SendSms.post.batch": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error",
+          "native-auth"
+        ]
       }
     },
     "sdk-tests/test_messaging_acceptance.py::test_sendgrid_native_auth_and_attachment_error": {
@@ -983,6 +2169,22 @@
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
       "operation_checks": {
         "POST /v3/mail/send": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "sendgrid.Send.post.personalizations"
+      ],
+      "operation_id_aliases": {
+        "POST /v3/mail/send": [
+          "sendgrid.Send.post.personalizations"
+        ]
+      },
+      "operation_id_checks": {
+        "sendgrid.Send.post.personalizations": [
           "positive",
           "negative",
           "native-error",
@@ -1012,6 +2214,23 @@
           "native-error",
           "native-auth"
         ]
+      },
+      "operation_ids": [
+        "ses.SendEmail.post.Simple"
+      ],
+      "operation_id_aliases": {
+        "SendEmail": [
+          "ses.SendEmail.post.Simple"
+        ]
+      },
+      "operation_id_checks": {
+        "ses.SendEmail.post.Simple": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error",
+          "native-auth"
+        ]
       }
     },
     "sdk-tests/test_messaging_acceptance.py::test_sms_voice_native_auth_and_destination_error": {
@@ -1034,18 +2253,38 @@
           "native-error",
           "native-auth"
         ]
+      },
+      "operation_ids": [
+        "aws-sms-voice-v2.SendTextMessage.post.JSON-target"
+      ],
+      "operation_id_aliases": {
+        "SendTextMessage": [
+          "aws-sms-voice-v2.SendTextMessage.post.JSON-target"
+        ]
+      },
+      "operation_id_checks": {
+        "aws-sms-voice-v2.SendTextMessage.post.JSON-target": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
       }
     },
     "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary": {
       "provider": "smtp",
       "operations": [
-        "DATA"
+        "DATA",
+        "NOOP",
+        "EHLO",
+        "MAIL",
+        "RCPT"
       ],
       "checks": [
         "positive",
         "negative",
-        "boundary",
-        "native-error"
+        "native-error",
+        "boundary"
       ],
       "auth_mode": "unauthenticated-smtp",
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
@@ -1053,8 +2292,64 @@
         "DATA": [
           "positive",
           "negative",
+          "native-error"
+        ],
+        "NOOP": [
+          "positive",
+          "negative",
           "boundary",
           "native-error"
+        ],
+        "EHLO": [
+          "positive"
+        ],
+        "MAIL": [
+          "positive"
+        ],
+        "RCPT": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "smtp.Data.smtp.default",
+        "smtp.Envelope.smtp.default",
+        "smtp.NOOP.smtp.command",
+        "smtp.Session.smtp.HELO-EHLO"
+      ],
+      "operation_id_aliases": {
+        "DATA": [
+          "smtp.Data.smtp.default"
+        ],
+        "NOOP": [
+          "smtp.NOOP.smtp.command"
+        ],
+        "EHLO": [
+          "smtp.Session.smtp.HELO-EHLO"
+        ],
+        "MAIL": [
+          "smtp.Envelope.smtp.default"
+        ],
+        "RCPT": [
+          "smtp.Envelope.smtp.default"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.Data.smtp.default": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "smtp.Envelope.smtp.default": [
+          "positive"
+        ],
+        "smtp.NOOP.smtp.command": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "smtp.Session.smtp.HELO-EHLO": [
+          "positive"
         ]
       }
     },
@@ -1080,6 +2375,23 @@
           "native-error",
           "native-auth"
         ]
+      },
+      "operation_ids": [
+        "sns.Publish.post.Query"
+      ],
+      "operation_id_aliases": {
+        "Publish": [
+          "sns.Publish.post.Query"
+        ]
+      },
+      "operation_id_checks": {
+        "sns.Publish.post.Query": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error",
+          "native-auth"
+        ]
       }
     },
     "sdk-tests/test_messaging_acceptance.py::test_twilio_native_auth_and_body_boundary": {
@@ -1098,6 +2410,23 @@
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
       "operation_checks": {
         "CreateMessage": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "twilio.CreateMessage.post.form"
+      ],
+      "operation_id_aliases": {
+        "CreateMessage": [
+          "twilio.CreateMessage.post.form"
+        ]
+      },
+      "operation_id_checks": {
+        "twilio.CreateMessage.post.form": [
           "positive",
           "negative",
           "boundary",
@@ -1148,6 +2477,68 @@
         "DeleteBucket": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "oci-object.CreateBucket.post.default",
+        "oci-object.DeleteBucket.delete.default",
+        "oci-object.DeleteObject.delete.default",
+        "oci-object.GetNamespace.get.default",
+        "oci-object.GetObject.get.range",
+        "oci-object.HeadObject.head.default",
+        "oci-object.ListObjects.get.default",
+        "oci-object.PutObject.put.default"
+      ],
+      "operation_id_aliases": {
+        "GetNamespace": [
+          "oci-object.GetNamespace.get.default"
+        ],
+        "CreateBucket": [
+          "oci-object.CreateBucket.post.default"
+        ],
+        "PutObject": [
+          "oci-object.PutObject.put.default"
+        ],
+        "HeadObject": [
+          "oci-object.HeadObject.head.default"
+        ],
+        "GetObject": [
+          "oci-object.GetObject.get.range"
+        ],
+        "ListObjects": [
+          "oci-object.ListObjects.get.default"
+        ],
+        "DeleteObject": [
+          "oci-object.DeleteObject.delete.default"
+        ],
+        "DeleteBucket": [
+          "oci-object.DeleteBucket.delete.default"
+        ]
+      },
+      "operation_id_checks": {
+        "oci-object.CreateBucket.post.default": [
+          "positive"
+        ],
+        "oci-object.DeleteBucket.delete.default": [
+          "positive"
+        ],
+        "oci-object.DeleteObject.delete.default": [
+          "positive"
+        ],
+        "oci-object.GetNamespace.get.default": [
+          "positive"
+        ],
+        "oci-object.GetObject.get.range": [
+          "positive"
+        ],
+        "oci-object.HeadObject.head.default": [
+          "positive"
+        ],
+        "oci-object.ListObjects.get.default": [
+          "positive"
+        ],
+        "oci-object.PutObject.put.default": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_oci_sdk.py::test_oci_multipart_workflow": {
@@ -1176,6 +2567,40 @@
         "GetObject": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "oci-object.CommitMultipartUpload.post.default",
+        "oci-object.CreateMultipartUpload.post.default",
+        "oci-object.GetObject.get.current",
+        "oci-object.UploadPart.put.default"
+      ],
+      "operation_id_aliases": {
+        "CreateMultipartUpload": [
+          "oci-object.CreateMultipartUpload.post.default"
+        ],
+        "UploadPart": [
+          "oci-object.UploadPart.put.default"
+        ],
+        "CommitMultipartUpload": [
+          "oci-object.CommitMultipartUpload.post.default"
+        ],
+        "GetObject": [
+          "oci-object.GetObject.get.current"
+        ]
+      },
+      "operation_id_checks": {
+        "oci-object.CommitMultipartUpload.post.default": [
+          "positive"
+        ],
+        "oci-object.CreateMultipartUpload.post.default": [
+          "positive"
+        ],
+        "oci-object.GetObject.get.current": [
+          "positive"
+        ],
+        "oci-object.UploadPart.put.default": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_oci_sdk.py::test_oci_preauthenticated_large_upload_workflow": {
@@ -1202,6 +2627,40 @@
           "positive"
         ],
         "DeletePreauthenticatedRequest": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "oci-object.CreatePreauthenticatedRequest.post.control",
+        "oci-object.DeletePreauthenticatedRequest.delete.control",
+        "oci-object.GetObject.get.PAR-read",
+        "oci-object.PutObject.put.PAR-write"
+      ],
+      "operation_id_aliases": {
+        "CreatePreauthenticatedRequest": [
+          "oci-object.CreatePreauthenticatedRequest.post.control"
+        ],
+        "PutObject(PAR)": [
+          "oci-object.PutObject.put.PAR-write"
+        ],
+        "GetObject(PAR)": [
+          "oci-object.GetObject.get.PAR-read"
+        ],
+        "DeletePreauthenticatedRequest": [
+          "oci-object.DeletePreauthenticatedRequest.delete.control"
+        ]
+      },
+      "operation_id_checks": {
+        "oci-object.CreatePreauthenticatedRequest.post.control": [
+          "positive"
+        ],
+        "oci-object.DeletePreauthenticatedRequest.delete.control": [
+          "positive"
+        ],
+        "oci-object.GetObject.get.PAR-read": [
+          "positive"
+        ],
+        "oci-object.PutObject.put.PAR-write": [
           "positive"
         ]
       }
@@ -1248,6 +2707,68 @@
         "DeleteBucket": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "s3-family.CreateBucket.put.default",
+        "s3-family.DeleteBucket.delete.empty",
+        "s3-family.DeleteObject.delete.current",
+        "s3-family.GetObject.get.range",
+        "s3-family.HeadObject.head.current",
+        "s3-family.ListBuckets.get.default",
+        "s3-family.ListObjects.get.v2",
+        "s3-family.PutObject.put.streamed"
+      ],
+      "operation_id_aliases": {
+        "CreateBucket": [
+          "s3-family.CreateBucket.put.default"
+        ],
+        "PutObject": [
+          "s3-family.PutObject.put.streamed"
+        ],
+        "HeadObject": [
+          "s3-family.HeadObject.head.current"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.range"
+        ],
+        "ListObjectsV2": [
+          "s3-family.ListObjects.get.v2"
+        ],
+        "ListBuckets": [
+          "s3-family.ListBuckets.get.default"
+        ],
+        "DeleteObject": [
+          "s3-family.DeleteObject.delete.current"
+        ],
+        "DeleteBucket": [
+          "s3-family.DeleteBucket.delete.empty"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CreateBucket.put.default": [
+          "positive"
+        ],
+        "s3-family.DeleteBucket.delete.empty": [
+          "positive"
+        ],
+        "s3-family.DeleteObject.delete.current": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.range": [
+          "positive"
+        ],
+        "s3-family.HeadObject.head.current": [
+          "positive"
+        ],
+        "s3-family.ListBuckets.get.default": [
+          "positive"
+        ],
+        "s3-family.ListObjects.get.v2": [
+          "positive"
+        ],
+        "s3-family.PutObject.put.streamed": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_s3_sdk.py::test_s3_direct_put_native_checksums_and_rejection": {
@@ -1280,6 +2801,43 @@
           "positive"
         ],
         "PutObjectTagging": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.GetObject.get.current",
+        "s3-family.HeadObject.head.current",
+        "s3-family.PutObject.put.additional-checksum",
+        "s3-family.tagging.put.object-put"
+      ],
+      "operation_id_aliases": {
+        "PutObject": [
+          "s3-family.PutObject.put.additional-checksum"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ],
+        "HeadObject": [
+          "s3-family.HeadObject.head.current"
+        ],
+        "PutObjectTagging": [
+          "s3-family.tagging.put.object-put"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.GetObject.get.current": [
+          "positive"
+        ],
+        "s3-family.HeadObject.head.current": [
+          "positive"
+        ],
+        "s3-family.PutObject.put.additional-checksum": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "s3-family.tagging.put.object-put": [
           "positive"
         ]
       }
@@ -1325,6 +2883,69 @@
         "CompleteMultipartUpload": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.ordered-parts",
+        "s3-family.CopyObject.put.copy",
+        "s3-family.CopyObject.put.metadata-replace",
+        "s3-family.CreateMultipartUpload.post.plain",
+        "s3-family.GetObject.get.current",
+        "s3-family.HeadObject.head.current",
+        "s3-family.PutObject.put.streamed",
+        "s3-family.UploadPart.put.plain"
+      ],
+      "operation_id_aliases": {
+        "PutObject": [
+          "s3-family.PutObject.put.streamed"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ],
+        "HeadObject": [
+          "s3-family.HeadObject.head.current"
+        ],
+        "CopyObject": [
+          "s3-family.CopyObject.put.copy",
+          "s3-family.CopyObject.put.metadata-replace"
+        ],
+        "CreateMultipartUpload": [
+          "s3-family.CreateMultipartUpload.post.plain"
+        ],
+        "UploadPart": [
+          "s3-family.UploadPart.put.plain"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.ordered-parts"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.ordered-parts": [
+          "positive"
+        ],
+        "s3-family.CopyObject.put.copy": [
+          "positive",
+          "boundary"
+        ],
+        "s3-family.CopyObject.put.metadata-replace": [
+          "positive",
+          "boundary"
+        ],
+        "s3-family.CreateMultipartUpload.post.plain": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive"
+        ],
+        "s3-family.HeadObject.head.current": [
+          "positive"
+        ],
+        "s3-family.PutObject.put.streamed": [
+          "positive",
+          "boundary"
+        ],
+        "s3-family.UploadPart.put.plain": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows": {
@@ -1337,7 +2958,10 @@
         "ListMultipartUploads",
         "CompleteMultipartUpload",
         "AbortMultipartUpload",
-        "ListObjectVersions"
+        "ListObjectVersions",
+        "GetObject",
+        "HeadObject",
+        "GetObjectTagging"
       ],
       "checks": [
         "positive"
@@ -1367,6 +2991,98 @@
           "positive"
         ],
         "ListObjectVersions": [
+          "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ],
+        "HeadObject": [
+          "positive"
+        ],
+        "GetObjectTagging": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.AbortMultipartUpload.delete.default",
+        "s3-family.CompleteMultipartUpload.post.ordered-parts",
+        "s3-family.CreateMultipartUpload.post.plain",
+        "s3-family.GetObject.get.current",
+        "s3-family.HeadObject.head.current",
+        "s3-family.ListMultipartUploads.get.default",
+        "s3-family.ListObjectVersions.get.default",
+        "s3-family.ListParts.get.default",
+        "s3-family.UploadPart.put.plain",
+        "s3-family.tagging.get.object-get",
+        "s3-family.versioning.put.put"
+      ],
+      "operation_id_aliases": {
+        "PutBucketVersioning": [
+          "s3-family.versioning.put.put"
+        ],
+        "CreateMultipartUpload": [
+          "s3-family.CreateMultipartUpload.post.plain"
+        ],
+        "UploadPart": [
+          "s3-family.UploadPart.put.plain"
+        ],
+        "ListParts": [
+          "s3-family.ListParts.get.default"
+        ],
+        "ListMultipartUploads": [
+          "s3-family.ListMultipartUploads.get.default"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.ordered-parts"
+        ],
+        "AbortMultipartUpload": [
+          "s3-family.AbortMultipartUpload.delete.default"
+        ],
+        "ListObjectVersions": [
+          "s3-family.ListObjectVersions.get.default"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ],
+        "HeadObject": [
+          "s3-family.HeadObject.head.current"
+        ],
+        "GetObjectTagging": [
+          "s3-family.tagging.get.object-get"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.AbortMultipartUpload.delete.default": [
+          "positive"
+        ],
+        "s3-family.CompleteMultipartUpload.post.ordered-parts": [
+          "positive"
+        ],
+        "s3-family.CreateMultipartUpload.post.plain": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive"
+        ],
+        "s3-family.HeadObject.head.current": [
+          "positive"
+        ],
+        "s3-family.ListMultipartUploads.get.default": [
+          "positive"
+        ],
+        "s3-family.ListObjectVersions.get.default": [
+          "positive"
+        ],
+        "s3-family.ListParts.get.default": [
+          "positive"
+        ],
+        "s3-family.UploadPart.put.plain": [
+          "positive"
+        ],
+        "s3-family.tagging.get.object-get": [
+          "positive"
+        ],
+        "s3-family.versioning.put.put": [
           "positive"
         ]
       }
@@ -1416,6 +3132,70 @@
         "AbortMultipartUpload": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "s3-family.AbortMultipartUpload.delete.default",
+        "s3-family.CompleteMultipartUpload.post.additional-checksum",
+        "s3-family.CreateMultipartUpload.post.additional-checksum",
+        "s3-family.CreateMultipartUpload.post.plain",
+        "s3-family.ListMultipartUploads.get.default",
+        "s3-family.ListParts.get.default",
+        "s3-family.UploadPart.put.additional-checksum",
+        "s3-family.UploadPart.put.plain"
+      ],
+      "operation_id_aliases": {
+        "CreateMultipartUpload": [
+          "s3-family.CreateMultipartUpload.post.plain",
+          "s3-family.CreateMultipartUpload.post.additional-checksum"
+        ],
+        "UploadPart": [
+          "s3-family.UploadPart.put.plain",
+          "s3-family.UploadPart.put.additional-checksum"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ],
+        "ListMultipartUploads": [
+          "s3-family.ListMultipartUploads.get.default"
+        ],
+        "ListParts": [
+          "s3-family.ListParts.get.default"
+        ],
+        "AbortMultipartUpload": [
+          "s3-family.AbortMultipartUpload.delete.default"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.AbortMultipartUpload.delete.default": [
+          "positive"
+        ],
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "s3-family.CreateMultipartUpload.post.additional-checksum": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "s3-family.CreateMultipartUpload.post.plain": [
+          "positive"
+        ],
+        "s3-family.ListMultipartUploads.get.default": [
+          "positive"
+        ],
+        "s3-family.ListParts.get.default": [
+          "positive"
+        ],
+        "s3-family.UploadPart.put.additional-checksum": [
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "s3-family.UploadPart.put.plain": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication": {
@@ -1423,7 +3203,9 @@
       "operations": [
         "CreateMultipartUpload",
         "UploadPart",
-        "CompleteMultipartUpload"
+        "CompleteMultipartUpload",
+        "GetObject",
+        "Authenticate(query SigV4)"
       ],
       "checks": [
         "positive",
@@ -1443,6 +3225,59 @@
         ],
         "CompleteMultipartUpload": [
           "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ],
+        "Authenticate(query SigV4)": [
+          "positive",
+          "negative",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.Authenticate.http.query-sigv4",
+        "s3-family.CompleteMultipartUpload.post.ordered-parts",
+        "s3-family.CreateMultipartUpload.post.plain",
+        "s3-family.GetObject.get.current",
+        "s3-family.UploadPart.put.plain"
+      ],
+      "operation_id_aliases": {
+        "CreateMultipartUpload": [
+          "s3-family.CreateMultipartUpload.post.plain"
+        ],
+        "UploadPart": [
+          "s3-family.UploadPart.put.plain"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.ordered-parts"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ],
+        "Authenticate(query SigV4)": [
+          "s3-family.Authenticate.http.query-sigv4"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.Authenticate.http.query-sigv4": [
+          "positive",
+          "negative",
+          "native-auth"
+        ],
+        "s3-family.CompleteMultipartUpload.post.ordered-parts": [
+          "positive"
+        ],
+        "s3-family.CreateMultipartUpload.post.plain": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive"
+        ],
+        "s3-family.UploadPart.put.plain": [
+          "positive",
+          "negative",
+          "native-auth"
         ]
       }
     },
@@ -1450,7 +3285,8 @@
       "provider": "s3",
       "operations": [
         "UploadPartCopy",
-        "CompleteMultipartUpload"
+        "CompleteMultipartUpload",
+        "GetObject"
       ],
       "checks": [
         "positive"
@@ -1462,6 +3298,36 @@
           "positive"
         ],
         "CompleteMultipartUpload": [
+          "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.ordered-parts",
+        "s3-family.GetObject.get.current",
+        "s3-family.UploadPartCopy.put.range"
+      ],
+      "operation_id_aliases": {
+        "UploadPartCopy": [
+          "s3-family.UploadPartCopy.put.range"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.ordered-parts"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.ordered-parts": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive"
+        ],
+        "s3-family.UploadPartCopy.put.range": [
           "positive"
         ]
       }
@@ -1478,6 +3344,19 @@
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
       "operation_checks": {
         "SmsSend": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "acs.SendSms.post.batch"
+      ],
+      "operation_id_aliases": {
+        "SmsSend": [
+          "acs.SendSms.post.batch"
+        ]
+      },
+      "operation_id_checks": {
+        "acs.SendSms.post.batch": [
           "positive"
         ]
       }
@@ -1500,6 +3379,26 @@
         "SendMediaMessage": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "aws-sms-voice-v2.SendMediaMessage.post.JSON-target",
+        "aws-sms-voice-v2.SendTextMessage.post.JSON-target"
+      ],
+      "operation_id_aliases": {
+        "SendTextMessage": [
+          "aws-sms-voice-v2.SendTextMessage.post.JSON-target"
+        ],
+        "SendMediaMessage": [
+          "aws-sms-voice-v2.SendMediaMessage.post.JSON-target"
+        ]
+      },
+      "operation_id_checks": {
+        "aws-sms-voice-v2.SendMediaMessage.post.JSON-target": [
+          "positive"
+        ],
+        "aws-sms-voice-v2.SendTextMessage.post.JSON-target": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_sms_sdk.py::test_boto3_sns_direct_publish": {
@@ -1514,6 +3413,19 @@
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
       "operation_checks": {
         "Publish": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "sns.Publish.post.Query"
+      ],
+      "operation_id_aliases": {
+        "Publish": [
+          "sns.Publish.post.Query"
+        ]
+      },
+      "operation_id_checks": {
+        "sns.Publish.post.Query": [
           "positive"
         ]
       }
@@ -1532,6 +3444,19 @@
         "CreateMessage": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "twilio.CreateMessage.post.form"
+      ],
+      "operation_id_aliases": {
+        "CreateMessage": [
+          "twilio.CreateMessage.post.form"
+        ]
+      },
+      "operation_id_checks": {
+        "twilio.CreateMessage.post.form": [
+          "positive"
+        ]
       }
     },
     "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart": {
@@ -1543,13 +3468,13 @@
         "DeleteBlob"
       ],
       "checks": [
-        "boundary",
+        "positive",
+        "negative",
         "condition",
         "native-error",
-        "negative",
-        "pages",
-        "positive",
-        "restart"
+        "restart",
+        "boundary",
+        "pages"
       ],
       "auth_mode": "native-if-auth-lane",
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
@@ -1574,6 +3499,48 @@
         "DeleteBlob": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.ListBlobs.get.flat",
+        "azure-blob.PutBlob.put.BlockBlob"
+      ],
+      "operation_id_aliases": {
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ],
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "azure-blob.ListBlobs.get.flat": [
+          "positive",
+          "boundary",
+          "pages"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ]
       }
     },
     "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart": {
@@ -1585,13 +3552,13 @@
         "objects.delete"
       ],
       "checks": [
-        "boundary",
+        "positive",
+        "negative",
         "condition",
         "native-error",
-        "negative",
-        "pages",
-        "positive",
-        "restart"
+        "restart",
+        "boundary",
+        "pages"
       ],
       "auth_mode": "local-bearer-or-anonymous-convenience",
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
@@ -1616,6 +3583,53 @@
         "objects.delete": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "gcs.DeleteObject.delete.json",
+        "gcs.GetObject.get.json-download",
+        "gcs.GetObject.get.json-metadata",
+        "gcs.InsertObject.post.json-multipart",
+        "gcs.ListObjects.get.json"
+      ],
+      "operation_id_aliases": {
+        "objects.insert": [
+          "gcs.InsertObject.post.json-multipart"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-metadata",
+          "gcs.GetObject.get.json-download"
+        ],
+        "objects.list": [
+          "gcs.ListObjects.get.json"
+        ],
+        "objects.delete": [
+          "gcs.DeleteObject.delete.json"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.DeleteObject.delete.json": [
+          "positive"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "gcs.GetObject.get.json-metadata": [
+          "positive"
+        ],
+        "gcs.InsertObject.post.json-multipart": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ],
+        "gcs.ListObjects.get.json": [
+          "positive",
+          "boundary",
+          "pages"
+        ]
       }
     },
     "sdk-tests/test_storage_acceptance.py::test_oci_object_pages_conditions_and_process_restart": {
@@ -1627,13 +3641,13 @@
         "DeleteObject"
       ],
       "checks": [
-        "boundary",
+        "positive",
+        "negative",
         "condition",
         "native-error",
-        "negative",
-        "pages",
-        "positive",
-        "restart"
+        "restart",
+        "boundary",
+        "pages"
       ],
       "auth_mode": "native-if-auth-lane",
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
@@ -1658,6 +3672,48 @@
         "DeleteObject": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "oci-object.DeleteObject.delete.default",
+        "oci-object.GetObject.get.current",
+        "oci-object.ListObjects.get.default",
+        "oci-object.PutObject.put.default"
+      ],
+      "operation_id_aliases": {
+        "PutObject": [
+          "oci-object.PutObject.put.default"
+        ],
+        "GetObject": [
+          "oci-object.GetObject.get.current"
+        ],
+        "ListObjects": [
+          "oci-object.ListObjects.get.default"
+        ],
+        "DeleteObject": [
+          "oci-object.DeleteObject.delete.default"
+        ]
+      },
+      "operation_id_checks": {
+        "oci-object.DeleteObject.delete.default": [
+          "positive"
+        ],
+        "oci-object.GetObject.get.current": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "oci-object.ListObjects.get.default": [
+          "positive",
+          "boundary",
+          "pages"
+        ],
+        "oci-object.PutObject.put.default": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ]
       }
     },
     "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart": {
@@ -1669,13 +3725,13 @@
         "DeleteObject"
       ],
       "checks": [
-        "boundary",
+        "positive",
+        "negative",
         "condition",
         "native-error",
-        "negative",
-        "pages",
-        "positive",
-        "restart"
+        "restart",
+        "boundary",
+        "pages"
       ],
       "auth_mode": "native-if-auth-lane",
       "scope": "Selected operations only; categories apply as listed in operation_checks.",
@@ -1700,13 +3756,56 @@
         "DeleteObject": [
           "positive"
         ]
+      },
+      "operation_ids": [
+        "s3-family.DeleteObject.delete.current",
+        "s3-family.GetObject.get.current",
+        "s3-family.ListObjects.get.v2",
+        "s3-family.PutObject.put.streamed"
+      ],
+      "operation_id_aliases": {
+        "PutObject": [
+          "s3-family.PutObject.put.streamed"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ],
+        "ListObjectsV2": [
+          "s3-family.ListObjects.get.v2"
+        ],
+        "DeleteObject": [
+          "s3-family.DeleteObject.delete.current"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.DeleteObject.delete.current": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive",
+          "negative",
+          "restart",
+          "native-error"
+        ],
+        "s3-family.ListObjects.get.v2": [
+          "positive",
+          "boundary",
+          "pages"
+        ],
+        "s3-family.PutObject.put.streamed": [
+          "positive",
+          "negative",
+          "condition",
+          "native-error"
+        ]
       }
     },
     "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob": {
       "provider": "azure",
       "operations": [
         "PutBlob",
-        "GetBlob"
+        "GetBlob",
+        "Authenticate(native signature)"
       ],
       "checks": [
         "positive",
@@ -1726,6 +3825,46 @@
         "GetBlob": [
           "positive",
           "native-auth"
+        ],
+        "Authenticate(native signature)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.Authenticate.http.shared-key",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.PutBlob.put.BlockBlob"
+      ],
+      "operation_id_aliases": {
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ],
+        "Authenticate(native signature)": [
+          "azure-blob.Authenticate.http.shared-key"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.Authenticate.http.shared-key": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive",
+          "native-auth"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
         ]
       }
     },
@@ -1733,7 +3872,8 @@
       "provider": "oci",
       "operations": [
         "PutObject",
-        "GetObject"
+        "GetObject",
+        "Authenticate(native signature)"
       ],
       "checks": [
         "positive",
@@ -1752,6 +3892,46 @@
         ],
         "GetObject": [
           "positive",
+          "native-auth"
+        ],
+        "Authenticate(native signature)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "oci-object.Authenticate.http.rsa-sha256",
+        "oci-object.GetObject.get.current",
+        "oci-object.PutObject.put.default"
+      ],
+      "operation_id_aliases": {
+        "PutObject": [
+          "oci-object.PutObject.put.default"
+        ],
+        "GetObject": [
+          "oci-object.GetObject.get.current"
+        ],
+        "Authenticate(native signature)": [
+          "oci-object.Authenticate.http.rsa-sha256"
+        ]
+      },
+      "operation_id_checks": {
+        "oci-object.Authenticate.http.rsa-sha256": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "oci-object.GetObject.get.current": [
+          "positive",
+          "native-auth"
+        ],
+        "oci-object.PutObject.put.default": [
+          "positive",
+          "negative",
+          "native-error",
           "native-auth"
         ]
       }
@@ -1760,7 +3940,8 @@
       "provider": "s3",
       "operations": [
         "PutObject",
-        "GetObject"
+        "GetObject",
+        "Authenticate(native signature)"
       ],
       "checks": [
         "positive",
@@ -1779,6 +3960,46 @@
         ],
         "GetObject": [
           "positive",
+          "native-auth"
+        ],
+        "Authenticate(native signature)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.Authenticate.http.header-sigv4",
+        "s3-family.GetObject.get.current",
+        "s3-family.PutObject.put.streamed"
+      ],
+      "operation_id_aliases": {
+        "PutObject": [
+          "s3-family.PutObject.put.streamed"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ],
+        "Authenticate(native signature)": [
+          "s3-family.Authenticate.http.header-sigv4"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.Authenticate.http.header-sigv4": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive",
+          "native-auth"
+        ],
+        "s3-family.PutObject.put.streamed": [
+          "positive",
+          "negative",
+          "native-error",
           "native-auth"
         ]
       }
