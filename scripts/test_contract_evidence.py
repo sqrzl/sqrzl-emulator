@@ -164,7 +164,26 @@ def resource_result(provider="s3"):
         samples.append(
             dict(
                 elapsed_seconds=elapsed,
-                phase="generation" if elapsed < 0.3 else "bounded-range-checksum",
+                phase=(
+                    "generation"
+                    if elapsed < 0.3
+                    else {
+                        "s3": "multipart-upload",
+                        "azure": "block-upload",
+                        "gcs": "resumable-upload",
+                        "oci": "multipart-upload",
+                    }[provider]
+                    if elapsed < 1.0
+                    else "bounded-range-checksum"
+                    if elapsed < 1.4
+                    else "normal-restart"
+                    if elapsed < 1.5
+                    else "bounded-range-checksum"
+                    if elapsed < 2.5
+                    else "interrupted-transport"
+                    if elapsed < 3.1
+                    else "staging-recovery"
+                ),
                 client_rss_bytes=67_108_864,
                 service_pid=pid,
                 service_rss_bytes=33_554_432 if pid else None,
@@ -284,6 +303,41 @@ def source_lane():
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_should_reject_missing_client_or_one_live_service_rss_measurement(self):
+        for resource in ("client_rss_bytes", "service_rss_bytes"):
+            with self.subTest(resource=resource):
+                result = resource_result()
+                result["properties"]["large_upload_campaign"]["samples"][10][resource] = None
+                self.assertEqual(sdk_result_outcome(result), "scope-unqualified")
+
+    def test_should_require_upload_and_both_readback_measurements(self):
+        for start, end in ((0.3, 1.0), (1.0, 1.4), (1.5, 2.5)):
+            with self.subTest(window=(start, end)):
+                result = resource_result()
+                for sample in result["properties"]["large_upload_campaign"]["samples"]:
+                    if start <= sample["elapsed_seconds"] <= end:
+                        sample["phase"] = "unmeasured-operation"
+                self.assertEqual(sdk_result_outcome(result), "scope-unqualified")
+
+    def test_should_require_recovery_measurements_when_recovery_outlasts_sampling_slack(self):
+        result = resource_result()
+        for sample in result["properties"]["large_upload_campaign"]["samples"]:
+            if sample["elapsed_seconds"] >= 3.1:
+                sample["phase"] = "interrupted-transport"
+        self.assertEqual(sdk_result_outcome(result), "scope-unqualified")
+
+    def test_should_accept_timed_short_recovery_between_resource_samples(self):
+        for provider in ("s3", "azure", "gcs", "oci"):
+            with self.subTest(provider=provider):
+                result = resource_result(provider)
+                campaign = result["properties"]["large_upload_campaign"]
+                campaign["phases"][8]["elapsed_seconds"] = 3.12
+                campaign["phases"][9]["elapsed_seconds"] = 3.14
+                campaign["elapsed_seconds"] = 3.15
+                campaign["samples"] = [s for s in campaign["samples"] if s["elapsed_seconds"] <= 3.0]
+                campaign["sample_count"] = len(campaign["samples"])
+                self.assertEqual(sdk_result_outcome(result), "passed")
+
     def test_should_not_restore_resource_proof_from_passing_junit(self):
         node = resource_result()["test"]
         self.assertEqual(sdk_junit_outcome(node, "passed", {}), "scope-unqualified")

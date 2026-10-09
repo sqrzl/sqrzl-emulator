@@ -171,6 +171,7 @@ class Campaign:
         self.stop_event = threading.Event()
         self.started = time.monotonic()
         self._phase = "generation"
+        self._intentional_stops = {}
         self.thread = threading.Thread(
             target=self._sample, name="qualification-resource-sampler", daemon=True
         )
@@ -201,13 +202,38 @@ class Campaign:
                 if elapsed - last_disk >= 0.25:
                     owned_disk = disk_bytes(self.roots)
                     last_disk = elapsed
+                phase = self._phase
+                elapsed = time.monotonic() - self.started
+                client_rss = rss_bytes(os.getpid())
+                if client_rss is None or client_rss <= 0:
+                    raise RuntimeError("Client RSS measurement is missing")
+                # Capture the process object once: a concurrent stop/start must
+                # never label the new child's RSS with the previous child's PID.
+                process = self.runtime.process
+                pid = process.pid if process and process.poll() is None else None
+                service_rss = rss_bytes(pid) if pid is not None else None
+                if pid is not None and (service_rss is None or service_rss <= 0):
+                    if process.poll() is None:
+                        raise RuntimeError(
+                            f"Live service RSS measurement is missing for PID {pid}"
+                        )
+                    # The captured child exited during the syscall. Do not look
+                    # up runtime.process again; it may already be a new child.
+                    pid, service_rss = None, None
+                if pid is None:
+                    transition = self._intentional_stops.get(process.pid) if process else None
+                    if process is None and phase in ("normal-restart", "interrupted-transport"):
+                        transition = phase
+                    if transition is None:
+                        raise RuntimeError(f"Service process is absent during {phase}")
+                    phase = transition
                 self.samples.append(
                     {
                         "elapsed_seconds": round(elapsed, 3),
-                        "phase": self._phase,
-                        "client_rss_bytes": rss_bytes(os.getpid()),
-                        "service_pid": self.runtime.process_pid,
-                        "service_rss_bytes": rss_bytes(self.runtime.process_pid),
+                        "phase": phase,
+                        "client_rss_bytes": client_rss,
+                        "service_pid": pid,
+                        "service_rss_bytes": service_rss,
                         "owned_disk_bytes": owned_disk,
                     }
                 )
@@ -268,6 +294,7 @@ class Campaign:
     def restart(self):
         self.phase("normal-restart")
         old = self.runtime.process_pid
+        self._intentional_stops[old] = "normal-restart"
         new = self.settings.restart(kill=False)
         assert new != old
         self.checkpoint("normal-process-restart", previous_pid=old, new_pid=new)
@@ -327,6 +354,7 @@ class Campaign:
                         0 < size < reader.length for _, size in partial
                     ), "no partial request spool observed before interruption"
                     old = self.runtime.process_pid
+                    self._intentional_stops[old] = "interrupted-transport"
                     self.runtime.stop(kill=True)
                     self.checkpoint(
                         "abrupt-process-stop-during-transfer",
@@ -383,6 +411,7 @@ class Campaign:
             new_pid=new,
             request_spool_cleanup=True,
         )
+        self.phase("staging-recovery")
 
     def assert_cleanup(self):
         storage = self.settings.storage_dir

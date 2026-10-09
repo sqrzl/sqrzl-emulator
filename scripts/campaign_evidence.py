@@ -266,8 +266,15 @@ def campaign_rejection_reason(node: str, c: dict) -> str | None:
             return "invalid resource measurement sample"
         pid, rss = sample.get("service_pid"), sample.get("service_rss_bytes")
         if (
-            pid is not None and (not integer(pid, 1) or pid not in (old, middle, new))
-        ) or (rss is not None and (not integer(rss, 1) or pid is None)):
+            pid is not None
+            and (not integer(pid, 1) or pid not in (old, middle, new) or not integer(rss, 1))
+        ) or (
+            pid is None
+            and (
+                rss is not None
+                or sample["phase"] not in ("normal-restart", "interrupted-transport")
+            )
+        ):
             return "service measurements do not refer to the campaign processes"
         if rss is not None:
             sampled_pids.add(pid)
@@ -281,6 +288,36 @@ def campaign_rejection_reason(node: str, c: dict) -> str | None:
         or not {old, middle} <= sampled_pids
     ):
         return "sample series does not cover upload and normal restart readback"
+    upload_phase = {
+        "s3": "multipart-upload",
+        "azure": "block-upload",
+        "gcs": "resumable-upload",
+        "oci": "multipart-upload",
+    }[provider]
+    windows = [
+        (generated, committed, old, upload_phase),
+        (committed, first, old, "bounded-range-checksum"),
+        (normal, second, middle, "bounded-range-checksum"),
+        (restarted, cleanup, new, "staging-recovery"),
+    ]
+    for start, end, pid, phase in windows:
+        if any(
+            sample["service_pid"] == pid
+            and sample["phase"] == phase
+            and start["elapsed_seconds"] <= sample["elapsed_seconds"] <= end["elapsed_seconds"]
+            for sample in samples
+        ):
+            continue
+        # Native recovery/abort checks may finish between scheduled samples.
+        # Their bounded timing still demonstrates coverage; longer recovery
+        # must include measured client/service RSS from the restarted child.
+        slack = max(0.25, 3 * c["rss_sample_interval_seconds"])
+        if (
+            phase == "staging-recovery"
+            and end["elapsed_seconds"] - start["elapsed_seconds"] <= slack
+        ):
+            continue
+        return f"resource samples do not cover {phase} for PID {pid}"
     for resource in ("client_rss", "service_rss", "owned_disk"):
         peak = max(sample.get(resource + "_bytes") or 0 for sample in samples)
         declared, budget = c.get(resource + "_peak_bytes"), c.get(
