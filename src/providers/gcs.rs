@@ -1726,8 +1726,9 @@ impl GcsAdapter {
             ));
         };
         if let Some(token) = authorization.strip_prefix("Bearer ") {
-            if config.gcs_hmac_secret() == Some(token) || config.gcs_hmac_access_id() == Some(token)
-            {
+            // This is the documented local SDK convenience token, not native OAuth.
+            // HMAC access identifiers are public credential selectors, never bearer secrets.
+            if config.gcs_hmac_secret() == Some(token) {
                 return Ok(());
             }
             return Err(Self::authorization_error(
@@ -1875,6 +1876,68 @@ mod tests {
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
             vendor_credentials: crate::config::VendorCredentials::default(),
         })
+    }
+
+    #[tokio::test]
+    async fn should_reject_gcs_access_identifier_as_bearer_without_mutation() {
+        let storage = temp_storage();
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("authorization", "Bearer test-access")],
+            br#"{"name":"identifier-token"}"#,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &gcs_auth(), &request)
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(storage.get_namespace("identifier-token").is_err());
+        let body: serde_json::Value =
+            serde_json::from_slice(&read_test_body(response).await).unwrap();
+        assert_eq!(body["error"]["errors"][0]["reason"], "authError");
+    }
+
+    #[tokio::test]
+    async fn should_preserve_documented_gcs_local_secret_bearer_mode() {
+        let storage = temp_storage();
+        let config = gcs_auth();
+        let authorization = format!("Bearer {}", config.gcs_hmac_secret().unwrap());
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("authorization", &authorization)],
+            br#"{"name":"local-secret-token"}"#,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &config, &request)
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(storage.get_namespace("local-secret-token").is_ok());
+    }
+
+    #[tokio::test]
+    async fn should_reject_gcs_hmac_with_wrong_identifier_or_signature_without_mutation() {
+        let storage = temp_storage();
+        let config = gcs_auth();
+        let date = crate::utils::headers::format_last_modified();
+        for authorization in ["GOOG1 wrong-access:invalid", "GOOG1 test-access:invalid"] {
+            let request = parsed_request(
+                "PUT",
+                "http://localhost/hmac-denied",
+                &[("authorization", authorization), ("date", &date)],
+                b"",
+            )
+            .await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &config, &request)
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            assert!(storage.get_namespace("hmac-denied").is_err());
+        }
     }
 
     async fn parsed_request(
