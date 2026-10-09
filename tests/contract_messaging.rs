@@ -475,6 +475,7 @@ async fn should_retry_acs_requests_after_failed_persistence_without_extra_captur
         .unwrap()
         .messages
         .is_empty());
+    assert!(mail.list_mailboxes().unwrap().is_empty());
     assert!(sms
         .list_messages("+15550000002", ListSmsParams::default())
         .unwrap()

@@ -372,6 +372,11 @@ impl MailStore for FilesystemMailStore {
 
             let result =
                 self.list_messages_snapshot(&address, &ListMessagesParams::default(), &committed)?;
+            // Directory preparation precedes the capture decision. Only
+            // committed messages make a recipient mailbox visible.
+            if result.messages.is_empty() {
+                continue;
+            }
             mailboxes.push(MailboxInfo {
                 address,
                 message_count: result.messages.len(),
@@ -662,6 +667,7 @@ mod tests {
             .get_message("alice@example.com", &message_id)
             .expect_err("message should be gone");
         assert!(matches!(err, Error::MessageNotFound));
+        assert!(store.list_mailboxes().unwrap().is_empty());
     }
 
     #[test]

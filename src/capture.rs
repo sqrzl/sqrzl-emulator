@@ -394,6 +394,9 @@ mod tests {
     }
 
     fn assert_mail_state(store: &FilesystemMailStore, committed: bool) {
+        let mailboxes = store.list_mailboxes().unwrap();
+        assert_eq!(mailboxes.len(), if committed { 3 } else { 0 });
+        assert!(mailboxes.iter().all(|mailbox| mailbox.message_count > 0));
         for (mailbox, count) in [
             ("_all", 2),
             ("alice@example.com", 2),
