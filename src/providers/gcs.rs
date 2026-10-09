@@ -8010,31 +8010,32 @@ impl GcsAdapter {
     }
 
     fn foreign_data_protection_active(storage: &Arc<dyn Storage>, bucket: &str) -> bool {
-        storage.get_bucket(bucket).is_ok_and(|bucket| {
-            let s3_mode = bucket
-                .metadata
-                .get(S3_VERSIONING_STATUS_KEY)
-                .is_some_and(|status| matches!(status.as_str(), "Enabled" | "Suspended"))
-                || bucket
+        super::azure_object_protection_active(storage.as_ref(), bucket)
+            || storage.get_bucket(bucket).is_ok_and(|bucket| {
+                let s3_mode = bucket
                     .metadata
-                    .get(S3_OBJECT_LOCK_ENABLED_KEY)
-                    .is_some_and(|enabled| enabled == "true");
-            let azure_mode = bucket
-                .metadata
-                .get(AZURE_VERSIONING_KEY)
-                .is_some_and(|enabled| enabled == "true")
-                || bucket
+                    .get(S3_VERSIONING_STATUS_KEY)
+                    .is_some_and(|status| matches!(status.as_str(), "Enabled" | "Suspended"))
+                    || bucket
+                        .metadata
+                        .get(S3_OBJECT_LOCK_ENABLED_KEY)
+                        .is_some_and(|enabled| enabled == "true");
+                let azure_mode = bucket
                     .metadata
-                    .get(AZURE_SOFT_DELETE_DAYS_KEY)
-                    .and_then(|days| days.parse::<u64>().ok())
-                    .is_some_and(|days| days > 0);
-            let gcs_owns_shared_history = bucket
-                .metadata
-                .get(GCS_SOFT_DELETE_SECONDS_KEY)
-                .and_then(|seconds| seconds.parse::<u64>().ok())
-                .is_some_and(|seconds| seconds > 0);
-            s3_mode || azure_mode || bucket.versioning_enabled && !gcs_owns_shared_history
-        })
+                    .get(AZURE_VERSIONING_KEY)
+                    .is_some_and(|enabled| enabled == "true")
+                    || bucket
+                        .metadata
+                        .get(AZURE_SOFT_DELETE_DAYS_KEY)
+                        .and_then(|days| days.parse::<u64>().ok())
+                        .is_some_and(|days| days > 0);
+                let gcs_owns_shared_history = bucket
+                    .metadata
+                    .get(GCS_SOFT_DELETE_SECONDS_KEY)
+                    .and_then(|seconds| seconds.parse::<u64>().ok())
+                    .is_some_and(|seconds| seconds > 0);
+                s3_mode || azure_mode || bucket.versioning_enabled && !gcs_owns_shared_history
+            })
     }
 
     fn json_unsigned_integer(value: &serde_json::Value) -> Option<u64> {

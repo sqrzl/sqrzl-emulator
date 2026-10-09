@@ -3,13 +3,16 @@ use crate::models::{Bucket, ListObjectsResult, MultipartUpload, Object};
 use std::collections::HashMap;
 use std::path::Path;
 
+mod coordination;
 pub mod filesystem;
 pub mod indexed;
 pub mod lockfree_index;
+pub mod ownership;
 
 pub use filesystem::FilesystemStorage;
 pub use indexed::IndexedStorage;
 pub use lockfree_index::{DirectoryEntry, DirectoryEntryKind, LockFreeIndex};
+pub use ownership::StorageRootWriter;
 
 pub(crate) const MULTIPART_MIN_NON_FINAL_PART_SIZE_KEY: &str =
     "__sqrzl_multipart_min_non_final_part_size";
@@ -73,6 +76,12 @@ pub trait BucketStore: Send + Sync {
 
 /// Object read/write operations excluding list semantics.
 pub trait ObjectStore: Send + Sync {
+    /// Shared protocol-operation gate. Callers that compose protection checks
+    /// and mutations hold this from the first state observation through commit.
+    /// Low-level storage methods do not acquire it recursively.
+    fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        coordination::operation_gate(self)
+    }
     ///
     /// # Errors
     ///
@@ -580,6 +589,10 @@ pub trait UploadStore: Send + Sync {
 /// aggregate for public compatibility and entrypoints that need to pass one
 /// backend through multiple subsystems.
 pub trait Storage: Send + Sync {
+    /// See [`ObjectStore::operation_gate`].
+    fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        coordination::operation_gate(self)
+    }
     ///
     /// # Errors
     ///
@@ -1035,6 +1048,9 @@ where
         + Send
         + Sync,
 {
+    fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        ObjectStore::operation_gate(self)
+    }
     fn create_bucket(&self, name: String) -> Result<()> {
         BucketStore::create_bucket(self, name)
     }
@@ -1451,6 +1467,9 @@ impl BucketStore for dyn Storage + '_ {
 }
 
 impl ObjectStore for dyn Storage + '_ {
+    fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        Storage::operation_gate(self)
+    }
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
         Storage::put_object(self, bucket, key, object)
     }

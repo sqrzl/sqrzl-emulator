@@ -177,6 +177,12 @@ ports:
 Mount `/app/blobs` to a named volume or bind mount. Without a mount, data is
 lost when the container is removed.
 
+Run one emulator writer per storage root. Startup holds an exclusive
+`.sqrzl-writer.lock`; a second process using that root exits. Use distinct roots
+for concurrent instances. Provider, admin, and lifecycle operations share
+serialized protection decisions. See [writer ownership](docs/storage-writer-ownership.md)
+for the enforced namespace boundaries and library embedding contract.
+
 An empty root is initialized with `.sqrzl-storage-format-v2`. Sqrzl refuses to
 start when the configured root is nonempty but lacks that marker. This prevents
 an older on-disk layout from being silently misread. Sqrzl never migrates or

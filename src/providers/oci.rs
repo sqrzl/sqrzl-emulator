@@ -360,35 +360,36 @@ impl OciAdapter {
     }
 
     fn foreign_protection_active(storage: &Arc<dyn Storage>, bucket: &str) -> bool {
-        storage.get_bucket(bucket).is_ok_and(|bucket| {
-            bucket
-                .metadata
-                .get(S3_VERSIONING_STATUS_KEY)
-                .is_some_and(|status| matches!(status.as_str(), "Enabled" | "Suspended"))
-                || bucket
+        super::azure_object_protection_active(storage.as_ref(), bucket)
+            || storage.get_bucket(bucket).is_ok_and(|bucket| {
+                bucket
                     .metadata
-                    .get(S3_OBJECT_LOCK_ENABLED_KEY)
-                    .is_some_and(|value| value == "true")
-                || bucket
-                    .metadata
-                    .get(GCS_SOFT_DELETE_SECONDS_KEY)
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .is_some_and(|seconds| seconds > 0)
-                || bucket
-                    .metadata
-                    .get(GCS_RETENTION_SECONDS_KEY)
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .is_some_and(|seconds| seconds > 0)
-                || bucket
-                    .metadata
-                    .get(AZURE_VERSIONING_KEY)
-                    .is_some_and(|value| value == "true")
-                || bucket
-                    .metadata
-                    .get(AZURE_SOFT_DELETE_DAYS_KEY)
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .is_some_and(|days| days > 0)
-        })
+                    .get(S3_VERSIONING_STATUS_KEY)
+                    .is_some_and(|status| matches!(status.as_str(), "Enabled" | "Suspended"))
+                    || bucket
+                        .metadata
+                        .get(S3_OBJECT_LOCK_ENABLED_KEY)
+                        .is_some_and(|value| value == "true")
+                    || bucket
+                        .metadata
+                        .get(GCS_SOFT_DELETE_SECONDS_KEY)
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .is_some_and(|seconds| seconds > 0)
+                    || bucket
+                        .metadata
+                        .get(GCS_RETENTION_SECONDS_KEY)
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .is_some_and(|seconds| seconds > 0)
+                    || bucket
+                        .metadata
+                        .get(AZURE_VERSIONING_KEY)
+                        .is_some_and(|value| value == "true")
+                    || bucket
+                        .metadata
+                        .get(AZURE_SOFT_DELETE_DAYS_KEY)
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .is_some_and(|days| days > 0)
+            })
     }
 
     fn incorrect_state() -> Response<Body> {

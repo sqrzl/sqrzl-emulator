@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 impl FilesystemStorage {
-    const FORMAT_MARKER: &'static str = ".sqrzl-storage-format-v2";
+    pub(crate) const FORMAT_MARKER: &'static str = ".sqrzl-storage-format-v2";
 
     /// Opens a process storage root, initializing an empty root as format v2.
     ///
@@ -32,8 +32,11 @@ impl FilesystemStorage {
                 .map_err(|err| {
                     Error::InternalError(format!("Failed to inspect storage root: {err}"))
                 })?
-                .next()
-                .is_some();
+                .any(|entry| {
+                    entry.map_or(true, |entry| {
+                        entry.file_name() != crate::storage::ownership::WRITER_LOCK_FILE
+                    })
+                });
             if nonempty {
                 return Err(Error::InvalidRequest(format!(
                     "Legacy nonempty storage detected at '{}'. Sqrzl storage format v2 is \

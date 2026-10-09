@@ -7,12 +7,11 @@ use sqrzl_emulator::error::Result;
 use sqrzl_emulator::mail::{FilesystemMailStore, SmtpServer};
 use sqrzl_emulator::server::Server;
 use sqrzl_emulator::sms::FilesystemSmsStore;
-use sqrzl_emulator::storage::{BucketStore, FilesystemStorage};
+use sqrzl_emulator::storage::{BucketStore, FilesystemStorage, StorageRootWriter};
 use sqrzl_emulator::utils::validation::validate_bucket_name;
 use sqrzl_emulator::{Config, Error};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Load configuration from environment variables
     let config = Config::from_env();
     config
@@ -35,6 +34,35 @@ async fn main() -> Result<()> {
         tracing::info!("Authentication disabled");
     }
 
+    let root = config.blobs_path.clone();
+    with_storage_writer_runtime(&root, |runtime| runtime.block_on(run(config)))
+}
+
+fn with_storage_writer_runtime<T>(
+    root: impl AsRef<std::path::Path>,
+    run: impl FnOnce(&tokio::runtime::Runtime) -> Result<T>,
+) -> Result<T> {
+    with_storage_writer_shutdown(root, run, drop)
+}
+
+fn with_storage_writer_shutdown<T>(
+    root: impl AsRef<std::path::Path>,
+    run: impl FnOnce(&tokio::runtime::Runtime) -> Result<T>,
+    shutdown: impl FnOnce(tokio::runtime::Runtime),
+) -> Result<T> {
+    // Declare ownership before the runtime so normal return, errors and panic
+    // unwinding all finish Tokio's blocking writers before releasing the root.
+    let _writer = StorageRootWriter::acquire(root)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| Error::InternalError(format!("Failed to initialize runtime: {error}")))?;
+    let result = run(&runtime);
+    shutdown(runtime);
+    result
+}
+
+async fn run(config: Config) -> Result<()> {
     // Initialize storage
     tracing::info!(path = %config.blobs_path, "Using filesystem storage");
     let storage = Arc::new(FilesystemStorage::open(&config.blobs_path)?);
@@ -158,4 +186,90 @@ fn ensure_startup_buckets(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod shutdown_lifetime_tests {
+    use super::*;
+    use sqrzl_emulator::models::Object;
+    use sqrzl_emulator::storage::ObjectStore;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn should_hold_root_writer_given_listener_failure_when_blocking_publication_is_running() {
+        // Arrange
+        let root =
+            std::env::temp_dir().join(format!("sqrzl-shutdown-writer-{}", uuid::Uuid::new_v4()));
+        let owner_root = root.clone();
+        let (releasing, release) = mpsc::channel();
+        let (shutdown_started, shutdown) = mpsc::channel();
+        let (owner_finished, finished) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let result = with_storage_writer_shutdown(
+                &owner_root,
+                |runtime| {
+                    runtime.block_on(async {
+                        let storage = FilesystemStorage::open(&owner_root)?;
+                        storage.create_bucket("shutdown".to_string())?;
+                        let (started, ready) = tokio::sync::oneshot::channel();
+                        tokio::spawn(async move {
+                            tokio::task::block_in_place(|| {
+                                started.send(()).unwrap();
+                                release.recv_timeout(Duration::from_secs(10)).unwrap();
+                                storage
+                                    .put_object(
+                                        "shutdown",
+                                        "item".to_string(),
+                                        Object::new(
+                                            "item".to_string(),
+                                            b"committed".to_vec(),
+                                            "text/plain".to_string(),
+                                        ),
+                                    )
+                                    .unwrap();
+                            });
+                        });
+                        ready.await.unwrap();
+                        Err::<(), _>(Error::InternalError("listener failed".to_string()))
+                    })
+                },
+                |runtime| {
+                    // The main future has returned; runtime destruction still
+                    // waits for the in-flight blocking storage operation.
+                    shutdown_started.send(()).unwrap();
+                    drop(runtime);
+                },
+            );
+            owner_finished.send(result).unwrap();
+        });
+        shutdown.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        // Act
+        let competing_owner = StorageRootWriter::acquire(&root);
+
+        // Assert
+        assert!(
+            matches!(competing_owner, Err(Error::InvalidRequest(ref message)) if message.contains("already has an active writer")),
+            "root ownership was released before blocking publication finished"
+        );
+        assert!(matches!(
+            finished.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        releasing.send(()).unwrap();
+        assert!(
+            matches!(finished.recv_timeout(Duration::from_secs(5)).unwrap(), Err(Error::InternalError(message)) if message == "listener failed")
+        );
+        owner.join().unwrap();
+        let writer = StorageRootWriter::acquire(&root).unwrap();
+        let storage = FilesystemStorage::open(&root).unwrap();
+        assert_eq!(
+            storage.get_object("shutdown", "item").unwrap().data,
+            b"committed"
+        );
+        drop(storage);
+        drop(writer);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

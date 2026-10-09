@@ -4,118 +4,32 @@ use crate::storage::{
     AclStore, BucketStore, LifecycleStore, MultipartStore, ObjectCondition, ObjectListingStore,
     ObjectStore, PolicyStore, ProviderStateStore, Storage, TagStore, UploadStore, VersionStore,
 };
-use std::collections::{BTreeSet, HashMap};
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-/// In-memory index for fast lookups
-#[derive(Clone)]
-struct ObjectIndex {
-    /// `bucket_name` -> Set of object keys
-    buckets: HashMap<String, BTreeSet<String>>,
-}
-
-/// Wraps any Storage implementation with in-memory indices for O(1) list/exists operations
+/// Compatibility wrapper forwarding authoritative metadata and operation ownership.
+///
+/// The inner store owns its index. A private key cache could become stale when
+/// another wrapper/front door mutates that same store, so it cannot authorize
+/// existence or protection decisions.
 pub struct IndexedStorage {
     inner: Arc<dyn Storage>,
-    index: Arc<RwLock<ObjectIndex>>,
 }
 
 impl IndexedStorage {
     pub fn new(inner: Arc<dyn Storage>) -> Self {
-        let storage = Self {
-            inner,
-            index: Arc::new(RwLock::new(ObjectIndex {
-                buckets: HashMap::new(),
-            })),
-        };
-        storage.rebuild_index_from_inner();
-        storage
-    }
-
-    fn update_index_put(&self, bucket: &str, key: String) {
-        if let Ok(mut index) = self.index.write() {
-            index
-                .buckets
-                .entry(bucket.to_string())
-                .or_default()
-                .insert(key);
-        }
-    }
-
-    fn update_index_delete(&self, bucket: &str, key: &str) {
-        if let Ok(mut index) = self.index.write() {
-            if let Some(keys) = index.buckets.get_mut(bucket) {
-                keys.retain(|k| k != key);
-            }
-        }
-    }
-
-    fn update_index_create_bucket(&self, bucket: String) {
-        if let Ok(mut index) = self.index.write() {
-            index.buckets.entry(bucket).or_default();
-        }
-    }
-
-    fn update_index_delete_bucket(&self, bucket: &str) {
-        if let Ok(mut index) = self.index.write() {
-            index.buckets.remove(bucket);
-        }
-    }
-
-    fn rebuild_index_from_inner(&self) {
-        let Ok(buckets) = self.inner.list_buckets() else {
-            return;
-        };
-
-        for bucket in buckets {
-            self.update_index_create_bucket(bucket.name.clone());
-            let mut marker = None;
-            while let Ok(page) =
-                self.inner
-                    .list_objects(&bucket.name, None, None, marker.as_deref(), Some(1000))
-            {
-                let is_truncated = page.is_truncated;
-                let next_marker = page.next_marker;
-
-                for object in page.objects {
-                    self.update_index_put(&bucket.name, object.key);
-                }
-
-                if !is_truncated {
-                    break;
-                }
-
-                let Some(next_marker) = next_marker else {
-                    break;
-                };
-                marker = Some(next_marker);
-            }
-        }
-    }
-
-    fn get_indexed_objects(&self, bucket: &str, prefix: Option<&str>) -> Option<Vec<String>> {
-        let Ok(index) = self.index.read() else {
-            return None;
-        };
-        index.buckets.get(bucket).map(|keys| {
-            keys.iter()
-                .filter(|k| prefix.is_none_or(|p| k.starts_with(p)))
-                .cloned()
-                .collect()
-        })
+        Self { inner }
     }
 }
 
 impl BucketStore for IndexedStorage {
     fn create_bucket(&self, name: String) -> Result<()> {
-        self.inner.create_bucket(name.clone())?;
-        self.update_index_create_bucket(name);
+        self.inner.create_bucket(name)?;
         Ok(())
     }
 
     fn delete_bucket(&self, name: &str) -> Result<()> {
         self.inner.delete_bucket(name)?;
-        self.update_index_delete_bucket(name);
         Ok(())
     }
 
@@ -141,9 +55,11 @@ impl BucketStore for IndexedStorage {
 }
 
 impl ObjectStore for IndexedStorage {
+    fn operation_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner.operation_gate()
+    }
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
-        self.inner.put_object(bucket, key.clone(), object)?;
-        self.update_index_put(bucket, key);
+        self.inner.put_object(bucket, key, object)?;
         Ok(())
     }
 
@@ -155,8 +71,7 @@ impl ObjectStore for IndexedStorage {
         payload_path: &std::path::Path,
     ) -> Result<()> {
         self.inner
-            .put_object_streamed(bucket, key.clone(), object, payload_path)?;
-        self.update_index_put(bucket, key);
+            .put_object_streamed(bucket, key, object, payload_path)?;
         Ok(())
     }
 
@@ -168,16 +83,9 @@ impl ObjectStore for IndexedStorage {
         payload_path: &std::path::Path,
         condition: &ObjectCondition,
     ) -> Result<bool> {
-        let written = self.inner.put_object_streamed_if(
-            bucket,
-            key.clone(),
-            object,
-            payload_path,
-            condition,
-        )?;
-        if written {
-            self.update_index_put(bucket, key);
-        }
+        let written =
+            self.inner
+                .put_object_streamed_if(bucket, key, object, payload_path, condition)?;
         Ok(written)
     }
 
@@ -188,12 +96,7 @@ impl ObjectStore for IndexedStorage {
         object: Object,
         condition: &ObjectCondition,
     ) -> Result<bool> {
-        let written = self
-            .inner
-            .put_object_if(bucket, key.clone(), object, condition)?;
-        if written {
-            self.update_index_put(bucket, key);
-        }
+        let written = self.inner.put_object_if(bucket, key, object, condition)?;
         Ok(written)
     }
 
@@ -228,7 +131,6 @@ impl ObjectStore for IndexedStorage {
 
     fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
         self.inner.delete_object(bucket, key)?;
-        self.update_index_delete(bucket, key);
         Ok(())
     }
 
@@ -239,9 +141,6 @@ impl ObjectStore for IndexedStorage {
         condition: &ObjectCondition,
     ) -> Result<bool> {
         let deleted = self.inner.delete_object_if(bucket, key, condition)?;
-        if deleted {
-            self.update_index_delete(bucket, key);
-        }
         Ok(deleted)
     }
 
@@ -256,16 +155,6 @@ impl ObjectStore for IndexedStorage {
     }
 
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool> {
-        // Fast path: check index first
-        if let Ok(index) = self.index.read() {
-            if let Some(keys) = index.buckets.get(bucket) {
-                if keys.contains(&key.to_string()) {
-                    return Ok(true);
-                }
-            }
-            drop(index);
-        }
-        // Fallback to storage
         self.inner.object_exists(bucket, key)
     }
 }
@@ -279,48 +168,8 @@ impl ObjectListingStore for IndexedStorage {
         marker: Option<&str>,
         max_keys: Option<usize>,
     ) -> Result<crate::models::ListObjectsResult> {
-        if delimiter.is_some_and(|value| !value.is_empty()) {
-            return self
-                .inner
-                .list_objects(bucket, prefix, delimiter, marker, max_keys);
-        }
-
-        let Some(mut keys) = self.get_indexed_objects(bucket, prefix) else {
-            return self
-                .inner
-                .list_objects(bucket, prefix, delimiter, marker, max_keys);
-        };
-
-        if let Some(m) = marker {
-            keys.retain(|key| key.as_str() > m);
-        }
-
-        let max_keys = max_keys.unwrap_or(1000);
-        let is_truncated = keys.len() > max_keys;
-        let page_keys = keys.iter().take(max_keys).cloned().collect::<Vec<_>>();
-        let next_marker = if is_truncated {
-            if max_keys == 0 {
-                keys.first().cloned()
-            } else {
-                page_keys.last().cloned()
-            }
-        } else {
-            None
-        };
-
-        let mut objects = Vec::with_capacity(page_keys.len());
-        for key in page_keys {
-            if let Ok(obj) = self.inner.get_object(bucket, &key) {
-                objects.push(obj);
-            }
-        }
-
-        Ok(crate::models::ListObjectsResult {
-            common_prefixes: Vec::new(),
-            objects,
-            is_truncated,
-            next_marker,
-        })
+        self.inner
+            .list_objects(bucket, prefix, delimiter, marker, max_keys)
     }
 }
 
@@ -582,18 +431,9 @@ impl UploadStore for IndexedStorage {
         object: Object,
         condition: Option<&ObjectCondition>,
     ) -> Result<bool> {
-        let written = self.inner.compose_upload_payloads(
-            provider,
-            session,
-            items,
-            bucket,
-            key.clone(),
-            object,
-            condition,
-        )?;
-        if written {
-            self.update_index_put(bucket, key);
-        }
+        let written = self
+            .inner
+            .compose_upload_payloads(provider, session, items, bucket, key, object, condition)?;
         Ok(written)
     }
 
@@ -637,6 +477,25 @@ mod tests {
         assert_eq!(actual.common_prefixes, expected.common_prefixes);
         assert_eq!(actual.is_truncated, expected.is_truncated);
         assert_eq!(actual.next_marker, expected.next_marker);
+    }
+
+    #[test]
+    fn should_use_authoritative_existence_after_another_front_door_deletes() {
+        // Arrange
+        let base = temp_path();
+        let inner: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
+        inner.create_bucket("bucket".to_string()).unwrap();
+        let wrapper: Arc<dyn Storage> = Arc::new(IndexedStorage::new(inner.clone()));
+        wrapper
+            .put_object("bucket", "key".to_string(), object("key", b"data"))
+            .unwrap();
+
+        // Act
+        inner.delete_object("bucket", "key").unwrap();
+
+        // Assert
+        assert!(!wrapper.object_exists("bucket", "key").unwrap());
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
