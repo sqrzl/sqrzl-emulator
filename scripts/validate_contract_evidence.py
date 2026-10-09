@@ -167,6 +167,22 @@ def evaluate(
                 "acceptance_gates": entry["acceptance_gates"],
             }
         )
+    by_id = {entry["id"]: entry for entry in matrix["operation_contracts"]["entries"]}
+    for node, scope in manifest.get("tests", {}).items():
+        if "operation_ids" not in scope:
+            continue
+        operation_ids = scope["operation_ids"]
+        if (
+            not isinstance(operation_ids, list)
+            or not operation_ids
+            or any(not isinstance(operation, str) for operation in operation_ids)
+            or len(operation_ids) != len(set(operation_ids))
+            or set(operation_ids) - by_id.keys()
+        ):
+            raise ValueError(f"Unknown or invalid SDK operation IDs for {node}")
+        for operation in operation_ids:
+            if node not in by_id[operation]["evidence_candidates"].get("sdk", []):
+                raise ValueError(f"Missing SDK operation evidence link: {operation}: {node}")
     scoped_sdk = {
         node: {**scope, "result": results.get(node, "not-run")}
         for node, scope in manifest.get("tests", {}).items()

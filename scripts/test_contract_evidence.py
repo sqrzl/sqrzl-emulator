@@ -303,6 +303,21 @@ def source_lane():
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_should_reject_sdk_scope_with_an_unknown_operation_id(self):
+        node = "sdk-tests/test_example.py::test_works"
+        manifest = {"tests": {node: {"operation_ids": ["example.Unknown.current"]}}}
+        with self.assertRaisesRegex(ValueError, "operation IDs"):
+            evaluate(matrix(), manifest, {"interop::works", node}, {})
+
+    def test_should_reject_sdk_scope_without_its_operation_evidence_link(self):
+        node = "sdk-tests/test_example.py::test_unlinked"
+        manifest = {"tests": {node: {"operation_ids": ["example.Get.current"]}}}
+        with self.assertRaisesRegex(ValueError, "evidence link"):
+            evaluate(
+                matrix(), manifest,
+                {"interop::works", "sdk-tests/test_example.py::test_works", node}, {},
+            )
+
     def test_should_reject_missing_client_or_one_live_service_rss_measurement(self):
         for resource in ("client_rss_bytes", "service_rss_bytes"):
             with self.subTest(resource=resource):
