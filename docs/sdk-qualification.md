@@ -91,6 +91,31 @@ pass/fail/skip reasons, acceptance scope, process/PID events, and test metrics.
 Skipped tests and disabled families do not count as accepted gates. CI retains
 functional, native storage, configured messaging, and container artifacts.
 
+Managed runs build fresh source and execute an immutable copied binary. A
+clean, stable source tree verified before and after the build produces
+`binary_source_verified=true`, `binary_source_commit`, and a build manifest
+binding the commit/tree, tracked Cargo lock and build helper, compiler versions,
+build command, and executable SHA256. Dirty builds remain explicitly unverified.
+Repository `source_commit` records the harness revision separately; acceptance
+must also require the verified binary source to match the intended revision.
+
+To build a reusable artifact from a clean checkout:
+
+```sh
+python sdk-tests/build_provenance.py --output-dir /tmp/sqrzl-qualified-build
+SQRZL_BINARY=/tmp/sqrzl-qualified-build/sqrzl-emulator \
+SQRZL_BINARY_PROVENANCE=/tmp/sqrzl-qualified-build/build-provenance.json \
+  .venv-sdk/bin/python -m pytest
+python sdk-tests/provenance_checks.py
+```
+
+An external binary without that manifest and a remote endpoint both record
+`binary_source_verified=false`; neither qualifies exact source acceptance.
+A supplied manifest must match the copied executable and tracked files at its
+declared commit. A caller-supplied source SHA alone is insufficient. Manifests
+are trusted build artifacts, not cryptographic attestations against a malicious
+artifact author.
+
 ## Intentional upgrade lane
 
 Dispatch CI with the boolean `sdk_upgrade` input to run a separate candidate

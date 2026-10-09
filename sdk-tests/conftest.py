@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from build_provenance import build_verified_binary, validate_provenance
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ACCESS_KEY = "sqrzl-access"
 DEFAULT_SECRET_KEY = base64.b64encode(b"sqrzl-secret").decode("ascii")
@@ -234,21 +236,43 @@ def _wait_for_health(
     )
 
 
-def _binary_path() -> Path:
+def _ensure_binary(output_dir: Path) -> Path:
     configured = os.getenv("SQRZL_BINARY")
     if configured:
-        return Path(configured)
-    return REPO_ROOT / "target" / "debug" / "sqrzl-emulator"
-
-
-def _ensure_binary() -> Path:
-    binary = _binary_path()
-    if os.getenv("SQRZL_BINARY") and binary.exists():
-        return binary
-    subprocess.run(
-        ["cargo", "build", "--locked", "--bin", "sqrzl-emulator"],
-        cwd=REPO_ROOT,
-        check=True,
+        original = Path(configured).resolve(strict=True)
+        manifest = os.getenv("SQRZL_BINARY_PROVENANCE")
+        provenance = validate_provenance(original, Path(manifest)) if manifest else None
+        output_dir.mkdir(parents=True)
+        binary = output_dir / "sqrzl-emulator"
+        shutil.copyfile(original, binary)
+        binary.chmod(0o555)
+        if manifest:
+            # Verify the copied bytes too, preventing a changed source binary during copy.
+            validate_provenance(binary, Path(manifest))
+    else:
+        binary, provenance = build_verified_binary(output_dir, allow_dirty=True)
+        if provenance["source_verified"]:
+            validate_provenance(binary, output_dir / "build-provenance.json")
+    with binary.open("rb") as stream:
+        binary_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    _BINARY_PROVENANCE.update(
+        {
+            "binary_source_verified": bool(
+                provenance and provenance["source_verified"]
+            ),
+            "binary_source_commit": provenance["source_commit"] if provenance else None,
+            "binary_sha256": binary_digest,
+            "build_provenance": provenance,
+            "source_verification_reason": (
+                "clean-source build manifest and binary digest verified"
+                if provenance and provenance["source_verified"]
+                else (
+                    "external binary has no build provenance manifest"
+                    if configured
+                    else "source worktree was dirty or changed during the build"
+                )
+            ),
+        }
     )
     return binary
 
@@ -296,7 +320,7 @@ def sqrzl_server() -> SqrzlSettings:
     runtime_dir = Path(tempfile.mkdtemp(prefix="sqrzl-sdk-runtime-"))
     storage_dir = runtime_dir / "blobs"
     storage_dir.mkdir()
-    binary = _ensure_binary()
+    binary = _ensure_binary(runtime_dir / "bin")
     env = os.environ.copy()
     # Never inherit unrelated developer/provider credentials into qualification.
     for name in [
@@ -418,6 +442,13 @@ def sqrzl_server() -> SqrzlSettings:
 
 _RESULTS = []
 _PROCESS_EVENTS = []
+_BINARY_PROVENANCE = {
+    "binary_source_verified": False,
+    "binary_source_commit": None,
+    "binary_sha256": None,
+    "build_provenance": None,
+    "source_verification_reason": "remote endpoint or no managed binary executed",
+}
 
 
 def pytest_sessionstart(session):
@@ -441,11 +472,7 @@ def pytest_collection_modifyitems(items):
     manifest = json.loads(
         (REPO_ROOT / "sdk-tests" / "acceptance-manifest.json").read_text()
     )
-    missing = [
-        item.nodeid
-        for item in items
-        if item.nodeid.split("[")[0] not in manifest["tests"]
-    ]
+    missing = [item.nodeid for item in items if item.nodeid not in manifest["tests"]]
     if missing:
         raise pytest.UsageError(
             f"SDK tests must declare their acceptance scope: {missing}"
@@ -522,7 +549,7 @@ def pytest_sessionfinish(session, exitstatus):
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     for result in _RESULTS:
         result["acceptance"] = manifest.get("tests", {}).get(
-            result["test"].split("[")[0], {"scope": "unmapped"}
+            result["test"], {"scope": "unmapped"}
         )
     source = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
@@ -557,6 +584,7 @@ def pytest_sessionfinish(session, exitstatus):
                 "schema_version": 1,
                 "source_commit": source,
                 "dirty_worktree": dirty,
+                **_BINARY_PROVENANCE,
                 "recorded_at": datetime.now(timezone.utc).isoformat(),
                 "lane": lane,
                 "python": __import__("sys").version,

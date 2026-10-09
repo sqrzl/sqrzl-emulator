@@ -66,6 +66,9 @@ jobs:
           SQRZL_SDK_LANE: functional
         run: python -m pytest
 
+      - name: SDK provenance boundary checks
+        run: python sdk-tests/provenance_checks.py
+
       - name: Authenticated provider SDK tests
         env:
           SQRZL_SDK_ENFORCE_AUTH: "1"
