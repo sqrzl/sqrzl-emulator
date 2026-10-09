@@ -25,8 +25,7 @@ impl FilesystemStorage {
     /// when the storage root or format marker cannot be read or written.
     pub fn open(base_path: impl AsRef<Path>) -> Result<Self> {
         let base_path = base_path.as_ref();
-        fs::create_dir_all(base_path)
-            .map_err(|err| Error::InternalError(format!("Failed to create storage root: {err}")))?;
+        Self::create_directory_durable(base_path)?;
         let marker = base_path.join(Self::FORMAT_MARKER);
         if !marker.exists() {
             let nonempty = fs::read_dir(base_path)
@@ -43,12 +42,12 @@ impl FilesystemStorage {
                     base_path.display()
                 )));
             }
-            fs::write(&marker, b"2\n").map_err(|err| {
+            Self::atomic_write(&marker, b"2\n").map_err(|err| {
                 Error::InternalError(format!("Failed to write storage format marker: {err}"))
             })?;
         }
         Self::purge_obsolete_vendor_upload_state(base_path)?;
-        Ok(Self::new(base_path))
+        Self::try_new(base_path)
     }
 
     fn purge_obsolete_vendor_upload_state(base_path: &Path) -> Result<()> {
@@ -70,10 +69,27 @@ impl FilesystemStorage {
         Ok(())
     }
 
+    /// Compatibility constructor for callers that cannot handle initialization errors.
+    ///
+    /// # Panics
+    /// Panics if initialization or journal recovery fails. Use [`Self::open`]
+    /// or [`Self::try_new`] to propagate these failures instead.
     pub fn new(base_path: impl AsRef<Path>) -> Self {
+        Self::try_new(base_path).expect("Filesystem storage initialization or crash recovery failed; use FilesystemStorage::open to handle errors")
+    }
+
+    /// Constructs a store after recovering committed publications.
+    ///
+    /// Callers must hold the storage-root writer guard before opening a shared
+    /// root; recovery mutates on-disk state before the index is reconstructed.
+    ///
+    /// # Errors
+    /// Returns an error when root initialization or recovery fails.
+    pub fn try_new(base_path: impl AsRef<Path>) -> Result<Self> {
         let base_path = base_path.as_ref().to_path_buf();
         // Ensure base directory exists
-        let _ = fs::create_dir_all(&base_path);
+        Self::create_directory_durable(&base_path)?;
+        Self::recover_publications(&base_path)?;
 
         let index = Arc::new(LockFreeIndex::new());
 
@@ -117,7 +133,7 @@ impl FilesystemStorage {
             }
         }
 
-        Self {
+        Ok(Self {
             base_path,
             index,
             uploads_cache: Mutex::new(HashMap::new()),
@@ -125,11 +141,15 @@ impl FilesystemStorage {
             bucket_locks: Mutex::new(HashMap::new()),
             #[cfg(test)]
             test_hook: Mutex::new(None),
-        }
+        })
     }
 
     pub(super) fn object_lock(&self, bucket: &str, key: &str) -> Result<Arc<Mutex<()>>> {
-        let lock_key = format!("{bucket}/{key}");
+        self.object_id_lock(bucket, &Self::compute_object_id(bucket, key))
+    }
+
+    pub(super) fn object_id_lock(&self, bucket: &str, object_id: &str) -> Result<Arc<Mutex<()>>> {
+        let lock_key = format!("{bucket}/{object_id}");
         let mut locks = self
             .object_locks
             .lock()
@@ -409,9 +429,18 @@ impl FilesystemStorage {
     pub(super) fn remove_upload_record(&self, bucket: &str, upload_id: &str) -> Result<()> {
         let upload_dir = self.upload_record_dir(bucket, upload_id);
         if upload_dir.exists() {
-            fs::remove_dir_all(&upload_dir).map_err(|e| {
+            let root = self.multipart_root(bucket);
+            let retired = root.join(format!(".retired-upload-{}", Uuid::new_v4()));
+            fs::rename(&upload_dir, &retired).map_err(|error| {
+                Error::InternalError(format!("Failed to retire multipart upload: {error}"))
+            })?;
+            Self::sync_directory(&root)?;
+            #[cfg(test)]
+            self.test_phase(super::TestPhase::UploadRecordRetired);
+            fs::remove_dir_all(&retired).map_err(|e| {
                 Error::InternalError(format!("Failed to remove multipart upload dir: {e}"))
             })?;
+            Self::sync_directory(&root)?;
         }
         Ok(())
     }
@@ -429,7 +458,7 @@ impl FilesystemStorage {
 
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_dir() {
+                if !path.is_dir() || entry.file_name().to_string_lossy().starts_with('.') {
                     continue;
                 }
                 let upload_path = path.join("upload.json");
@@ -510,21 +539,11 @@ impl FilesystemStorage {
         object_id: &str,
         object: &Object,
     ) -> Result<()> {
-        let object_id_dir = self.object_id_dir(bucket, object_id);
-        fs::create_dir_all(&object_id_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to create object directory: {e}")))?;
-
-        let object_data_path = self.object_data_path(bucket, object_id);
-        Self::atomic_write(&object_data_path, &object.data)?;
-        #[cfg(test)]
-        self.test_phase(super::TestPhase::BodyPublished);
-
-        let metadata_path = self.object_metadata_path(bucket, object_id);
-        let metadata_json = serde_json::to_string(object)
-            .map_err(|e| Error::InternalError(format!("Failed to serialize metadata: {e}")))?;
-        Self::atomic_write(&metadata_path, metadata_json.as_bytes())?;
-
-        Ok(())
+        self.publish_pair(
+            &self.object_id_dir(bucket, object_id),
+            object,
+            super::ObjectPayload::InMemory,
+        )
     }
 
     pub(super) fn write_version_snapshot(
@@ -535,23 +554,15 @@ impl FilesystemStorage {
         object: &Object,
     ) -> Result<()> {
         let version_dir = self.version_dir(bucket, object_id, version_id);
-        fs::create_dir_all(&version_dir).map_err(|e| {
-            Error::InternalError(format!("Failed to create version directory: {e}"))
-        })?;
-
         let mut version_object = object.clone();
         version_object.version_id = Some(version_id.to_string());
-
-        let version_data_path = self.version_data_path(bucket, object_id, version_id);
-        Self::atomic_write(&version_data_path, &version_object.data)?;
-
-        let version_metadata_path = self.version_metadata_path(bucket, object_id, version_id);
-        let metadata_json = serde_json::to_string(&version_object).map_err(|e| {
-            Error::InternalError(format!("Failed to serialize version metadata: {e}"))
-        })?;
-
-        Self::atomic_write(&version_metadata_path, metadata_json.as_bytes())?;
-
+        self.publish_pair(
+            &version_dir,
+            &version_object,
+            super::ObjectPayload::Stored(&self.object_data_path(bucket, object_id)),
+        )?;
+        #[cfg(test)]
+        self.test_phase(super::TestPhase::VersionPublished);
         Ok(())
     }
 
@@ -608,8 +619,7 @@ impl FilesystemStorage {
         let parent = path
             .parent()
             .ok_or_else(|| Error::InternalError("Invalid file path".to_string()))?;
-        fs::create_dir_all(parent)
-            .map_err(|e| Error::InternalError(format!("Failed to create parent directory: {e}")))?;
+        Self::create_directory_durable(parent)?;
 
         let file_name = path
             .file_name()
@@ -626,7 +636,7 @@ impl FilesystemStorage {
                 .map_err(|e| Error::InternalError(format!("Failed to sync temp file: {e}")))?;
             fs::rename(&temp_path, path)
                 .map_err(|e| Error::InternalError(format!("Failed to commit temp file: {e}")))?;
-            Ok(())
+            Self::sync_directory(parent)
         })();
 
         if write_result.is_err() {
@@ -644,18 +654,51 @@ impl FilesystemStorage {
         let parent = dest
             .parent()
             .ok_or_else(|| Error::InternalError("Invalid file path".to_string()))?;
-        fs::create_dir_all(parent)
-            .map_err(|e| Error::InternalError(format!("Failed to create parent directory: {e}")))?;
-
-        if fs::rename(src, dest).is_ok() {
-            return Ok(());
+        Self::create_directory_durable(parent)?;
+        // Sync spooled bytes before either a same-device rename or the copy
+        // fallback. Never copy over a visible destination in place.
+        fs::File::open(src)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| {
+                Error::InternalError(format!("Failed to sync spooled payload: {error}"))
+            })?;
+        if fs::rename(src, dest).is_err() {
+            Self::atomic_copy(src, dest)?;
+            fs::remove_file(src).map_err(|error| {
+                Error::InternalError(format!("Failed to remove spooled payload: {error}"))
+            })?;
         }
-
-        fs::copy(src, dest)
-            .map_err(|e| Error::InternalError(format!("Failed to move payload into place: {e}")))?;
-        fs::remove_file(src)
-            .map_err(|e| Error::InternalError(format!("Failed to remove spooled payload: {e}")))?;
+        Self::sync_directory(parent)?;
+        if let Some(source_parent) = src.parent().filter(|path| *path != parent) {
+            Self::sync_directory(source_parent)?;
+        }
         Ok(())
+    }
+
+    pub(super) fn atomic_copy(src: &Path, dest: &Path) -> Result<()> {
+        let parent = dest
+            .parent()
+            .ok_or_else(|| Error::InternalError("Invalid copy destination".to_string()))?;
+        Self::create_directory_durable(parent)?;
+        let temp = parent.join(format!(".copy-{}.tmp", Uuid::new_v4()));
+        let outcome = (|| {
+            fs::copy(src, &temp).map_err(|error| {
+                Error::InternalError(format!("Failed to copy staged payload: {error}"))
+            })?;
+            fs::File::open(&temp)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| {
+                    Error::InternalError(format!("Failed to sync copied payload: {error}"))
+                })?;
+            fs::rename(&temp, dest).map_err(|error| {
+                Error::InternalError(format!("Failed to publish copied payload: {error}"))
+            })?;
+            Self::sync_directory(parent)
+        })();
+        if outcome.is_err() {
+            let _ = fs::remove_file(temp);
+        }
+        outcome
     }
 
     /// A scratch path, on the same filesystem as this bucket's blob storage,
@@ -677,21 +720,11 @@ impl FilesystemStorage {
         object: &Object,
         payload_path: &Path,
     ) -> Result<()> {
-        let object_id_dir = self.object_id_dir(bucket, object_id);
-        fs::create_dir_all(&object_id_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to create object directory: {e}")))?;
-
-        let object_data_path = self.object_data_path(bucket, object_id);
-        Self::atomic_move(payload_path, &object_data_path)?;
-        #[cfg(test)]
-        self.test_phase(super::TestPhase::BodyPublished);
-
-        let metadata_path = self.object_metadata_path(bucket, object_id);
-        let metadata_json = serde_json::to_string(object)
-            .map_err(|e| Error::InternalError(format!("Failed to serialize metadata: {e}")))?;
-        Self::atomic_write(&metadata_path, metadata_json.as_bytes())?;
-
-        Ok(())
+        self.publish_pair(
+            &self.object_id_dir(bucket, object_id),
+            object,
+            super::ObjectPayload::Spooled(payload_path),
+        )
     }
 
     /// Records a part's `etag`/`size` in the upload's part list. Shared by
