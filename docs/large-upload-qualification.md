@@ -46,7 +46,9 @@ calculates SHA256, performs a normal process stop/start against the same
 storage root, and repeats the complete bounded readback. Range requests
 avoid treating a buffered full-object download as a streaming guarantee.
 
-Measured SDK requests use one attempt so a failed transfer remains visible.
+The campaign disables configurable upload and control request retry policies.
+Azure's downloader retains its separate finite response-body retry loop even
+with pipeline retries disabled.
 The direct GCS media upload has an explicit zero-retry strategy and a 60-second
 bulk-send/read timeout, matching the main upload. Requests also applies the
 connect timeout during a contiguous body's `sendall`; a five-second value
