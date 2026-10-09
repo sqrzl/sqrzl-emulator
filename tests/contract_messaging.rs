@@ -210,6 +210,57 @@ fn email_payload() -> Value {
     json!({"senderAddress":"sender@example.com","recipients":{"to":[{"address":"alice@example.com"},{"address":"bob@example.com"}]},"content":{"subject":"repeatable","plainText":"hello"}})
 }
 
+#[tokio::test]
+async fn should_poll_acs_operation_guids_case_insensitively_after_capture_deletion_and_restart() {
+    let root = std::env::temp_dir().join(format!("sqrzl-acs-poll-case-{}", uuid::Uuid::new_v4()));
+    let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+    let operation_id = "f9168c5e-ceb2-4faa-b6bf-329bf39fa1e4";
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let first_sent = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let (status, body) = acs_email(
+        store.clone(),
+        &request_id,
+        &first_sent,
+        Some(&operation_id.to_ascii_uppercase()),
+        &email_payload(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body["id"], operation_id);
+    for mailbox in ["_all", "alice@example.com", "bob@example.com"] {
+        store.delete_message(mailbox, operation_id).unwrap();
+    }
+    drop(store);
+    let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+    for candidate in [operation_id.to_string(), operation_id.to_ascii_uppercase()] {
+        let req = RequestExt::from_hyper(request(
+            "GET",
+            &format!("http://localhost/emails/operations/{candidate}?api-version=2023-03-31"),
+            &[],
+            b"",
+        ))
+        .await
+        .unwrap();
+        let response = MailAdapterRegistry::default()
+            .route(store.clone(), auth_disabled(), req)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{candidate}");
+        let body: Value = serde_json::from_str(&body_text(response).await).unwrap();
+        assert_eq!(body["id"], operation_id);
+        assert_eq!(body["status"], "Succeeded");
+    }
+    assert!(store
+        .list_messages("_all", ListMessagesParams::default())
+        .unwrap()
+        .messages
+        .is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 async fn acs_sms(store: Arc<dyn SmsStore>, payload: &Value) -> (StatusCode, Value) {
     let req = RequestExt::from_hyper(request(
         "POST",

@@ -488,8 +488,9 @@ impl MailAdapter for AcsEmailAdapter {
                     .path()
                     .strip_prefix("/emails/operations/")
                     .filter(|value| !value.is_empty())
-                    .ok_or_else(|| "invalid ACS operation path".to_string())?;
-                if mail.get_message(ALL_MAILBOX, operation_id).is_err()
+                    .ok_or_else(|| "invalid ACS operation path".to_string())?
+                    .to_ascii_lowercase();
+                if mail.get_message(ALL_MAILBOX, &operation_id).is_err()
                     && mail
                         .get_repeatability_record(&format!("acs-email-operation/{operation_id}"))
                         .map_err(|error| error.to_string())?
