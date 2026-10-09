@@ -111,7 +111,7 @@ pub fn check_object_expiration(
     }
 
     // Get the object to check expiration
-    let object = storage.get_object(bucket, key)?;
+    let object = storage.get_object_metadata(bucket, key)?;
     if object_has_active_data_protection(&object, now) {
         debug!(
             bucket = bucket,

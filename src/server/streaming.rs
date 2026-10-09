@@ -170,6 +170,8 @@ where
     let mut md5_ctx = Md5Context::new();
     let mut sha256_ctx = Sha256::new();
     let mut sha384_ctx = Sha384::new();
+    let mut sha1_ctx = sha1::Sha1::new();
+    let mut crc32_ctx = crc32fast::Hasher::new();
     let mut crc32c = 0;
     let mut crc64 = crc64fast_nvme::Digest::new();
     let mut total: u64 = 0;
@@ -177,6 +179,7 @@ where
 
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|e| CollectBodyError::BodyRead(e.to_string()))?;
+        super::http::reject_s3_checksum_trailers(frame.trailers_ref())?;
         let Some(data) = frame.data_ref() else {
             continue;
         };
@@ -191,6 +194,8 @@ where
         md5_ctx.consume(data);
         sha256_ctx.update(data);
         sha384_ctx.update(data);
+        sha1_ctx.update(data);
+        crc32_ctx.update(data);
         crc32c = crc32c::crc32c_append(crc32c, data);
         crc64.write(data);
     }
@@ -214,6 +219,8 @@ where
         sha384_ctx.finalize().into(),
         crc32c,
         crc64.sum64(),
+        sha1_ctx.finalize().into(),
+        crc32_ctx.finalize(),
     );
     partial_file.disarm();
     Ok(payload)
@@ -450,6 +457,8 @@ mod tests {
         assert_eq!(spooled.md5, md5::compute(&payload).0);
         assert_eq!(spooled.sha256_hex, hex::encode(Sha256::digest(&payload)));
         assert_eq!(spooled.sha384, Sha384::digest(&payload).as_slice());
+        assert_eq!(spooled.sha1, sha1::Sha1::digest(&payload).as_slice());
+        assert_eq!(spooled.crc32, crc32fast::hash(&payload));
         assert_eq!(spooled.crc32c, crc32c::crc32c(&payload));
         let mut crc64 = crc64fast_nvme::Digest::new();
         crc64.write(&payload);
@@ -458,6 +467,19 @@ mod tests {
         assert_eq!(on_disk, payload);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn should_reject_s3_checksum_trailers_and_clean_up_spool() {
+        let dir = std::env::temp_dir().join(format!("sqrzl-trailers-{}", Uuid::new_v4()));
+        let mut trailers = HeaderMap::new();
+        trailers.insert("x-amz-checksum-crc32", HeaderValue::from_static("AAAAAA=="));
+        let body = Body::from(b"trailer payload".to_vec())
+            .with_trailers(std::future::ready(Some(Ok(trailers))));
+        let result = spool_body_to_disk(body, 1024, &dir).await;
+        assert!(matches!(result, Err(CollectBodyError::BodyRead(_))));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

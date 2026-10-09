@@ -273,6 +273,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32fast"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "crc64fast-nvme"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1461,6 +1470,7 @@ dependencies = [
  "chrono",
  "cntryl-stress",
  "crc32c",
+ "crc32fast",
  "crc64fast-nvme",
  "crossbeam-skiplist",
  "getrandom 0.4.3",

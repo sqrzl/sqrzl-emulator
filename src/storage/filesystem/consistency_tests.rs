@@ -382,3 +382,57 @@ fn should_hide_the_body_publication_window_from_all_object_readers() {
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_admit_s3_replacements_and_subresources_without_loading_existing_payloads() {
+    use http_body_util::Full;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counter = reads.clone();
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if phase == TestPhase::FullPayload {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    }));
+    storage
+        .put_bucket_lifecycle(
+            "coherent",
+            crate::models::lifecycle::LifecycleConfiguration { rules: vec![] },
+        )
+        .unwrap();
+    let config = Arc::new(crate::Config {
+        access_key_id: None,
+        secret_access_key: None,
+        enforce_auth: false,
+        admin_auth_disabled: false,
+        blobs_path: base.to_string_lossy().to_string(),
+        lifecycle_interval: Duration::from_hours(1),
+        api_port: 0,
+        ui_port: 0,
+        max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+        smtp_port: 0,
+        vendor_credentials: crate::config::VendorCredentials::default(),
+    });
+    for (method, suffix, body, headers) in [
+        ("PUT", "", b"replacement".as_slice(), vec![]),
+        ("PUT", "?tagging", b"<Tagging><TagSet><Tag><Key>owner</Key><Value>contract</Value></Tag></TagSet></Tagging>".as_slice(), vec![]),
+        ("PUT", "?acl", b"".as_slice(), vec![("x-amz-acl", "private")]),
+        ("HEAD", "", b"".as_slice(), vec![]),
+        ("GET", "?tagging", b"".as_slice(), vec![]),
+        ("GET", "?acl", b"".as_slice(), vec![]),
+        ("GET", "", b"".as_slice(), vec![("range", "bytes=0-2")]),
+        ("DELETE", "?tagging", b"".as_slice(), vec![]),
+        ("DELETE", "", b"".as_slice(), vec![]),
+    ] {
+        reads.store(0, Ordering::SeqCst);
+        let mut builder = hyper::Request::builder().method(method).uri(format!("http://localhost/coherent/lease{suffix}"));
+        for (name, value) in headers { builder = builder.header(name, value); }
+        let req = crate::server::RequestExt::from_hyper(builder.body(Full::new(bytes::Bytes::copy_from_slice(body))).unwrap()).await.unwrap();
+        let response = crate::providers::AdapterRegistry::default().handle(storage.clone(), config.clone(), req).await.unwrap();
+        let expected = if method == "DELETE" { http::StatusCode::NO_CONTENT } else if method == "GET" && suffix.is_empty() { http::StatusCode::PARTIAL_CONTENT } else { http::StatusCode::OK };
+        assert_eq!(response.status(), expected, "{method} {suffix}");
+        assert_eq!(reads.load(Ordering::SeqCst), 0, "{method} {suffix} loaded the existing payload");
+    }
+    fs::remove_dir_all(base).unwrap();
+}
