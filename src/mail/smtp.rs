@@ -75,6 +75,7 @@ struct Transaction {
 /// Drives one SMTP connection to completion. Generic over the stream type so
 /// tests can exercise it over an in-memory `tokio::io::duplex` pipe instead of a
 /// real socket.
+#[allow(clippy::too_many_lines)] // One SMTP state machine keeps protocol and resource rejection/reset behavior together.
 async fn handle_session<S>(
     stream: S,
     mail: Arc<dyn MailStore>,
@@ -157,11 +158,19 @@ where
                         transaction = Transaction::default();
                         continue;
                     }
+                    Err(Error::CaptureTooLarge) => {
+                        write_line(&mut writer, &format!("552 {}", Error::CaptureTooLarge)).await?;
+                        transaction = Transaction::default();
+                        continue;
+                    }
                     Err(error) => return Err(error),
                 };
                 let message = build_message(&transaction, &raw);
                 match fan_out(mail.as_ref(), &message) {
                     Ok(_) => write_line(&mut writer, "250 OK: message accepted").await?,
+                    Err(Error::CaptureTooLarge) => {
+                        write_line(&mut writer, &format!("552 {}", Error::CaptureTooLarge)).await?;
+                    }
                     Err(err) => write_line(&mut writer, &format!("451 {err}")).await?,
                 }
                 transaction = Transaction::default();
@@ -286,6 +295,13 @@ async fn read_data<R>(
 where
     R: AsyncRead + Unpin,
 {
+    // Even one-recipient capture reserves six message representations. Raw
+    // MIME occupies at least two JSON bytes per input byte in each, plus two
+    // raw sidecars: a lower bound of fourteen bytes per raw input byte. Reject
+    // a necessarily oversized DATA payload before constructing body/MIME copies.
+    let raw_capture_limit = usize::try_from(crate::capture::budget::MAX_CAPTURE_BYTES / 14)
+        .expect("the fixed capture limit fits usize");
+    let input_limit = max_message_bytes.min(raw_capture_limit);
     let mut raw = Vec::new();
     let mut line = Vec::new();
     let mut too_large = false;
@@ -301,7 +317,7 @@ where
         let line_limit = if too_large {
             3
         } else {
-            max_message_bytes.saturating_add(3)
+            input_limit.saturating_add(3)
         };
         if line.len() < line_limit {
             line.push(byte);
@@ -323,7 +339,7 @@ where
             if !too_large {
                 let unescaped = line.strip_prefix(b".").unwrap_or(&line);
                 let added = unescaped.len().saturating_add(1);
-                if raw.len().saturating_add(added) > max_message_bytes {
+                if raw.len().saturating_add(added) > input_limit {
                     too_large = true;
                     raw.clear();
                 } else {
@@ -334,7 +350,9 @@ where
             line.clear();
         }
     }
-    if too_large {
+    if too_large && input_limit < max_message_bytes {
+        Err(Error::CaptureTooLarge)
+    } else if too_large {
         Err(Error::InvalidRequest(format!(
             "message exceeds the {max_message_bytes}-byte emulator limit"
         )))
@@ -591,6 +609,64 @@ mod tests {
             .unwrap()
             .messages
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_reject_projected_smtp_capture_and_accept_a_later_transaction() {
+        let mail = temp_store();
+        let (client, server) = tokio::io::duplex(4096);
+        let session = tokio::spawn(handle_session(server, mail.clone(), 2 * 1024 * 1024));
+        let mut reader = ClientBufReader::new(client);
+        assert_reply(&mut reader, "220").await;
+        send(&mut reader, "EHLO client.example.com").await;
+        assert_reply(&mut reader, "250").await;
+        send(&mut reader, "MAIL FROM:<sender@example.com>").await;
+        assert_reply(&mut reader, "250").await;
+        for n in 0..20 {
+            send(&mut reader, &format!("RCPT TO:<recipient{n}@example.com>")).await;
+            assert_reply(&mut reader, "250").await;
+        }
+        send(&mut reader, "DATA").await;
+        assert_reply(&mut reader, "354").await;
+        send(&mut reader, "Subject: capture resource limit").await;
+        send(&mut reader, "").await;
+        let line = "x".repeat(512);
+        for _ in 0..2048 {
+            send(&mut reader, &line).await;
+        }
+        send(&mut reader, ".").await;
+        let mut response = String::new();
+        reader.read_line(&mut response).await.unwrap();
+        assert!(response.starts_with("552"));
+        assert!(response.contains("local 64 MiB aggregate limit"));
+        assert!(mail.list_mailboxes().unwrap().is_empty());
+        send(&mut reader, "MAIL FROM:<sender@example.com>").await;
+        assert_reply(&mut reader, "250").await;
+        send(&mut reader, "RCPT TO:<retry@example.com>").await;
+        assert_reply(&mut reader, "250").await;
+        send(&mut reader, "DATA").await;
+        assert_reply(&mut reader, "354").await;
+        send(&mut reader, "Subject: retry").await;
+        send(&mut reader, "").await;
+        send(&mut reader, "small").await;
+        send(&mut reader, ".").await;
+        assert_reply(&mut reader, "250").await;
+        send(&mut reader, "QUIT").await;
+        assert_reply(&mut reader, "221").await;
+        session.await.unwrap().unwrap();
+        assert_eq!(mail.list_mailboxes().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn should_bound_raw_smtp_data_before_constructing_capture_copies() {
+        let limit = usize::try_from(crate::capture::budget::MAX_CAPTURE_BYTES / 14).unwrap();
+        let mut payload = vec![b'x'; limit + 1];
+        payload.extend_from_slice(b"\r\n.\r\n");
+        let mut reader = BufReader::new(payload.as_slice());
+        assert!(matches!(
+            read_data(&mut reader, 128 * 1024 * 1024).await,
+            Err(Error::CaptureTooLarge)
+        ));
     }
 
     #[tokio::test]

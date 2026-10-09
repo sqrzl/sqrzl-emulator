@@ -63,6 +63,7 @@ impl AcsSmsAdapter {
             .build()
     }
 
+    #[allow(clippy::too_many_arguments)] // Shared admission state must be checked before each new recipient payload clone.
     fn prepare_recipient(
         store: &dyn SmsStore,
         batch_id: &str,
@@ -71,31 +72,12 @@ impl AcsSmsAdapter {
         options: Option<&Value>,
         recipient: &AcsRecipient,
         pending_records: &[RepeatabilityRecord],
+        budget: &mut crate::capture::budget::CaptureBudget,
     ) -> crate::error::Result<(Value, Option<NewSmsMessage>, Option<RepeatabilityRecord>)> {
         let to = recipient.to.as_str();
         let repeatability_request_id = recipient.repeatability_request_id.as_ref();
         let repeatability_first_sent = recipient.repeatability_first_sent.as_ref();
         let request_hash = acs_sms_request_hash(sender, to, message_body, options);
-        let mut metadata = HashMap::new();
-        if let Some(options) = options {
-            metadata.insert("sms_send_options".to_string(), options.clone());
-        }
-        if let Some(value) = repeatability_request_id {
-            metadata.insert(
-                "repeatability_request_id".to_string(),
-                Value::String(value.clone()),
-            );
-        }
-        if let Some(value) = repeatability_first_sent {
-            metadata.insert(
-                "repeatability_first_sent".to_string(),
-                Value::String(value.clone()),
-            );
-        }
-        metadata.insert(
-            "repeatability_request_hash".to_string(),
-            Value::String(request_hash.clone()),
-        );
         let key = repeatability_request_id
             .map(|request_id| format!("acs-sms/{to}/{}", request_id.to_ascii_lowercase()));
         if let Some(key) = &key {
@@ -136,6 +118,27 @@ impl AcsSmsAdapter {
         }
         let provider_message_id = crate::sms::generate_provider_message_id(SmsProvider::Acs);
         let (mut result, message) = if is_e164(to) {
+            Self::admit_recipient(budget, message_body, options)?;
+            let mut metadata = HashMap::new();
+            if let Some(options) = options {
+                metadata.insert("sms_send_options".to_string(), options.clone());
+            }
+            if let Some(value) = repeatability_request_id {
+                metadata.insert(
+                    "repeatability_request_id".to_string(),
+                    Value::String(value.clone()),
+                );
+            }
+            if let Some(value) = repeatability_first_sent {
+                metadata.insert(
+                    "repeatability_first_sent".to_string(),
+                    Value::String(value.clone()),
+                );
+            }
+            metadata.insert(
+                "repeatability_request_hash".to_string(),
+                Value::String(request_hash.clone()),
+            );
             (
                 serde_json::json!({"to":to, "messageId":provider_message_id, "successful":true, "httpStatusCode":202}),
                 Some(NewSmsMessage {
@@ -169,6 +172,21 @@ impl AcsSmsAdapter {
             transaction_id: String::new(),
         });
         Ok((result, message, record))
+    }
+
+    fn admit_recipient(
+        budget: &mut crate::capture::budget::CaptureBudget,
+        body: &str,
+        options: Option<&Value>,
+    ) -> crate::error::Result<()> {
+        budget.copies(
+            body.len() as u64 + crate::capture::budget::ENVELOPE_BYTES,
+            5,
+        )?;
+        if let Some(options) = options {
+            budget.copies(crate::capture::budget::json_bytes(options)?, 4)?;
+        }
+        Ok(())
     }
 
     fn legacy_recipient_result(
@@ -367,9 +385,23 @@ impl AcsSmsAdapter {
         };
         let batch_id = generate_batch_id();
         let options = match validate_sms_send_options(payload.get("smsSendOptions")) {
-            Ok(options) => options.cloned(),
+            Ok(options) => options,
             Err(message) => return Self::validation_error("SmsSendOptions", &message),
         };
+        let mut budget = crate::capture::budget::CaptureBudget::default();
+        let admitted = (|| {
+            if let Some(options) = options {
+                budget.add(crate::capture::budget::json_bytes(options)?)?;
+            }
+            Ok::<_, crate::error::Error>(())
+        })();
+        if let Err(error) = admitted {
+            return Self::standard_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "RequestBodyTooLarge",
+                &error.to_string(),
+            );
+        }
         let Ok(_claim) = ACS_SMS_CLAIMS.lock() else {
             return Self::standard_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -403,9 +435,10 @@ impl AcsSmsAdapter {
                 &batch_id,
                 sender,
                 message_body,
-                options.as_ref(),
+                options,
                 &recipient,
                 &records,
+                &mut budget,
             ) {
                 Ok((result, message, record)) => {
                     if let Some(message) = message {
@@ -416,6 +449,13 @@ impl AcsSmsAdapter {
                     }
                     results.push(result);
                 }
+                Err(crate::error::Error::CaptureTooLarge) => {
+                    return Self::standard_error(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "RequestBodyTooLarge",
+                        &crate::error::Error::CaptureTooLarge.to_string(),
+                    );
+                }
                 Err(error) => {
                     return Self::standard_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -424,6 +464,13 @@ impl AcsSmsAdapter {
                     )
                 }
             }
+        }
+        if let Err(error) = crate::sms::budget::check_messages(&captured, &records) {
+            return Self::standard_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "RequestBodyTooLarge",
+                &error.to_string(),
+            );
         }
         match store.capture_batch(captured.clone(), &records) {
             Ok(Some(_)) => {}
@@ -454,6 +501,13 @@ impl AcsSmsAdapter {
                         }
                     }
                 }
+            }
+            Err(crate::error::Error::CaptureTooLarge) => {
+                return Self::standard_error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "RequestBodyTooLarge",
+                    &crate::error::Error::CaptureTooLarge.to_string(),
+                );
             }
             Err(error) => {
                 return Self::standard_error(

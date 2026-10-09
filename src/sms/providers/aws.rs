@@ -146,6 +146,13 @@ impl SnsSmsAdapter {
             metadata,
         }) {
             Ok(message) => message,
+            Err(crate::error::Error::CaptureTooLarge) => {
+                return Self::error(
+                    "InvalidParameter",
+                    &crate::error::Error::CaptureTooLarge.to_string(),
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                )
+            }
             Err(error) => {
                 return Self::error(
                     "InternalError",
@@ -447,6 +454,13 @@ impl AwsSmsVoiceAdapter {
             metadata,
         }) {
             Ok(message) => message,
+            Err(crate::error::Error::CaptureTooLarge) => {
+                return Self::error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "ValidationException",
+                    &crate::error::Error::CaptureTooLarge.to_string(),
+                )
+            }
             Err(error) => {
                 return Self::error(
                     StatusCode::INTERNAL_SERVER_ERROR,

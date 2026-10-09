@@ -259,6 +259,13 @@ impl TwilioSmsAdapter {
             metadata,
         }) {
             Ok(message) => message,
+            Err(crate::error::Error::CaptureTooLarge) => {
+                return Self::error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    20_413,
+                    &crate::error::Error::CaptureTooLarge.to_string(),
+                )
+            }
             Err(error) => {
                 return json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,

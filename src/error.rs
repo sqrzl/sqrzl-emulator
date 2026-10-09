@@ -64,6 +64,9 @@ pub enum Error {
 
     #[error("Message not found")]
     MessageNotFound,
+
+    #[error("Projected materialized capture exceeds the local 64 MiB aggregate limit")]
+    CaptureTooLarge,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -72,6 +75,7 @@ impl Error {
     #[must_use]
     pub fn status_code(&self) -> http::StatusCode {
         match self {
+            Error::CaptureTooLarge => http::StatusCode::PAYLOAD_TOO_LARGE,
             Error::BucketAlreadyExists | Error::BucketNotEmpty => http::StatusCode::CONFLICT,
             Error::BucketNotFound
             | Error::KeyNotFound
@@ -97,6 +101,7 @@ impl Error {
     #[must_use]
     pub fn error_code(&self) -> &'static str {
         match self {
+            Error::CaptureTooLarge => "RequestEntityTooLarge",
             Error::BucketAlreadyExists => "BucketAlreadyExists",
             Error::BucketNotFound => "NoSuchBucket",
             Error::BucketNotEmpty => "BucketNotEmpty",

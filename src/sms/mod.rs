@@ -1,3 +1,4 @@
+pub(crate) mod budget;
 pub mod filesystem;
 pub mod model;
 pub mod providers;
