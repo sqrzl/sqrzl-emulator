@@ -16,15 +16,39 @@ use uuid::Uuid;
 
 #[cfg(test)]
 mod consistency_tests;
+#[cfg(test)]
+mod crash_tests;
 mod io;
+mod publication;
 
 #[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TestPhase {
     ReadMetadata,
     ReadPayloadMetadata,
     FullPayload,
+    BodyPrepared,
+    MetadataPrepared,
+    VersionBodyPrepared,
+    VersionMetadataPrepared,
     BodyPublished,
+    DirectoryCreated,
+    PublicationStaged,
+    PublicationCommitted,
+    MetadataPublished,
+    PublicationCleaned,
+    VersionBodyPublished,
+    VersionMetadataPublished,
+    VersionPublished,
+    VersionDeleted,
+    VersionRetiring,
+    MarkerBodyPublished,
+    MarkerMetadataPublished,
+    CurrentBodyRemoved,
+    CurrentRemoved,
+    UploadCleanup,
+    UploadRecordRetired,
+    UploadCleanupDone,
 }
 
 #[cfg(test)]
@@ -37,6 +61,8 @@ type TestHook = Arc<dyn Fn(TestPhase) + Send + Sync>;
 enum ObjectPayload<'a> {
     InMemory,
     Spooled(&'a Path),
+    /// Existing immutable generation bytes stay in place until the decision commits.
+    Stored(&'a Path),
 }
 
 pub struct FilesystemStorage {
@@ -67,9 +93,8 @@ impl BucketStore for FilesystemStorage {
             return Err(Error::BucketAlreadyExists);
         }
 
-        fs::create_dir(&bucket_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to create bucket: {e}")))?;
-        fs::write(bucket_dir.join(".bucket.name"), name.as_bytes())
+        Self::create_directory_durable(&bucket_dir)?;
+        Self::atomic_write(&bucket_dir.join(".bucket.name"), name.as_bytes())
             .map_err(|e| Error::InternalError(format!("Failed to persist bucket identity: {e}")))?;
         let now = chrono::Utc::now();
         if let Err(error) = self.write_bucket_identity(
@@ -290,7 +315,7 @@ impl FilesystemStorage {
         let versioning_enabled = self.versioning_enabled(bucket);
         let versioning_suspended = self.versioning_suspended(bucket);
         if versioning_enabled || versioning_suspended {
-            match self.read_object_locked(bucket, key) {
+            match self.read_object_metadata_locked(bucket, key) {
                 Ok(current_object) => {
                     let snapshot_version_id = current_object
                         .version_id
@@ -309,14 +334,6 @@ impl FilesystemStorage {
                 Err(error) => return Err(error),
             }
             if versioning_suspended {
-                let null_version = self.version_dir(bucket, &object_id, "null");
-                if null_version.exists() {
-                    fs::remove_dir_all(&null_version).map_err(|error| {
-                        Error::InternalError(format!(
-                            "Failed to replace suspended null version: {error}"
-                        ))
-                    })?;
-                }
                 object.version_id = Some("null".to_string());
             } else {
                 object.version_id = Some(Uuid::new_v4().to_string());
@@ -324,14 +341,27 @@ impl FilesystemStorage {
         } else {
             object.version_id = None;
         }
-        match payload {
-            ObjectPayload::InMemory => self.write_object_files(bucket, &object_id, &object)?,
+        let outcome = match payload {
+            ObjectPayload::InMemory => self.write_object_files(bucket, &object_id, &object),
             ObjectPayload::Spooled(payload_path) => {
-                self.write_object_files_from_path(bucket, &object_id, &object, payload_path)?;
+                self.write_object_files_from_path(bucket, &object_id, &object, payload_path)
             }
+            ObjectPayload::Stored(path) => self.publish_pair(
+                &self.object_id_dir(bucket, &object_id),
+                &object,
+                ObjectPayload::Stored(path),
+            ),
+        };
+        // An ambiguous commit remains visible to listings, whose locked
+        // metadata read recovers or fails closed just like GET and HEAD.
+        let directory = self.object_id_dir(bucket, &object_id);
+        if outcome.is_ok()
+            || directory.join(".publication.json").exists()
+            || directory.join("object.blob").exists()
+        {
+            self.index.insert(bucket, key);
         }
-        self.index.insert(bucket, key);
-        Ok(())
+        outcome
     }
 
     fn delete_object_locked(&self, bucket: &str, key: &str) -> Result<()> {
@@ -343,7 +373,7 @@ impl FilesystemStorage {
             if !self.bucket_exists(bucket)? {
                 return Err(Error::BucketNotFound);
             }
-            match self.read_object_locked(bucket, key) {
+            match self.read_object_metadata_locked(bucket, key) {
                 Ok(current_object) => {
                     let current_version_id = current_object
                         .version_id
@@ -361,16 +391,6 @@ impl FilesystemStorage {
                 Err(Error::KeyNotFound) => {}
                 Err(error) => return Err(error),
             }
-            if versioning_suspended {
-                let null_version = self.version_dir(bucket, &object_id, "null");
-                if null_version.exists() {
-                    fs::remove_dir_all(&null_version).map_err(|error| {
-                        Error::InternalError(format!(
-                            "Failed to replace suspended null version: {error}"
-                        ))
-                    })?;
-                }
-            }
             let delete_marker_id = if versioning_suspended {
                 "null".to_string()
             } else {
@@ -385,64 +405,29 @@ impl FilesystemStorage {
             delete_marker
                 .provider_metadata
                 .insert("s3_delete_marker".to_string(), "true".to_string());
-            self.write_version_snapshot(bucket, &object_id, &delete_marker_id, &delete_marker)?;
-            let object_data_path = self.object_data_path(bucket, &object_id);
-            let metadata_path = self.object_metadata_path(bucket, &object_id);
-            if object_data_path.exists() {
-                fs::remove_file(&object_data_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
-            }
-            if metadata_path.exists() {
-                fs::remove_file(&metadata_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
-            }
-            if !self.version_entries_exist(bucket, &object_id)? {
-                let _ = fs::remove_dir_all(&object_id_dir);
-            }
+            let remove_versions = if versioning_suspended {
+                vec!["null".to_string()]
+            } else {
+                Vec::new()
+            };
+            self.change_history(
+                &object_id_dir,
+                None,
+                remove_versions,
+                Some(delete_marker),
+                true,
+            )?;
         } else {
             self.read_object_metadata_locked(bucket, key)?;
-            fs::remove_dir_all(&object_id_dir)
-                .map_err(|e| Error::InternalError(format!("Failed to delete object: {e}")))?;
+            self.change_history(&object_id_dir, None, Vec::new(), None, true)?;
+            fs::remove_dir_all(&object_id_dir).map_err(|error| {
+                Error::InternalError(format!(
+                    "Failed to remove retired object directory: {error}"
+                ))
+            })?;
+            Self::sync_directory(&self.bucket_dir(bucket))?;
         }
         self.index.remove(bucket, key);
-        Ok(())
-    }
-
-    fn restore_latest_live_version(&self, bucket: &str, key: &str, object_id: &str) -> Result<()> {
-        if self.object_data_path(bucket, object_id).exists() {
-            self.index.insert(bucket, key);
-            return Ok(());
-        }
-
-        let latest = self
-            .list_object_versions_for_key_locked(bucket, key)?
-            .into_iter()
-            .max_by(|left, right| {
-                left.last_modified
-                    .cmp(&right.last_modified)
-                    .then_with(|| left.version_id.cmp(&right.version_id))
-            });
-        let Some(latest) = latest else {
-            self.index.remove(bucket, key);
-            return Ok(());
-        };
-        if latest
-            .provider_metadata
-            .get("s3_delete_marker")
-            .is_some_and(|value| value == "true")
-        {
-            self.index.remove(bucket, key);
-            return Ok(());
-        }
-
-        let version_id = latest.version_id.ok_or_else(|| {
-            Error::InternalError("Historical object version is missing a version id".to_string())
-        })?;
-        let restored = self.read_object_version_locked(bucket, key, &version_id)?;
-        self.write_object_files(bucket, object_id, &restored)?;
-        fs::remove_dir_all(self.version_dir(bucket, object_id, &version_id))
-            .map_err(|e| Error::InternalError(format!("Failed to promote object version: {e}")))?;
-        self.index.insert(bucket, key);
         Ok(())
     }
 
@@ -476,6 +461,7 @@ impl FilesystemStorage {
                     "Failed to lock object while configuring versioning".to_string(),
                 )
             })?;
+            Self::recover_publication(&entry.path())?;
             let Ok(mut current) = Self::read_object_metadata(&metadata_path) else {
                 continue;
             };
@@ -570,6 +556,7 @@ impl ObjectStore for FilesystemStorage {
             Error::InternalError("Failed to lock object for metadata update".to_string())
         })?;
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         let metadata_path = self.object_metadata_path(bucket, &object_id);
         if !metadata_path.exists() {
             return Ok(false);
@@ -660,6 +647,7 @@ impl ObjectStore for FilesystemStorage {
             Error::InternalError("Failed to lock object for metadata update".to_string())
         })?;
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         let metadata_path = self.object_metadata_path(bucket, &object_id);
 
         if !metadata_path.exists() {
@@ -674,8 +662,13 @@ impl ObjectStore for FilesystemStorage {
     }
 
     fn object_exists(&self, bucket: &str, key: &str) -> Result<bool> {
-        // Fast path: check lock-free index first
-        Ok(self.index.contains(bucket, key))
+        let lock = self.object_lock(bucket, key)?;
+        let _guard = lock.lock().map_err(|_| {
+            Error::InternalError("Failed to lock object for existence read".to_string())
+        })?;
+        let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
+        Ok(self.object_data_path(bucket, &object_id).exists())
     }
 }
 
@@ -684,6 +677,7 @@ impl FilesystemStorage {
     // than the public readers so the non-reentrant mutex is acquired only once.
     fn read_object_locked(&self, bucket: &str, key: &str) -> Result<Object> {
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         let object_data_path = self.object_data_path(bucket, &object_id);
 
         if !object_data_path.exists() {
@@ -703,6 +697,7 @@ impl FilesystemStorage {
 
     fn read_object_metadata_locked(&self, bucket: &str, key: &str) -> Result<Object> {
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         if !self.object_data_path(bucket, &object_id).exists() {
             return Err(Error::KeyNotFound);
         }
@@ -720,6 +715,7 @@ impl FilesystemStorage {
         end: Option<u64>,
     ) -> Result<(Object, Vec<u8>)> {
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         let object_data_path = self.object_data_path(bucket, &object_id);
 
         if !object_data_path.exists() {
@@ -794,16 +790,10 @@ impl AclStore for FilesystemStorage {
     }
 
     fn get_object_acl(&self, bucket: &str, key: &str) -> Result<Acl> {
-        let object_id = Self::compute_object_id(bucket, key);
-        let metadata_path = self.object_metadata_path(bucket, &object_id);
-
-        if !metadata_path.exists() {
-            return Err(Error::KeyNotFound);
-        }
-
-        let object = Self::read_object_metadata(&metadata_path)?;
-
-        Ok(object.acl.unwrap_or_default())
+        Ok(self
+            .get_object_metadata(bucket, key)?
+            .acl
+            .unwrap_or_default())
     }
 
     fn put_object_acl(&self, bucket: &str, key: &str, acl: Acl) -> Result<()> {
@@ -812,6 +802,7 @@ impl AclStore for FilesystemStorage {
             Error::InternalError("Failed to lock object for ACL update".to_string())
         })?;
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         let metadata_path = self.object_metadata_path(bucket, &object_id);
 
         if !metadata_path.exists() {
@@ -1135,14 +1126,7 @@ impl UploadStore for FilesystemStorage {
 
 impl TagStore for FilesystemStorage {
     fn get_object_tags(&self, bucket: &str, key: &str) -> Result<HashMap<String, String>> {
-        let object_id = Self::compute_object_id(bucket, key);
-        let metadata_path = self.object_metadata_path(bucket, &object_id);
-
-        if !metadata_path.exists() {
-            return Err(Error::KeyNotFound);
-        }
-
-        Ok(Self::read_object_metadata(&metadata_path)?.tags)
+        Ok(self.get_object_metadata(bucket, key)?.tags)
     }
 
     fn put_object_tags(
@@ -1156,6 +1140,7 @@ impl TagStore for FilesystemStorage {
             Error::InternalError("Failed to lock object for tag update".to_string())
         })?;
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         let metadata_path = self.object_metadata_path(bucket, &object_id);
 
         if !metadata_path.exists() {
@@ -1177,6 +1162,7 @@ impl TagStore for FilesystemStorage {
             Error::InternalError("Failed to lock object for tag update".to_string())
         })?;
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
         let metadata_path = self.object_metadata_path(bucket, &object_id);
 
         if !metadata_path.exists() {
@@ -1265,7 +1251,7 @@ impl FilesystemStorage {
         delimiter: &str,
         marker: Option<&str>,
         max_keys: usize,
-    ) -> crate::models::ListObjectsResult {
+    ) -> Result<crate::models::ListObjectsResult> {
         let entry_limit = max_keys.saturating_add(1);
         let entries = if delimiter == "/" && (prefix.is_empty() || prefix.ends_with('/')) {
             self.index
@@ -1290,21 +1276,19 @@ impl FilesystemStorage {
         for entry in page_entries {
             match entry.kind {
                 DirectoryEntryKind::CommonPrefix => common_prefixes.push(entry.path.clone()),
-                DirectoryEntryKind::Object => {
-                    let object_id = Self::compute_object_id(bucket, &entry.path);
-                    let metadata_path = self.object_metadata_path(bucket, &object_id);
-                    if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
-                        objects.push(obj);
-                    }
-                }
+                DirectoryEntryKind::Object => match self.get_object_metadata(bucket, &entry.path) {
+                    Ok(object) => objects.push(object),
+                    Err(Error::KeyNotFound) => {}
+                    Err(error) => return Err(error),
+                },
             }
         }
-        crate::models::ListObjectsResult {
+        Ok(crate::models::ListObjectsResult {
             common_prefixes,
             objects,
             is_truncated,
             next_marker,
-        }
+        })
     }
 }
 
@@ -1325,13 +1309,13 @@ impl ObjectListingStore for FilesystemStorage {
         let max_keys = max_keys.unwrap_or(1000);
 
         if let Some(delimiter) = delimiter.filter(|value| !value.is_empty()) {
-            return Ok(self.list_objects_with_delimiter(
+            return self.list_objects_with_delimiter(
                 bucket,
                 prefix.unwrap_or(""),
                 delimiter,
                 marker,
                 max_keys,
-            ));
+            );
         }
 
         let keys =
@@ -1341,10 +1325,10 @@ impl ObjectListingStore for FilesystemStorage {
         let page_keys = keys.iter().take(max_keys).collect::<Vec<_>>();
         let mut objects = Vec::with_capacity(page_keys.len());
         for obj_key in &page_keys {
-            let object_id = Self::compute_object_id(bucket, obj_key);
-            let metadata_path = self.object_metadata_path(bucket, &object_id);
-            if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
-                objects.push(obj);
+            match self.get_object_metadata(bucket, obj_key) {
+                Ok(object) => objects.push(object),
+                Err(Error::KeyNotFound) => {}
+                Err(error) => return Err(error),
             }
         }
 
@@ -1673,6 +1657,8 @@ impl MultipartStore for FilesystemStorage {
             let _ = fs::remove_dir(parent);
         }
         put_result?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::UploadCleanup);
         {
             let mut cache = self
                 .uploads_cache
@@ -1684,6 +1670,8 @@ impl MultipartStore for FilesystemStorage {
             uploads.remove(upload_id);
         }
         self.remove_upload_record(bucket, upload_id)?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::UploadCleanupDone);
 
         Ok(final_etag)
     }
@@ -1723,6 +1711,8 @@ impl FilesystemStorage {
         Self::validate_version_id(version_id)?;
 
         let object_id = Self::compute_object_id(bucket, key);
+        Self::recover_publication(&self.object_id_dir(bucket, &object_id))?;
+        Self::recover_publication(&self.version_dir(bucket, &object_id, version_id))?;
         let version_data_path = self.version_data_path(bucket, &object_id, version_id);
         if !version_data_path.exists() {
             let current_object = self
@@ -1741,6 +1731,8 @@ impl FilesystemStorage {
 
         let metadata_path = self.version_metadata_path(bucket, &object_id, version_id);
         let mut object = Self::read_object_metadata(&metadata_path)?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::FullPayload);
         object.data = fs::read(&version_data_path)
             .map_err(|e| Error::InternalError(format!("Failed to read version: {e}")))?;
 
@@ -1758,6 +1750,7 @@ impl FilesystemStorage {
 
         let object_id = Self::compute_object_id(bucket, key);
         let object_id_dir = self.object_id_dir(bucket, &object_id);
+        Self::recover_publication(&object_id_dir)?;
         if !object_id_dir.exists() {
             return Ok(Vec::new());
         }
@@ -1778,6 +1771,8 @@ impl FilesystemStorage {
                     continue;
                 }
 
+                Self::recover_publication(&version_path)?;
+
                 let metadata_path = version_path.join("object.meta.json");
                 if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
                     if obj.key == key {
@@ -1788,6 +1783,9 @@ impl FilesystemStorage {
         }
 
         versions.sort_unstable_by(|a, b| a.version_id.cmp(&b.version_id));
+        // A crash after committing the old snapshot but before replacing the
+        // current object can leave the same identity in both locations.
+        versions.dedup_by(|left, right| left.version_id == right.version_id);
         Ok(versions)
     }
 }
@@ -1865,6 +1863,21 @@ impl VersionStore for FilesystemStorage {
                         }
                     }
 
+                    let object_id =
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .ok_or_else(|| {
+                                Error::InternalError(
+                                    "Invalid object directory identity".to_string(),
+                                )
+                            })?;
+                    let lock = self.object_id_lock(bucket, object_id)?;
+                    let _guard = lock.lock().map_err(|_| {
+                        Error::InternalError(
+                            "Failed to lock object for version listing".to_string(),
+                        )
+                    })?;
+                    Self::recover_publication(&path)?;
                     let metadata_path = path.join("object.meta.json");
                     if let Ok(obj) = Self::read_object_metadata(&metadata_path) {
                         if obj.key.starts_with(prefix) && obj.version_id.is_some() {
@@ -1883,6 +1896,7 @@ impl VersionStore for FilesystemStorage {
                                     if let Some(_version_id) =
                                         version_path.file_name().and_then(|n| n.to_str())
                                     {
+                                        Self::recover_publication(&version_path)?;
                                         // Read version metadata to get the key and check prefix
                                         let metadata_path = version_path.join("object.meta.json");
                                         if let Ok(obj) = Self::read_object_metadata(&metadata_path)
@@ -1908,6 +1922,8 @@ impl VersionStore for FilesystemStorage {
             }
         });
 
+        versions
+            .dedup_by(|left, right| left.key == right.key && left.version_id == right.version_id);
         Ok(versions)
     }
 
@@ -1923,67 +1939,79 @@ impl VersionStore for FilesystemStorage {
         self.list_object_versions_for_key_locked(bucket, key)
     }
     fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
-        let object_lock = self.object_lock(bucket, key)?;
-        let _guard = object_lock.lock().map_err(|_| {
+        let lock = self.object_lock(bucket, key)?;
+        let _guard = lock.lock().map_err(|_| {
             Error::InternalError("Failed to lock object for version delete".to_string())
         })?;
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
         }
         Self::validate_version_id(version_id)?;
-
         let object_id = Self::compute_object_id(bucket, key);
-        let version_data_path = self.version_data_path(bucket, &object_id, version_id);
-        if !version_data_path.exists() {
-            let current_object = self
-                .read_object_locked(bucket, key)
-                .map_err(|err| match err {
-                    Error::KeyNotFound => Error::NoSuchVersion,
-                    other => other,
-                })?;
-
-            if current_object.version_id.as_deref() != Some(version_id) {
-                return Err(Error::NoSuchVersion);
-            }
-
-            let object_data_path = self.object_data_path(bucket, &object_id);
-            let metadata_path = self.object_metadata_path(bucket, &object_id);
-
-            if object_data_path.exists() {
-                fs::remove_file(&object_data_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete version: {e}")))?;
-            }
-
-            if metadata_path.exists() {
-                fs::remove_file(&metadata_path)
-                    .map_err(|e| Error::InternalError(format!("Failed to delete version: {e}")))?;
-            }
-
+        let directory = self.object_id_dir(bucket, &object_id);
+        Self::recover_publication(&directory)?;
+        let current = match self.read_object_metadata_locked(bucket, key) {
+            Ok(current) => Some(current),
+            Err(Error::KeyNotFound) => None,
+            Err(error) => return Err(error),
+        };
+        let historical_exists = self
+            .version_data_path(bucket, &object_id, version_id)
+            .exists();
+        let deleting_current = current
+            .as_ref()
+            .is_some_and(|object| object.version_id.as_deref() == Some(version_id));
+        if !historical_exists && !deleting_current {
+            return Err(Error::NoSuchVersion);
+        }
+        let mut remove_versions = vec![version_id.to_string()];
+        let latest = if deleting_current || current.is_none() {
+            self.list_object_versions_for_key_locked(bucket, key)?
+                .into_iter()
+                .filter(|object| object.version_id.as_deref() != Some(version_id))
+                .max_by(|left, right| {
+                    left.last_modified
+                        .cmp(&right.last_modified)
+                        .then_with(|| left.version_id.cmp(&right.version_id))
+                })
+        } else {
+            None
+        };
+        let promoted = if let Some(latest) = latest.filter(|object| {
+            object
+                .provider_metadata
+                .get("s3_delete_marker")
+                .is_none_or(|value| value != "true")
+        }) {
+            let id = latest.version_id.as_deref().ok_or_else(|| {
+                Error::InternalError("Historical object is missing version identity".to_string())
+            })?;
+            let path = self.version_data_path(bucket, &object_id, id);
+            remove_versions.push(id.to_string());
+            Some((latest, path))
+        } else {
+            None
+        };
+        let clear_current = promoted.is_none() && (deleting_current || current.is_none());
+        self.change_history(
+            &directory,
+            promoted
+                .as_ref()
+                .map(|(object, path)| (object, path.as_path())),
+            remove_versions,
+            None,
+            clear_current,
+        )?;
+        if self.object_data_path(bucket, &object_id).exists() {
+            self.index.insert(bucket, key);
+        } else {
             self.index.remove(bucket, key);
-
-            self.restore_latest_live_version(bucket, key, &object_id)?;
-
             if !self.version_entries_exist(bucket, &object_id)? {
-                let version_dir = self.object_id_dir(bucket, &object_id);
-                let _ = fs::remove_dir_all(&version_dir);
+                fs::remove_dir_all(&directory)
+                    .map_err(|error| Error::InternalError(error.to_string()))?;
+                Self::sync_directory(&self.bucket_dir(bucket))?;
             }
-
-            return Ok(());
         }
-
-        let version_dir = self.version_dir(bucket, &object_id, version_id);
-        fs::remove_dir_all(&version_dir)
-            .map_err(|e| Error::InternalError(format!("Failed to delete version: {e}")))?;
-
-        self.restore_latest_live_version(bucket, key, &object_id)?;
-
-        if !self.object_data_path(bucket, &object_id).exists()
-            && !self.version_entries_exist(bucket, &object_id)?
-        {
-            let object_id_dir = self.object_id_dir(bucket, &object_id);
-            let _ = fs::remove_dir_all(&object_id_dir);
-        }
-
         Ok(())
     }
 }

@@ -8320,8 +8320,8 @@ mod tests {
         let storage = temp_storage();
         storage.create_bucket("contracts".to_string()).unwrap();
         for (blob_type, comp) in [("AppendBlob", "appendblock"), ("PageBlob", "page")] {
-            // Admission uses declared metadata before loading body. Keep the test
-            // payload tiny so a regression can never allocate or OOM the runner.
+            // Use a sparse but valid stored extent. Publication rejects metadata
+            // whose size differs from the actual staged file.
             let mut object = crate::models::Object::new(
                 "blob".to_string(),
                 vec![0; 512],
@@ -8329,9 +8329,17 @@ mod tests {
             );
             object.size = 64 * 1024 * 1024 + 512;
             AzureBlobAdapter::set_blob_type(&mut object, blob_type);
-            storage
-                .put_object("contracts", "blob".to_string(), object.clone())
+            let payload =
+                std::env::temp_dir().join(format!("sqrzl-azure-extent-{}", uuid::Uuid::new_v4()));
+            std::fs::File::create(&payload)
+                .unwrap()
+                .set_len(object.size)
                 .unwrap();
+            storage
+                .put_object_streamed("contracts", "blob".to_string(), object.clone(), &payload)
+                .unwrap();
+            // A successful streamed publication owns/moves the source file.
+            let _ = std::fs::remove_file(payload);
             let response = adapter
                 .handle(
                     storage.clone(),
