@@ -220,6 +220,7 @@ def test_azure_large_block_blob_qualification(sqrzl_server, tmp_path, record_pro
 
 def test_gcs_large_resumable_qualification(sqrzl_server, tmp_path, record_property):
     media = pytest.importorskip("google.resumable_media.requests")
+    media_common = pytest.importorskip("google.resumable_media.common")
     exceptions = pytest.importorskip("google.api_core.exceptions")
     sqrzl_server.require_provider("gcs")
     sqrzl_server.require_process()
@@ -230,7 +231,7 @@ def test_gcs_large_resumable_qualification(sqrzl_server, tmp_path, record_proper
             "local-bearer-convenience; native V2 HMAC is a separate SDK gate",
         )
         bucket = client.bucket(sqrzl_server.bucket_name("measured-gcs"))
-        bucket.create()
+        bucket.create(retry=None)
         blob = bucket.blob("qualification/dense.bin")
         blob.chunk_size = PART_BYTES
         campaign.phase("resumable-upload")
@@ -259,6 +260,9 @@ def test_gcs_large_resumable_qualification(sqrzl_server, tmp_path, record_proper
             f"{sqrzl_server.api_url}/upload/storage/v1/b/{bucket.name}/o?uploadType=resumable",
             PART_BYTES,
         )
+        # The pinned media API has no retry constructor argument. Its request
+        # methods use this strategy; controlled transport checks guard the hook.
+        upload._retry_strategy = media_common.RetryStrategy(max_retries=0)
         with campaign.path.open("rb") as stream:
             upload.initiate(
                 client._http,
@@ -266,9 +270,11 @@ def test_gcs_large_resumable_qualification(sqrzl_server, tmp_path, record_proper
                 {"name": interrupted.name},
                 "application/octet-stream",
                 total_bytes=campaign.size,
-                timeout=(5, 5),
+                timeout=60,
             )
-            first = upload.transmit_next_chunk(client._http, timeout=(5, 5))
+            # A contiguous 64 MiB body uses the connect timeout during sendall.
+            # Scalar 60 bounds both sending and reading, as in the main upload.
+            first = upload.transmit_next_chunk(client._http, timeout=60)
             assert (
                 first.status_code == 308
                 and first.headers["Range"] == f"bytes=0-{PART_BYTES - 1}"
@@ -336,11 +342,12 @@ def test_oci_large_multipart_qualification(sqrzl_server, tmp_path, record_proper
     sqrzl_server.require_provider("oci")
     sqrzl_server.require_process()
     client = oci_client(sqrzl_server, tmp_path)
+    no_retry = oci.retry.NoneRetryStrategy()
+    client.retry_strategy = no_retry
     client.base_client.timeout = (5, 60)
     namespace = client.get_namespace().data
     bucket_name = sqrzl_server.bucket_name("measured-oci")
     object_name = "qualification/dense.bin"
-    no_retry = oci.retry.NoneRetryStrategy()
     with Campaign(sqrzl_server, tmp_path, record_property, "oci") as campaign:
         client.create_bucket(
             namespace,
