@@ -22,6 +22,7 @@ def test_s3_large_multipart_qualification(sqrzl_server, tmp_path, record_propert
     config = pytest.importorskip("botocore.config")
     errors = pytest.importorskip("botocore.exceptions")
     sqrzl_server.require_provider("s3")
+    sqrzl_server.require_process()
     client = boto3.client(
         "s3",
         endpoint_url=sqrzl_server.api_url,
@@ -136,6 +137,7 @@ def test_azure_large_block_blob_qualification(sqrzl_server, tmp_path, record_pro
     transport_module = pytest.importorskip("azure.core.pipeline.transport")
     exceptions = pytest.importorskip("azure.core.exceptions")
     sqrzl_server.require_provider("azure")
+    sqrzl_server.require_process()
     transport = transport_module.RequestsTransport()
     transport.open()
     service = azure_blob.BlobServiceClient(
@@ -220,6 +222,7 @@ def test_gcs_large_resumable_qualification(sqrzl_server, tmp_path, record_proper
     media = pytest.importorskip("google.resumable_media.requests")
     exceptions = pytest.importorskip("google.api_core.exceptions")
     sqrzl_server.require_provider("gcs")
+    sqrzl_server.require_process()
     client = gcs_client(sqrzl_server)
     with Campaign(sqrzl_server, tmp_path, record_property, "gcs") as campaign:
         record_property(
@@ -331,6 +334,7 @@ def test_gcs_large_resumable_qualification(sqrzl_server, tmp_path, record_proper
 def test_oci_large_multipart_qualification(sqrzl_server, tmp_path, record_property):
     oci = pytest.importorskip("oci")
     sqrzl_server.require_provider("oci")
+    sqrzl_server.require_process()
     client = oci_client(sqrzl_server, tmp_path)
     client.base_client.timeout = (5, 60)
     namespace = client.get_namespace().data
