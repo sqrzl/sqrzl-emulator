@@ -257,7 +257,7 @@ mod tests {
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "server::handlers::object::s3_contract_tests::should_not_treat_weak_if_match_as_a_strong_s3_precondition",
             "server::handlers::object::s3_contract_tests::should_reject_unsupported_copy_range_and_invalid_directives_without_mutation",
-            "server::handlers::object::s3_contract_tests::should_reject_malformed_copy_source_encoding_without_destination_mutation",
+            "server::handlers::object::tests::should_reject_malformed_copy_source_encoding_without_destination_mutation",
             "server::handlers::object::s3_contract_tests::should_reject_non_wildcard_copy_destination_if_none_match_without_mutation",
             "server::handlers::object::s3_contract_tests::should_replace_copy_content_type_and_metadata_without_changing_copy_semantics",
             "server::handlers::object::s3_contract_tests::should_return_precondition_failed_when_copy_source_was_not_modified_since",
