@@ -496,7 +496,7 @@ fn should_reject_incomplete_startup_instead_of_proving_azure_protection_absent()
             "invalid-json" => fs::write(directory.join("object.meta.json"), b"invalid").unwrap(),
             "missing-metadata" => fs::remove_file(directory.join("object.meta.json")).unwrap(),
             "missing-bucket-identity" => {
-                fs::remove_file(directory.parent().unwrap().join(".bucket.name")).unwrap()
+                fs::remove_file(directory.parent().unwrap().join(".bucket.name")).unwrap();
             }
             "wrong-bucket-identity" => fs::write(
                 directory.parent().unwrap().join(".bucket.name"),
