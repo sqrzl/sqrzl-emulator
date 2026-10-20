@@ -41,6 +41,13 @@ protection during its complete startup metadata pass, after publication recovery
 Incomplete or unreadable current metadata fails startup. An empty new bucket can
 also establish absence, without clearing a concurrent protection admission.
 
+If creation stops before publishing `.bucket.name`, startup removes the
+uncommitted bucket directory only when it is empty or contains solely regular
+bucket-name temporary files with recognized UUID names. Recovery syncs the root
+after removal, so creation can be retried. A missing name alongside a published
+identity, object, history, upload, symlink, or unknown entry still fails startup
+and preserves the directory's contents.
+
 Ordinary S3/GCS requests use this proof to avoid scanning unrelated objects.
 Before publishing any current protection metadata, replacing it through metadata
 CAS, or promoting a protected historical version, the store invalidates the proof.
@@ -77,6 +84,7 @@ Run these gates with:
 ```sh
 cargo test --test storage_root_ownership --test operation_coordination
 cargo test --lib storage::filesystem::protection_tests
+cargo test --lib storage::filesystem::bucket_recovery_tests
 ```
 
 The protection regression counts complete S3, GCS XML and GCS JSON object/range
@@ -88,3 +96,9 @@ late bucket initialization, and process termination around publication decisions
 These checks establish bounded metadata work and protection correctness. They
 do not establish the cause or resolution of downstream full-window watchdog
 failures; unchanged downstream qualification remains separate evidence.
+
+The bucket recovery campaign terminates real creator processes after durable
+directory creation, before the name rename, after that rename, and after the
+identity sidecar is published. Repeated reopening preserves surviving bytes and
+Azure protection, recovers uncommitted buckets for retry, and retains committed
+empty buckets. Missing-name controls preserve populated or ambiguous directories.

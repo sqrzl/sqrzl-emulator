@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex, Weak};
 use uuid::Uuid;
 
 #[cfg(test)]
+mod bucket_recovery_tests;
+#[cfg(test)]
 mod consistency_tests;
 #[cfg(test)]
 mod crash_tests;
@@ -35,6 +37,9 @@ enum TestPhase {
     VersionMetadataPrepared,
     BodyPublished,
     DirectoryCreated,
+    BucketDirectoryCreated,
+    BucketNamePrepared,
+    BucketNamePublished,
     BucketCreated,
     MetadataReplacementPrepared,
     PublicationStaged,
@@ -101,8 +106,15 @@ impl BucketStore for FilesystemStorage {
         }
 
         Self::create_directory_durable(&bucket_dir)?;
-        Self::atomic_write(&bucket_dir.join(".bucket.name"), name.as_bytes())
-            .map_err(|e| Error::InternalError(format!("Failed to persist bucket identity: {e}")))?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::BucketDirectoryCreated);
+        Self::atomic_write_prepared(&bucket_dir.join(".bucket.name"), name.as_bytes(), || {
+            #[cfg(test)]
+            self.test_phase(TestPhase::BucketNamePrepared);
+        })
+        .map_err(|e| Error::InternalError(format!("Failed to persist bucket identity: {e}")))?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::BucketNamePublished);
         let now = chrono::Utc::now();
         if let Err(error) = self.write_bucket_identity(
             &name,

@@ -114,11 +114,13 @@ impl FilesystemStorage {
             }
             let bucket_name = match fs::read_to_string(entry.path().join(".bucket.name")) {
                 Ok(name) => name,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && !entry.file_name().to_string_lossy().starts_with("b-") =>
-                {
-                    continue
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if !entry.file_name().to_string_lossy().starts_with("b-")
+                        || Self::recover_uncommitted_bucket(&entry.path())?
+                    {
+                        continue;
+                    }
+                    return Err(io_error(error));
                 }
                 Err(error) => return Err(io_error(error)),
             };
@@ -146,6 +148,58 @@ impl FilesystemStorage {
         };
         storage.recover_gcs_cancellations()?;
         Ok(storage)
+    }
+
+    fn recover_uncommitted_bucket(directory: &Path) -> Result<bool> {
+        let Some(digest) = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("b-"))
+        else {
+            return Ok(false);
+        };
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Ok(false);
+        }
+        let io_error = |error: std::io::Error| {
+            Error::InternalError(format!(
+                "Failed to recover uncommitted bucket '{}': {error}",
+                directory.display()
+            ))
+        };
+        let mut temporary_files = Vec::new();
+        for entry in fs::read_dir(directory).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            let name = entry.file_name();
+            // Before the name rename, creation can leave only its empty
+            // directory and private name file. Do not follow symlinks or
+            // discard any published identity, object, upload, or unknown state.
+            if !entry.file_type().map_err(io_error)?.is_file()
+                || name
+                    .to_str()
+                    .and_then(|name| name.strip_prefix("..bucket.name."))
+                    .and_then(|suffix| suffix.strip_suffix(".tmp"))
+                    .is_none_or(|suffix| Uuid::parse_str(suffix).is_err())
+            {
+                return Ok(false);
+            }
+            temporary_files.push(entry.path());
+        }
+        // Inspect every entry before removing anything. remove_dir also refuses
+        // to remove the bucket if unexpected contents appear during recovery.
+        for temporary in temporary_files {
+            fs::remove_file(temporary).map_err(io_error)?;
+        }
+        fs::remove_dir(directory).map_err(io_error)?;
+        let parent = directory
+            .parent()
+            .ok_or_else(|| Error::InternalError("Invalid bucket directory".to_string()))?;
+        Self::sync_directory(parent)?;
+        Ok(true)
     }
 
     fn rebuild_bucket_index(index: &LockFreeIndex, bucket: &str, directory: &Path) -> Result<bool> {
@@ -705,6 +759,14 @@ impl FilesystemStorage {
     }
 
     pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+        Self::atomic_write_prepared(path, bytes, || {})
+    }
+
+    pub(super) fn atomic_write_prepared(
+        path: &Path,
+        bytes: &[u8],
+        prepared: impl FnOnce(),
+    ) -> Result<()> {
         let parent = path
             .parent()
             .ok_or_else(|| Error::InternalError("Invalid file path".to_string()))?;
@@ -723,6 +785,7 @@ impl FilesystemStorage {
                 .map_err(|e| Error::InternalError(format!("Failed to write temp file: {e}")))?;
             file.sync_all()
                 .map_err(|e| Error::InternalError(format!("Failed to sync temp file: {e}")))?;
+            prepared();
             fs::rename(&temp_path, path)
                 .map_err(|e| Error::InternalError(format!("Failed to commit temp file: {e}")))?;
             Self::sync_directory(parent)
