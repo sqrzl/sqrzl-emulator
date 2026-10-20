@@ -148,6 +148,16 @@ The table below is the complete runtime configuration surface.
 | `OCI_KEY_FINGERPRINT` | OCI API signing-key fingerprint | Unset | Final component of the accepted OCI request-signing key ID. |
 | `OCI_PUBLIC_KEY_PATH` | Readable PKCS#1 or PKCS#8 RSA public-key PEM path | Unset | Public key used to verify OCI RSA-SHA256 request signatures. |
 | `SQRZL_ADMIN_AUTH_DISABLED` | `1`, `true`, `yes`, or `on` (case-insensitive) enable it; every other value is false | `false` | Keeps the UI and `/admin/v1` in open mode while provider API authentication remains enabled. |
+| `SQRZL_MCP_AUTH_ENABLED` | Boolean (`1`, `true`, `yes`, or `on`) | `false` | Requires OAuth bearer tokens for `/mcp`. MCP is also protected whenever both generic access-key variables are set. |
+| `SQRZL_MCP_RESOURCE_URL` | Absolute HTTP(S) URL with path exactly `/mcp` | Unset | Canonical protected-resource URI. Required when MCP auth is enabled. |
+| `SQRZL_MCP_AUTHORIZATION_SERVER` | Absolute HTTP(S) URL | Unset | External authorization server advertised in protected-resource metadata. Sqrzl does not issue tokens. |
+| `SQRZL_MCP_ISSUER` | JWT issuer string | Unset | Exact `iss` value required in OAuth access tokens. |
+| `SQRZL_MCP_AUDIENCE` | JWT audience string | Unset | Exact audience required in OAuth access tokens; normally the MCP resource URL. |
+| `SQRZL_MCP_JWKS_URL` | HTTPS URL | Unset | External authorization server's JSON Web Key Set endpoint. |
+| `SQRZL_MCP_ALLOWED_HOSTS` | Comma-separated HTTP Host values | Loopback hosts | Adds Host values accepted by the MCP transport. |
+| `SQRZL_MCP_ALLOWED_ORIGINS` | Comma-separated origins | `http://localhost:<SQRZL_UI_PORT>`, `http://127.0.0.1:<SQRZL_UI_PORT>` | Origins accepted by the MCP transport. Requests without an `Origin` header are allowed for non-browser MCP clients. |
+| `SQRZL_MCP_REPOSITORY_TASKS` | Comma-separated names: `git_status`, `git_diff_stat` | Empty | Opts into fixed, read-only repository inspection tools. Other task names are rejected. |
+| `SQRZL_MCP_REPOSITORY_PATH` | Existing repository directory | Process working directory | Working directory for enabled repository inspection tools. Each task has a five-second timeout and a 16 KiB combined output cap. |
 | `SQRZL_BLOBS_PATH` | Writable container path | `/app/blobs` in Docker; `./blobs` natively | Storage format v2 root. Mount a volume here for persistence. |
 | `SQRZL_LIFECYCLE_HOURS` | Positive integer hours | `1` | Interval between lifecycle-rule passes. Invalid or zero values use the default. |
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
@@ -162,6 +172,30 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
 | `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
 | `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each inbound or delivery callback attempt. |
+
+## MCP and usage diagnostics
+
+Sqrzl serves the standard MCP Streamable HTTP transport at `/mcp` on the UI
+listener (normally port `9001`). It advertises tools for buckets, objects,
+multipart uploads, captured mail, simulated text messages, usage queries, and
+read-only health and usage resources. Tool calls use the same stores and admin
+services as the UI and `/admin/v1` endpoints.
+
+MCP is open when provider authentication is disabled. In protected mode, an
+external authorization server issues bearer tokens with the configured issuer
+and audience. The scopes are `sqrzl:read` for discovery and reads,
+`sqrzl:write` for mutations, and `sqrzl:task` for opted-in repository tasks.
+Protected-resource metadata is available at
+`/.well-known/oauth-protected-resource/mcp`. Browser-cookie sessions continue
+to protect the admin UI and admin HTTP API; MCP clients send OAuth bearer
+tokens.
+
+The read-only `/metrics` endpoint exports Prometheus text for provider, bucket,
+client, operation, byte, request-size, and list activity. Add
+`?min_requests=N` to select a request-count threshold; the `usage_query` tool
+and `sqrzl://usage` resource also accept caller-selected request and byte
+thresholds. These counters are process-local and reset on restart. When admin
+auth is enabled, `/metrics` requires the same admin session cookie as the UI.
 
 Docker port mappings are `HOST:CONTAINER`. For example, to expose Sqrzl on
 host ports 19000 and 19001 without changing its internal configuration:

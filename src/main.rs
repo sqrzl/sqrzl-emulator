@@ -1,7 +1,7 @@
 use std::io::IsTerminal;
 use std::sync::Arc;
 
-use sqrzl_emulator::api::server::start_ui_server_with_sms;
+use sqrzl_emulator::api::server::start_ui_server_with_sms_and_metrics;
 use sqrzl_emulator::config::LogFormat;
 use sqrzl_emulator::error::Result;
 use sqrzl_emulator::mail::{FilesystemMailStore, SmtpServer};
@@ -16,6 +16,9 @@ fn main() -> Result<()> {
     let config = Config::from_env();
     config
         .validate_vendor_credentials()
+        .map_err(Error::InvalidRequest)?;
+    config
+        .validate_mcp_config()
         .map_err(Error::InvalidRequest)?;
     let log_format = Config::log_format_from_env();
 
@@ -87,16 +90,25 @@ async fn run(config: Config) -> Result<()> {
     );
 
     let config = Arc::new(config);
+    let metrics = Arc::new(sqrzl_emulator::metrics::UsageMetrics::default());
     let mut listeners = tokio::task::JoinSet::new();
     listeners.spawn({
         let storage = storage.clone();
         let mail = mail.clone();
         let config = config.clone();
         let sms = sms.clone();
+        let metrics = metrics.clone();
         async move {
-            Server::new_with_sms(storage, mail, sms, config.clone(), config.api_port)
-                .start()
-                .await
+            Server::new_with_sms_and_metrics(
+                storage,
+                mail,
+                sms,
+                config.clone(),
+                config.api_port,
+                metrics,
+            )
+            .start()
+            .await
         }
     });
     listeners.spawn({
@@ -104,7 +116,10 @@ async fn run(config: Config) -> Result<()> {
         let config = config.clone();
         let mail = mail.clone();
         let sms = sms.clone();
-        async move { start_ui_server_with_sms(storage, config, mail, sms).await }
+        let metrics = metrics.clone();
+        async move {
+            start_ui_server_with_sms_and_metrics(storage, config, mail, sms, metrics).await
+        }
     });
     listeners.spawn({
         let mail = mail.clone();

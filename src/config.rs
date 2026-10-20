@@ -19,6 +19,16 @@ const ENV_SQRZL_MAX_REQUEST_BYTES: &str = "SQRZL_MAX_REQUEST_BYTES";
 const ENV_SQRZL_BUCKET_LIST: &str = "SQRZL_BUCKET_LIST";
 const ENV_SQRZL_LOG_FORMAT: &str = "SQRZL_LOG_FORMAT";
 const ENV_SQRZL_SMTP_PORT: &str = "SQRZL_SMTP_PORT";
+const ENV_SQRZL_MCP_AUTH_ENABLED: &str = "SQRZL_MCP_AUTH_ENABLED";
+const ENV_SQRZL_MCP_RESOURCE_URL: &str = "SQRZL_MCP_RESOURCE_URL";
+const ENV_SQRZL_MCP_AUTHORIZATION_SERVER: &str = "SQRZL_MCP_AUTHORIZATION_SERVER";
+const ENV_SQRZL_MCP_ISSUER: &str = "SQRZL_MCP_ISSUER";
+const ENV_SQRZL_MCP_AUDIENCE: &str = "SQRZL_MCP_AUDIENCE";
+const ENV_SQRZL_MCP_JWKS_URL: &str = "SQRZL_MCP_JWKS_URL";
+const ENV_SQRZL_MCP_ALLOWED_HOSTS: &str = "SQRZL_MCP_ALLOWED_HOSTS";
+const ENV_SQRZL_MCP_ALLOWED_ORIGINS: &str = "SQRZL_MCP_ALLOWED_ORIGINS";
+const ENV_SQRZL_MCP_REPOSITORY_TASKS: &str = "SQRZL_MCP_REPOSITORY_TASKS";
+const ENV_SQRZL_MCP_REPOSITORY_PATH: &str = "SQRZL_MCP_REPOSITORY_PATH";
 const ENV_AZURE_ACCOUNT: &str = "AZURE_ACCOUNT";
 const ENV_AZURE_ACCOUNT_KEY: &str = "AZURE_ACCOUNT_KEY";
 const ENV_GCS_HMAC_ACCESS_ID: &str = "GCS_HMAC_ACCESS_ID";
@@ -87,6 +97,33 @@ pub struct Config {
     pub smtp_port: u16,
     /// Provider-native credentials and signing configuration.
     pub vendor_credentials: VendorCredentials,
+    /// Streamable HTTP MCP endpoint authorization and repository task settings.
+    pub mcp: McpConfig,
+}
+
+/// Settings for the standard Streamable HTTP MCP endpoint.
+#[derive(Clone, Debug, Default)]
+pub struct McpConfig {
+    /// Enable OAuth bearer authentication even if provider auth is disabled.
+    pub auth_enabled: bool,
+    /// Canonical absolute URI identifying this MCP resource, including `/mcp`.
+    pub resource_url: Option<String>,
+    /// External authorization server base URI advertised in protected-resource metadata.
+    pub authorization_server: Option<String>,
+    /// Expected JWT issuer.
+    pub issuer: Option<String>,
+    /// Expected JWT audience, normally equal to `resource_url`.
+    pub audience: Option<String>,
+    /// HTTPS JWKS endpoint used to validate external bearer tokens.
+    pub jwks_url: Option<String>,
+    /// Additional HTTP Host values accepted by the MCP transport.
+    pub allowed_hosts: Vec<String>,
+    /// Browser origins accepted by the MCP transport.
+    pub allowed_origins: Vec<String>,
+    /// Fixed named repository tasks enabled by deployment configuration.
+    pub repository_tasks: Vec<String>,
+    /// Working directory used by the read-only repository tasks.
+    pub repository_path: Option<String>,
 }
 
 impl Config {
@@ -119,6 +156,26 @@ impl Config {
         let smtp_port = lookup(ENV_SQRZL_SMTP_PORT)
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(DEFAULT_SQRZL_SMTP_PORT);
+        let mcp = McpConfig {
+            auth_enabled: lookup(ENV_SQRZL_MCP_AUTH_ENABLED)
+                .as_deref()
+                .is_some_and(parse_bool_env),
+            resource_url: lookup(ENV_SQRZL_MCP_RESOURCE_URL),
+            authorization_server: lookup(ENV_SQRZL_MCP_AUTHORIZATION_SERVER),
+            issuer: lookup(ENV_SQRZL_MCP_ISSUER),
+            audience: lookup(ENV_SQRZL_MCP_AUDIENCE),
+            jwks_url: lookup(ENV_SQRZL_MCP_JWKS_URL),
+            allowed_hosts: lookup(ENV_SQRZL_MCP_ALLOWED_HOSTS)
+                .map(|value| parse_csv(&value))
+                .unwrap_or_default(),
+            allowed_origins: lookup(ENV_SQRZL_MCP_ALLOWED_ORIGINS)
+                .map(|value| parse_csv(&value))
+                .unwrap_or_default(),
+            repository_tasks: lookup(ENV_SQRZL_MCP_REPOSITORY_TASKS)
+                .map(|value| parse_csv(&value))
+                .unwrap_or_default(),
+            repository_path: lookup(ENV_SQRZL_MCP_REPOSITORY_PATH),
+        };
         let vendor_credentials = VendorCredentials {
             azure_account: lookup(ENV_AZURE_ACCOUNT),
             azure_account_key: lookup(ENV_AZURE_ACCOUNT_KEY),
@@ -144,6 +201,7 @@ impl Config {
             max_request_bytes,
             smtp_port,
             vendor_credentials,
+            mcp,
         }
     }
 
@@ -160,6 +218,12 @@ impl Config {
     /// - `SQRZL_BUCKET_LIST`: Comma-delimited list of buckets to create on startup
     /// - `SQRZL_LOG_FORMAT`: Logging format (`text` by default, `json` for structured logs)
     /// - `SQRZL_SMTP_PORT`: Port for the SMTP mail-capture server (default: 2525)
+    /// - `SQRZL_MCP_AUTH_ENABLED`: Require OAuth bearer tokens for MCP even when provider auth is off
+    /// - `SQRZL_MCP_RESOURCE_URL`, `SQRZL_MCP_AUTHORIZATION_SERVER`,
+    ///   `SQRZL_MCP_ISSUER`, `SQRZL_MCP_AUDIENCE`, `SQRZL_MCP_JWKS_URL`: External OAuth resource-server settings
+    /// - `SQRZL_MCP_ALLOWED_HOSTS` / `SQRZL_MCP_ALLOWED_ORIGINS`: Comma-delimited MCP HTTP allowlists
+    /// - `SQRZL_MCP_REPOSITORY_TASKS`: Comma-delimited allowlist of read-only repository task names
+    /// - `SQRZL_MCP_REPOSITORY_PATH`: Working directory for enabled repository tasks
     /// - `AZURE_ACCOUNT` / `AZURE_ACCOUNT_KEY`: Azure Shared Key and SAS override
     /// - `GCS_HMAC_ACCESS_ID` / `GCS_HMAC_SECRET`: GCS HMAC signing override
     /// - `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_KEY_FINGERPRINT`,
@@ -248,6 +312,93 @@ impl Config {
     #[must_use]
     pub fn admin_auth_enforced(&self) -> bool {
         self.enforce_auth && !self.admin_auth_disabled
+    }
+
+    /// Whether MCP must use OAuth bearer authentication.
+    #[must_use]
+    pub fn mcp_auth_enforced(&self) -> bool {
+        self.enforce_auth || self.mcp.auth_enabled
+    }
+
+    /// Validate the protected MCP resource-server configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authentication is enabled without complete OAuth settings,
+    /// when a configured URL is invalid, or when a task is not allowlisted.
+    pub fn validate_mcp_config(&self) -> std::result::Result<(), String> {
+        for task in &self.mcp.repository_tasks {
+            if !matches!(task.as_str(), "git_status" | "git_diff_stat") {
+                return Err(format!("unknown MCP repository task: {task}"));
+            }
+        }
+        // Legacy provider access keys also protect MCP, but OAuth is configured
+        // independently. Keep old deployments available without OAuth settings;
+        // validate them as soon as any OAuth configuration is supplied.
+        if !self.mcp.auth_enabled && !self.mcp_oauth_settings_present() {
+            return Ok(());
+        }
+        let required = [
+            ("SQRZL_MCP_RESOURCE_URL", self.mcp.resource_url.as_deref()),
+            (
+                "SQRZL_MCP_AUTHORIZATION_SERVER",
+                self.mcp.authorization_server.as_deref(),
+            ),
+            ("SQRZL_MCP_ISSUER", self.mcp.issuer.as_deref()),
+            ("SQRZL_MCP_AUDIENCE", self.mcp.audience.as_deref()),
+            ("SQRZL_MCP_JWKS_URL", self.mcp.jwks_url.as_deref()),
+        ];
+        for (name, value) in required {
+            if value.is_none_or(str::is_empty) {
+                return Err(format!(
+                    "{name} is required when MCP bearer auth is enabled"
+                ));
+            }
+        }
+        validate_absolute_url(
+            self.mcp.resource_url.as_deref().unwrap_or_default(),
+            false,
+            "SQRZL_MCP_RESOURCE_URL",
+        )?;
+        validate_absolute_url(
+            self.mcp.authorization_server.as_deref().unwrap_or_default(),
+            false,
+            "SQRZL_MCP_AUTHORIZATION_SERVER",
+        )?;
+        validate_absolute_url(
+            self.mcp.jwks_url.as_deref().unwrap_or_default(),
+            true,
+            "SQRZL_MCP_JWKS_URL",
+        )?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn mcp_oauth_settings_present(&self) -> bool {
+        self.mcp
+            .resource_url
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            && self
+                .mcp
+                .authorization_server
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+            && self
+                .mcp
+                .issuer
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+            && self
+                .mcp
+                .audience
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+            && self
+                .mcp
+                .jwks_url
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
     }
 
     #[must_use]
@@ -374,6 +525,35 @@ fn parse_bool_env(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn parse_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn validate_absolute_url(
+    value: &str,
+    require_https: bool,
+    name: &str,
+) -> std::result::Result<(), String> {
+    let url = reqwest::Url::parse(value).map_err(|_| format!("{name} must be an absolute URL"))?;
+    if !matches!(url.scheme(), "https" | "http") || (require_https && url.scheme() != "https") {
+        return Err(format!("{name} must use HTTPS"));
+    }
+    if url.host_str().is_none() || url.query().is_some() || url.fragment().is_some() {
+        return Err(format!(
+            "{name} must be an absolute URL without query or fragment"
+        ));
+    }
+    if name == "SQRZL_MCP_RESOURCE_URL" && url.path() != "/mcp" {
+        return Err("SQRZL_MCP_RESOURCE_URL must identify the /mcp endpoint".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -632,5 +812,65 @@ mod tests {
 
         // Assert
         assert_eq!(log_format, LogFormat::Json);
+    }
+
+    #[test]
+    fn should_validate_mcp_oauth_resource_server_settings() {
+        // Arrange
+        let mut config = Config::from_env_with(|_| None);
+        config.mcp.auth_enabled = true;
+
+        // Act
+        assert!(config
+            .validate_mcp_config()
+            .unwrap_err()
+            .contains("SQRZL_MCP_RESOURCE_URL"));
+
+        // Assert
+        config.mcp.resource_url = Some("https://sqrzl.example/mcp".into());
+        config.mcp.authorization_server = Some("https://auth.example".into());
+        config.mcp.issuer = Some("https://auth.example/".into());
+        config.mcp.audience = Some("https://sqrzl.example/mcp".into());
+        config.mcp.jwks_url = Some("https://auth.example/jwks".into());
+        assert!(config.validate_mcp_config().is_ok());
+
+        config.mcp.resource_url = Some("https://sqrzl.example/proxy/mcp".into());
+        assert!(config
+            .validate_mcp_config()
+            .unwrap_err()
+            .contains("/mcp endpoint"));
+    }
+
+    #[test]
+    fn should_keep_legacy_access_key_startup_valid_without_mcp_oauth_settings() {
+        // Arrange
+        let mut config = Config::from_env_with(|_| None);
+        config.enforce_auth = true;
+        config.access_key_id = Some("legacy-key".into());
+        config.secret_access_key = Some("legacy-secret".into());
+
+        // Act
+        let validation = config.validate_mcp_config();
+
+        // Assert
+        assert!(validation.is_ok());
+        assert!(config.mcp_auth_enforced());
+        assert!(!config.mcp_oauth_settings_present());
+    }
+
+    #[test]
+    fn should_allow_only_named_repository_tasks_without_oauth() {
+        // Arrange
+        let mut config = Config::from_env_with(|_| None);
+        config.mcp.repository_tasks = vec!["git_status".into()];
+
+        // Act
+        let valid_task = config.validate_mcp_config();
+        config.mcp.repository_tasks.push("git_push".into());
+        let invalid_task = config.validate_mcp_config();
+
+        // Assert
+        assert!(valid_task.is_ok());
+        assert!(invalid_task.unwrap_err().contains("git_push"));
     }
 }

@@ -82,6 +82,12 @@ impl LiveServer {
         let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&storage_dir));
         let mail: Arc<dyn MailStore> =
             Arc::new(FilesystemMailStore::open(&storage_dir).expect("mail store should open"));
+        let mut auth_config = auth_config;
+        if auth_config.mcp_auth_enforced() {
+            let resource_url = format!("http://127.0.0.1:{ui_port}/mcp");
+            auth_config.mcp.resource_url = Some(resource_url.clone());
+            auth_config.mcp.audience = Some(resource_url);
+        }
         let config = Arc::new(Config {
             ui_port,
             blobs_path: storage_dir.to_string_lossy().to_string(),
@@ -216,6 +222,7 @@ pub fn auth_disabled() -> Config {
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: sqrzl_emulator::config::DEFAULT_SQRZL_SMTP_PORT,
         vendor_credentials: sqrzl_emulator::config::VendorCredentials::default(),
+        mcp: sqrzl_emulator::config::McpConfig::default(),
     }
 }
 
@@ -232,6 +239,7 @@ pub fn auth_enabled(key: &str, secret: &str) -> Config {
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: sqrzl_emulator::config::DEFAULT_SQRZL_SMTP_PORT,
         vendor_credentials: sqrzl_emulator::config::VendorCredentials::default(),
+        mcp: protected_mcp_config(),
     }
 }
 
@@ -248,6 +256,18 @@ pub fn auth_enabled_with_admin_bypass(key: &str, secret: &str) -> Config {
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: sqrzl_emulator::config::DEFAULT_SQRZL_SMTP_PORT,
         vendor_credentials: sqrzl_emulator::config::VendorCredentials::default(),
+        mcp: protected_mcp_config(),
+    }
+}
+
+fn protected_mcp_config() -> sqrzl_emulator::config::McpConfig {
+    sqrzl_emulator::config::McpConfig {
+        resource_url: Some("http://localhost:9001/mcp".to_string()),
+        authorization_server: Some("https://auth.example.test".to_string()),
+        issuer: Some("https://auth.example.test/".to_string()),
+        audience: Some("http://localhost:9001/mcp".to_string()),
+        jwks_url: Some("https://auth.example.test/.well-known/jwks.json".to_string()),
+        ..Default::default()
     }
 }
 

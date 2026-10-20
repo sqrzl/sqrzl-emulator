@@ -33,6 +33,7 @@ pub fn auth_disabled() -> Arc<Config> {
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: sqrzl_emulator::config::DEFAULT_SQRZL_SMTP_PORT,
         vendor_credentials: sqrzl_emulator::config::VendorCredentials::default(),
+        mcp: sqrzl_emulator::config::McpConfig::default(),
     })
 }
 
@@ -49,6 +50,7 @@ pub fn auth_enabled(key: &str, secret: &str) -> Arc<Config> {
         max_request_bytes: sqrzl_emulator::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: sqrzl_emulator::config::DEFAULT_SQRZL_SMTP_PORT,
         vendor_credentials: sqrzl_emulator::config::VendorCredentials::default(),
+        mcp: sqrzl_emulator::config::McpConfig::default(),
     })
 }
 

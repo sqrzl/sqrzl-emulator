@@ -11,6 +11,7 @@ pub mod health;
 pub mod hyper_compat;
 pub mod lifecycle;
 pub mod mail;
+pub mod metrics;
 pub mod models;
 pub mod providers;
 pub mod server;

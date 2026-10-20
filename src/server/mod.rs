@@ -3,6 +3,7 @@ use crate::body::Body;
 use crate::hyper_compat::Compat;
 use crate::mail::providers::MailAdapterRegistry;
 use crate::mail::MailStore;
+use crate::metrics::UsageMetrics;
 use crate::providers::AdapterRegistry;
 use crate::sms::providers::SmsAdapterRegistry;
 use crate::sms::{FilesystemSmsStore, SmsStore};
@@ -55,6 +56,7 @@ pub struct Server {
     sms: Arc<dyn SmsStore>,
     sms_adapters: Arc<SmsAdapterRegistry>,
     adapters: Arc<AdapterRegistry>,
+    metrics: Arc<UsageMetrics>,
     api_port: u16,
 }
 
@@ -67,6 +69,7 @@ struct RequestState {
     sms: Arc<dyn SmsStore>,
     sms_adapters: Arc<SmsAdapterRegistry>,
     adapters: Arc<AdapterRegistry>,
+    metrics: Arc<UsageMetrics>,
 }
 
 impl Server {
@@ -97,6 +100,25 @@ impl Server {
         auth_config: Arc<AuthConfig>,
         api_port: u16,
     ) -> Self {
+        Self::new_with_sms_and_metrics(
+            storage,
+            mail,
+            sms,
+            auth_config,
+            api_port,
+            Arc::new(UsageMetrics::default()),
+        )
+    }
+
+    #[must_use]
+    pub fn new_with_sms_and_metrics(
+        storage: Arc<dyn Storage>,
+        mail: Arc<dyn MailStore>,
+        sms: Arc<dyn SmsStore>,
+        auth_config: Arc<AuthConfig>,
+        api_port: u16,
+        metrics: Arc<UsageMetrics>,
+    ) -> Self {
         Self {
             storage,
             mail,
@@ -105,6 +127,7 @@ impl Server {
             sms_adapters: Arc::new(SmsAdapterRegistry::default()),
             auth_config,
             adapters: Arc::new(AdapterRegistry::default()),
+            metrics,
             api_port,
         }
     }
@@ -130,6 +153,7 @@ impl Server {
             sms: self.sms,
             sms_adapters: self.sms_adapters,
             adapters: self.adapters,
+            metrics: self.metrics,
         };
         let api_port = self.api_port;
 
@@ -172,6 +196,20 @@ where
     B::Error: std::fmt::Display,
 {
     let max_request_bytes = state.auth_config.max_request_bytes;
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let headers = req.headers().clone();
+    let provider_hint = state
+        .sms_adapters
+        .resolve_by_head(&method, &uri, &headers)
+        .or_else(|| state.mail_adapters.resolve_by_head(&method, &uri, &headers))
+        .or_else(|| state.adapters.resolve_by_head(&method, &uri, &headers));
+    let mut request_bytes = headers
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let metrics = state.metrics.clone();
     let (parts, body) = req.into_parts();
     let parsed = if streaming::is_streamable_object_put(&parts, &state.adapters) {
         let spool_dir = std::path::Path::new(&state.auth_config.blobs_path).join(".spool");
@@ -184,9 +222,22 @@ where
         .await
     };
     let response = match parsed {
-        Ok(parsed_req) => route_parsed_request(state, parsed_req).await,
+        Ok(parsed_req) => {
+            if request_bytes == 0 {
+                request_bytes = parsed_req.payload_len();
+            }
+            route_parsed_request(state, parsed_req).await
+        }
         Err(error) => request_parse_error_response(&state, error),
     };
+    metrics.record_http_request(
+        &method,
+        &uri,
+        &headers,
+        request_bytes,
+        &response,
+        provider_hint,
+    );
     if response.body().aborts_connection() {
         Err(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
@@ -324,6 +375,7 @@ mod adapter_routing_tests {
             max_request_bytes,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
             vendor_credentials: crate::config::VendorCredentials::default(),
+            mcp: crate::config::McpConfig::default(),
         })
     }
 
@@ -354,6 +406,7 @@ mod adapter_routing_tests {
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
             vendor_credentials: crate::config::VendorCredentials::default(),
+            mcp: crate::config::McpConfig::default(),
         });
         let server = Server::new(storage, mail, config, 0);
 
@@ -402,6 +455,7 @@ mod adapter_routing_tests {
                 sms_adapters: Arc::new(SmsAdapterRegistry::default()),
                 mail,
                 mail_adapters: Arc::new(MailAdapterRegistry::default()),
+                metrics: Arc::new(UsageMetrics::default()),
             },
             req,
         )
@@ -797,6 +851,7 @@ mod adapter_routing_tests {
             sms_adapters: Arc::new(SmsAdapterRegistry::default()),
             mail: mail.clone(),
             mail_adapters: Arc::new(MailAdapterRegistry::default()),
+            metrics: Arc::new(UsageMetrics::default()),
         };
         let cases = [
             (
