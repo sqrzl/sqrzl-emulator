@@ -99,7 +99,6 @@ pub async fn start_ui_server_with_sms_and_metrics(
         sms: sms.clone(),
         config: config.clone(),
         metrics: metrics.clone(),
-        mcp_config: Arc::new(config.mcp.clone()),
     };
     let mcp_service = StreamableHttpService::new(
         move || Ok(McpHandler::new(mcp_state.clone())),
@@ -412,7 +411,7 @@ async fn handle_mcp_request_inner(
         }
     } else {
         McpPrincipal {
-            scopes: ["sqrzl:read", "sqrzl:write", "sqrzl:task"]
+            scopes: ["sqrzl:read", "sqrzl:write"]
                 .into_iter()
                 .map(ToString::to_string)
                 .collect(),
@@ -558,7 +557,7 @@ fn protected_resource_metadata_response(config: &crate::Config) -> Response<Body
     let metadata = serde_json::json!({
         "resource": config.mcp.resource_url.as_deref(),
         "authorization_servers": [config.mcp.authorization_server.as_deref()],
-        "scopes_supported": ["sqrzl:read", "sqrzl:write", "sqrzl:task"],
+        "scopes_supported": ["sqrzl:read", "sqrzl:write"],
         "bearer_methods_supported": ["header"]
     });
     json_response(StatusCode::OK, &metadata)
@@ -589,7 +588,7 @@ fn mcp_auth_error_response(
     let challenge = if let Some(scope) = scope {
         format!("Bearer error=\"insufficient_scope\", scope=\"{scope}\", resource_metadata=\"{metadata_url}\"")
     } else {
-        format!("Bearer resource_metadata=\"{metadata_url}\", scope=\"sqrzl:read sqrzl:write sqrzl:task\"")
+        format!("Bearer resource_metadata=\"{metadata_url}\", scope=\"sqrzl:read sqrzl:write\"")
     };
     let body = serde_json::json!({"error": if status == StatusCode::FORBIDDEN { "insufficient_scope" } else { "invalid_token" }});
     let mut response = json_response(status, &body);
