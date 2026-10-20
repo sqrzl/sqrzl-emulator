@@ -19,6 +19,21 @@ const S3_OBJECT_LOCK_UNTIL_KEY: &str = "s3_object_lock_until";
 const S3_OBJECT_LOCK_LEGAL_HOLD_KEY: &str = "s3_object_lock_legal_hold";
 const AZURE_IMMUTABILITY_UNTIL_KEY: &str = "azure_immutability_until";
 const AZURE_LEGAL_HOLD_KEY: &str = "azure_legal_hold";
+const AZURE_IMMUTABILITY_MODE_KEY: &str = "azure_immutability_mode";
+const AZURE_LEASE_STATUS_KEY: &str = "azure_lease_status";
+
+/// Includes inactive and malformed values so absence proofs cannot depend on
+/// the clock or on interpreting incomplete protection attributes.
+pub(crate) fn object_has_azure_protection_metadata(object: &crate::models::Object) -> bool {
+    [
+        AZURE_IMMUTABILITY_UNTIL_KEY,
+        AZURE_LEGAL_HOLD_KEY,
+        AZURE_IMMUTABILITY_MODE_KEY,
+        AZURE_LEASE_STATUS_KEY,
+    ]
+    .iter()
+    .any(|key| object.provider_metadata.contains_key(*key))
+}
 
 fn positive_duration_or_invalid(metadata: &HashMap<String, String>, key: &str) -> bool {
     metadata
@@ -87,13 +102,13 @@ pub(crate) fn object_has_active_azure_protection(
         .is_some_and(|value| parse_lock_timestamp(value).is_none_or(|until| until > now));
     let incomplete_azure_retention = object
         .provider_metadata
-        .contains_key("azure_immutability_mode")
+        .contains_key(AZURE_IMMUTABILITY_MODE_KEY)
         && !object
             .provider_metadata
             .contains_key(AZURE_IMMUTABILITY_UNTIL_KEY);
     let azure_lease = object
         .provider_metadata
-        .get("azure_lease_status")
+        .get(AZURE_LEASE_STATUS_KEY)
         .is_some_and(|status| status != "unlocked");
 
     azure_legal_hold || azure_retention || incomplete_azure_retention || azure_lease

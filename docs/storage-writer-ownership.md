@@ -36,9 +36,21 @@ An active Azure object lease or WORM policy reserves its shared bucket namespace
 against S3/GCS/OCI mutations, which return their native conflict envelopes. Those
 front doors do not implement Azure lease authorization or version ownership.
 Releasing the protection through the Azure front door restores ordinary shared
-namespace access. Namespace checks page through object metadata without loading
-payload bytes, including large objects seen through an indexed wrapper. Native Azure mutations continue to enforce their lease IDs and
-retention rules.
+namespace access. The underlying filesystem store proves absence of Azure object
+protection during its complete startup metadata pass, after publication recovery.
+Incomplete or unreadable current metadata fails startup. An empty new bucket can
+also establish absence, without clearing a concurrent protection admission.
+
+Ordinary S3/GCS requests use this proof to avoid scanning unrelated objects.
+Before publishing any current protection metadata, replacing it through metadata
+CAS, or promoting a protected historical version, the store invalidates the proof.
+Invalidation survives failed or ambiguous writes, object deletion, bucket reuse,
+and protection release for the lifetime of that store. These buckets use the
+existing paginated metadata check, which interprets active, expired, released and
+malformed attributes without loading payloads. Reopening reconstructs the proof
+from recovered current metadata. Wrappers forward this authority to their inner
+store. Native Azure mutations continue to enforce their lease IDs and retention
+rules.
 
 ## Library embedding
 
@@ -64,4 +76,15 @@ Run these gates with:
 
 ```sh
 cargo test --test storage_root_ownership --test operation_coordination
+cargo test --lib storage::filesystem::protection_tests
 ```
+
+The protection regression counts complete S3, GCS XML and GCS JSON object/range
+requests through `IndexedStorage`, checks exact status and bytes, and repeats
+after reopening with unrelated objects present. Controls cover real Azure
+activation/release, malformed and expired attributes, ambiguous publications,
+failed metadata CAS, history promotion after reopening, incomplete startup,
+late bucket initialization, and process termination around publication decisions.
+These checks establish bounded metadata work and protection correctness. They
+do not establish the cause or resolution of downstream full-window watchdog
+failures; unchanged downstream qualification remains separate evidence.

@@ -83,6 +83,13 @@ pub trait ObjectStore: Send + Sync {
     fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
         coordination::operation_gate(self)
     }
+    /// A conservative proof that no current object has Azure protection metadata.
+    /// Only the underlying store may establish this from complete recovered
+    /// metadata, and must invalidate it before any fallible protected publication,
+    /// metadata replacement or historical promotion. Unknown stores scan normally.
+    fn azure_object_protection_absent(&self, _bucket: &str) -> bool {
+        false
+    }
     ///
     /// # Errors
     ///
@@ -594,6 +601,10 @@ pub trait Storage: Send + Sync {
     fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
         coordination::operation_gate(self)
     }
+    /// See [`ObjectStore::azure_object_protection_absent`].
+    fn azure_object_protection_absent(&self, _bucket: &str) -> bool {
+        false
+    }
     ///
     /// # Errors
     ///
@@ -1052,6 +1063,9 @@ where
     fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
         ObjectStore::operation_gate(self)
     }
+    fn azure_object_protection_absent(&self, bucket: &str) -> bool {
+        ObjectStore::azure_object_protection_absent(self, bucket)
+    }
     fn create_bucket(&self, name: String) -> Result<()> {
         BucketStore::create_bucket(self, name)
     }
@@ -1470,6 +1484,9 @@ impl BucketStore for dyn Storage + '_ {
 impl ObjectStore for dyn Storage + '_ {
     fn operation_gate(&self) -> std::sync::Arc<tokio::sync::Mutex<()>> {
         Storage::operation_gate(self)
+    }
+    fn azure_object_protection_absent(&self, bucket: &str) -> bool {
+        Storage::azure_object_protection_absent(self, bucket)
     }
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
         Storage::put_object(self, bucket, key, object)
