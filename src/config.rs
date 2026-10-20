@@ -27,8 +27,6 @@ const ENV_SQRZL_MCP_AUDIENCE: &str = "SQRZL_MCP_AUDIENCE";
 const ENV_SQRZL_MCP_JWKS_URL: &str = "SQRZL_MCP_JWKS_URL";
 const ENV_SQRZL_MCP_ALLOWED_HOSTS: &str = "SQRZL_MCP_ALLOWED_HOSTS";
 const ENV_SQRZL_MCP_ALLOWED_ORIGINS: &str = "SQRZL_MCP_ALLOWED_ORIGINS";
-const ENV_SQRZL_MCP_REPOSITORY_TASKS: &str = "SQRZL_MCP_REPOSITORY_TASKS";
-const ENV_SQRZL_MCP_REPOSITORY_PATH: &str = "SQRZL_MCP_REPOSITORY_PATH";
 const ENV_AZURE_ACCOUNT: &str = "AZURE_ACCOUNT";
 const ENV_AZURE_ACCOUNT_KEY: &str = "AZURE_ACCOUNT_KEY";
 const ENV_GCS_HMAC_ACCESS_ID: &str = "GCS_HMAC_ACCESS_ID";
@@ -97,7 +95,7 @@ pub struct Config {
     pub smtp_port: u16,
     /// Provider-native credentials and signing configuration.
     pub vendor_credentials: VendorCredentials,
-    /// Streamable HTTP MCP endpoint authorization and repository task settings.
+    /// Streamable HTTP MCP endpoint authorization settings.
     pub mcp: McpConfig,
 }
 
@@ -120,10 +118,6 @@ pub struct McpConfig {
     pub allowed_hosts: Vec<String>,
     /// Browser origins accepted by the MCP transport.
     pub allowed_origins: Vec<String>,
-    /// Fixed named repository tasks enabled by deployment configuration.
-    pub repository_tasks: Vec<String>,
-    /// Working directory used by the read-only repository tasks.
-    pub repository_path: Option<String>,
 }
 
 impl Config {
@@ -171,10 +165,6 @@ impl Config {
             allowed_origins: lookup(ENV_SQRZL_MCP_ALLOWED_ORIGINS)
                 .map(|value| parse_csv(&value))
                 .unwrap_or_default(),
-            repository_tasks: lookup(ENV_SQRZL_MCP_REPOSITORY_TASKS)
-                .map(|value| parse_csv(&value))
-                .unwrap_or_default(),
-            repository_path: lookup(ENV_SQRZL_MCP_REPOSITORY_PATH),
         };
         let vendor_credentials = VendorCredentials {
             azure_account: lookup(ENV_AZURE_ACCOUNT),
@@ -222,8 +212,6 @@ impl Config {
     /// - `SQRZL_MCP_RESOURCE_URL`, `SQRZL_MCP_AUTHORIZATION_SERVER`,
     ///   `SQRZL_MCP_ISSUER`, `SQRZL_MCP_AUDIENCE`, `SQRZL_MCP_JWKS_URL`: External OAuth resource-server settings
     /// - `SQRZL_MCP_ALLOWED_HOSTS` / `SQRZL_MCP_ALLOWED_ORIGINS`: Comma-delimited MCP HTTP allowlists
-    /// - `SQRZL_MCP_REPOSITORY_TASKS`: Comma-delimited allowlist of read-only repository task names
-    /// - `SQRZL_MCP_REPOSITORY_PATH`: Working directory for enabled repository tasks
     /// - `AZURE_ACCOUNT` / `AZURE_ACCOUNT_KEY`: Azure Shared Key and SAS override
     /// - `GCS_HMAC_ACCESS_ID` / `GCS_HMAC_SECRET`: GCS HMAC signing override
     /// - `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_KEY_FINGERPRINT`,
@@ -324,14 +312,9 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns an error when authentication is enabled without complete OAuth settings,
-    /// when a configured URL is invalid, or when a task is not allowlisted.
+    /// Returns an error when authentication is enabled without complete OAuth settings
+    /// or when a configured URL is invalid.
     pub fn validate_mcp_config(&self) -> std::result::Result<(), String> {
-        for task in &self.mcp.repository_tasks {
-            if !matches!(task.as_str(), "git_status" | "git_diff_stat") {
-                return Err(format!("unknown MCP repository task: {task}"));
-            }
-        }
         // Legacy provider access keys also protect MCP, but OAuth is configured
         // independently. Keep old deployments available without OAuth settings;
         // validate them as soon as any OAuth configuration is supplied.
@@ -856,21 +839,5 @@ mod tests {
         assert!(validation.is_ok());
         assert!(config.mcp_auth_enforced());
         assert!(!config.mcp_oauth_settings_present());
-    }
-
-    #[test]
-    fn should_allow_only_named_repository_tasks_without_oauth() {
-        // Arrange
-        let mut config = Config::from_env_with(|_| None);
-        config.mcp.repository_tasks = vec!["git_status".into()];
-
-        // Act
-        let valid_task = config.validate_mcp_config();
-        config.mcp.repository_tasks.push("git_push".into());
-        let invalid_task = config.validate_mcp_config();
-
-        // Assert
-        assert!(valid_task.is_ok());
-        assert!(invalid_task.unwrap_err().contains("git_push"));
     }
 }

@@ -156,8 +156,6 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_MCP_JWKS_URL` | HTTPS URL | Unset | External authorization server's JSON Web Key Set endpoint. |
 | `SQRZL_MCP_ALLOWED_HOSTS` | Comma-separated HTTP Host values | Loopback hosts | Adds Host values accepted by the MCP transport. |
 | `SQRZL_MCP_ALLOWED_ORIGINS` | Comma-separated origins | `http://localhost:<SQRZL_UI_PORT>`, `http://127.0.0.1:<SQRZL_UI_PORT>` | Origins accepted by the MCP transport. Requests without an `Origin` header are allowed for non-browser MCP clients. |
-| `SQRZL_MCP_REPOSITORY_TASKS` | Comma-separated names: `git_status`, `git_diff_stat` | Empty | Opts into fixed, read-only repository inspection tools. Other task names are rejected. |
-| `SQRZL_MCP_REPOSITORY_PATH` | Existing repository directory | Process working directory | Working directory for enabled repository inspection tools. Each task has a five-second timeout and a 16 KiB combined output cap. |
 | `SQRZL_BLOBS_PATH` | Writable container path | `/app/blobs` in Docker; `./blobs` natively | Storage format v2 root. Mount a volume here for persistence. |
 | `SQRZL_LIFECYCLE_HOURS` | Positive integer hours | `1` | Interval between lifecycle-rule passes. Invalid or zero values use the default. |
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
@@ -184,7 +182,7 @@ services as the UI and `/admin/v1` endpoints.
 MCP is open when provider authentication is disabled. In protected mode, an
 external authorization server issues bearer tokens with the configured issuer
 and audience. The scopes are `sqrzl:read` for discovery and reads,
-`sqrzl:write` for mutations, and `sqrzl:task` for opted-in repository tasks.
+`sqrzl:write` for mutations.
 Protected-resource metadata is available at
 `/.well-known/oauth-protected-resource/mcp`. Browser-cookie sessions continue
 to protect the admin UI and admin HTTP API; MCP clients send OAuth bearer

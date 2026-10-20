@@ -1,13 +1,8 @@
 //! Standard Model Context Protocol tools and resources over Streamable HTTP.
 
 use crate::{
-    auth::mcp::McpPrincipal,
-    body::Body,
-    config::{Config, McpConfig},
-    mail::MailStore,
-    metrics::UsageMetrics,
-    sms::SmsStore,
-    storage::Storage,
+    auth::mcp::McpPrincipal, body::Body, config::Config, mail::MailStore, metrics::UsageMetrics,
+    sms::SmsStore, storage::Storage,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use http_body_util::BodyExt;
@@ -22,11 +17,7 @@ use rmcp::{
     ErrorData as McpError, ServerHandler,
 };
 use serde_json::{json, Map, Value};
-use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
-use tokio::{io::AsyncReadExt, process::Command};
-
-const MAX_TASK_OUTPUT_BYTES: usize = 16 * 1024;
-const TASK_TIMEOUT: Duration = Duration::from_secs(5);
+use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Clone)]
 pub struct McpState {
@@ -35,7 +26,6 @@ pub struct McpState {
     pub sms: Arc<dyn SmsStore>,
     pub config: Arc<Config>,
     pub metrics: Arc<UsageMetrics>,
-    pub mcp_config: Arc<McpConfig>,
 }
 
 #[derive(Clone)]
@@ -64,7 +54,7 @@ impl ServerHandler for McpHandler {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         Ok(ListToolsResult::with_all_items(
-            tool_specs(&self.state.mcp_config.repository_tasks)
+            tool_specs()
                 .into_iter()
                 .map(|spec| spec.to_tool())
                 .collect(),
@@ -72,7 +62,7 @@ impl ServerHandler for McpHandler {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        tool_specs(&self.state.mcp_config.repository_tasks)
+        tool_specs()
             .into_iter()
             .find(|spec| spec.name == name)
             .map(|spec| spec.to_tool())
@@ -83,7 +73,7 @@ impl ServerHandler for McpHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
-        let Some(spec) = tool_specs(&self.state.mcp_config.repository_tasks)
+        let Some(spec) = tool_specs()
             .into_iter()
             .find(|spec| spec.name == request.name.as_ref())
         else {
@@ -103,7 +93,6 @@ impl ServerHandler for McpHandler {
         }
         let result = match spec.mode {
             ToolMode::Usage => Ok(self.read_usage(&args)),
-            ToolMode::RepositoryTask => self.run_repository_task(&args).await,
             ToolMode::Domain => self.run_domain_tool(spec.name, &args).await,
             ToolMode::Http => self.call_shared_api(&spec, &args).await,
         };
@@ -210,7 +199,6 @@ impl ServerHandler for McpHandler {
 enum ToolMode {
     Http,
     Usage,
-    RepositoryTask,
     Domain,
 }
 
@@ -287,7 +275,7 @@ const OBJECT_PAGE: &[&str] = &["limit", "search", "next", "prefix"];
 
 // Keep the complete public tool inventory together so discovery and scope checks share one source.
 #[allow(clippy::too_many_lines)]
-fn tool_specs(tasks: &[String]) -> Vec<ToolSpec> {
+fn tool_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
         tool!("bucket_list", "List storage buckets with optional search and pagination.", "sqrzl:read", "GET", "/admin/v1/buckets", r#"{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":1000},"search":{"type":"string"},"next":{"type":"string"}}}"#, query PAGE),
         tool!(
@@ -712,9 +700,6 @@ fn tool_specs(tasks: &[String]) -> Vec<ToolSpec> {
             binary_put: false,
         },
     ];
-    if !tasks.is_empty() {
-        specs.push(ToolSpec { name: "repository_task_run", description: "Run one enabled, fixed, read-only repository inspection task with bounded time and output.", scope: "sqrzl:task", method: "", route: "", schema: json!({"type":"object","properties":{"task":{"type":"string","enum":tasks}},"required":["task"]}).to_string(), query: &[], mode: ToolMode::RepositoryTask, binary_put: false });
-    }
     for spec in &mut specs {
         if spec.query.contains(&"limit") {
             spec.schema = bounded_page_schema(&spec.schema);
@@ -1007,31 +992,6 @@ impl McpHandler {
         Ok(json!({"status":202,"message":message}))
     }
 
-    async fn run_repository_task(&self, args: &Value) -> Result<(Value, u64), String> {
-        let task = args
-            .get("task")
-            .and_then(Value::as_str)
-            .ok_or("task is required")?;
-        if !self
-            .state
-            .mcp_config
-            .repository_tasks
-            .iter()
-            .any(|enabled| enabled == task)
-        {
-            return Err("repository task is disabled or not allowlisted".into());
-        }
-        execute_repository_task(
-            task,
-            self.state
-                .mcp_config
-                .repository_path
-                .as_deref()
-                .map(Path::new),
-        )
-        .await
-    }
-
     async fn call_shared_api(&self, spec: &ToolSpec, args: &Value) -> Result<(Value, u64), String> {
         let path = build_path(spec, args)?;
         let method =
@@ -1090,104 +1050,6 @@ impl McpHandler {
     }
 }
 
-async fn execute_repository_task(task: &str, path: Option<&Path>) -> Result<(Value, u64), String> {
-    let (program, command_args) = match task {
-        "git_status" => (
-            "git",
-            vec![
-                "--no-pager",
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "core.untrackedCache=false",
-                "status",
-                "--short",
-                "--branch",
-            ],
-        ),
-        "git_diff_stat" => (
-            "git",
-            vec![
-                "--no-pager",
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "diff.external=",
-                "-c",
-                "core.pager=cat",
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--stat",
-            ],
-        ),
-        _ => return Err("repository task is not allowlisted".into()),
-    };
-    let mut command = Command::new(program);
-    command
-        .args(command_args)
-        .kill_on_drop(true)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0");
-    #[cfg(unix)]
-    command.process_group(0);
-    if let Some(path) = path {
-        command.current_dir(path);
-    }
-    let mut child = command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to start repository task: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("repository task stdout unavailable")?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or("repository task stderr unavailable")?;
-    let mut stdout_task = tokio::spawn(read_bounded(stdout, MAX_TASK_OUTPUT_BYTES / 2));
-    let mut stderr_task = tokio::spawn(read_bounded(stderr, MAX_TASK_OUTPUT_BYTES / 2));
-    let completed = tokio::time::timeout(TASK_TIMEOUT, async {
-        let status = child.wait().await.map_err(|error| error.to_string())?;
-        let stdout = (&mut stdout_task)
-            .await
-            .map_err(|error| error.to_string())?
-            .map_err(|error| error.to_string())?;
-        let stderr = (&mut stderr_task)
-            .await
-            .map_err(|error| error.to_string())?
-            .map_err(|error| error.to_string())?;
-        Ok::<_, String>((status.code(), stdout, stderr))
-    })
-    .await;
-    let (status, (stdout, stdout_truncated), (stderr, stderr_truncated)) = match completed {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => return Err(error),
-        Err(_) => {
-            #[cfg(unix)]
-            if let Some(pid) = child.id() {
-                if let Ok(pid) = i32::try_from(pid) {
-                    // SAFETY: the child was started in a new process group, so its
-                    // negative PID targets only the fixed repository task and helpers.
-                    let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
-                }
-            }
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            stdout_task.abort();
-            stderr_task.abort();
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            return Err("repository task exceeded its 5 second time limit".into());
-        }
-    };
-    let value = json!({"task":task,"exit_code":status,"stdout":String::from_utf8_lossy(&stdout),"stderr":String::from_utf8_lossy(&stderr),"output_truncated":stdout_truncated || stderr_truncated});
-    let size = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len() as u64);
-    Ok((value, size))
-}
-
 fn required_string<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
     args.get(name)
         .and_then(Value::as_str)
@@ -1205,25 +1067,6 @@ fn validate_tool_key(key: &str) -> Result<(), String> {
 
 fn serialized_size(value: &Value) -> u64 {
     serde_json::to_vec(value).map_or(0, |bytes| bytes.len() as u64)
-}
-
-async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(
-    mut reader: R,
-    limit: usize,
-) -> std::io::Result<(Vec<u8>, bool)> {
-    let mut output = Vec::with_capacity(limit.min(4096));
-    let mut truncated = false;
-    let mut buffer = [0_u8; 4096];
-    loop {
-        let size = reader.read(&mut buffer).await?;
-        if size == 0 {
-            break;
-        }
-        let keep = size.min(limit.saturating_sub(output.len()));
-        output.extend_from_slice(&buffer[..keep]);
-        truncated |= keep < size;
-    }
-    Ok((output, truncated))
 }
 
 async fn response_value(
@@ -1388,10 +1231,7 @@ pub fn required_scope_for_request(body: &[u8]) -> Option<&'static str> {
         "resources/read" | "resources/list" | "tools/list" => Some("sqrzl:read"),
         "tools/call" => {
             let name = request.pointer("/params/name").and_then(Value::as_str)?;
-            if name == "repository_task_run" {
-                return Some("sqrzl:task");
-            }
-            tool_specs(&[])
+            tool_specs()
                 .into_iter()
                 .find(|spec| spec.name == name)
                 .map(|spec| spec.scope)
@@ -1404,13 +1244,11 @@ pub fn required_scope_for_request(body: &[u8]) -> Option<&'static str> {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use std::fs;
-    use std::process::Command as StdCommand;
 
     #[test]
     fn should_require_scopes_for_tool_routes() {
         // Arrange
-        let specs = tool_specs(&[]);
+        let specs = tool_specs();
 
         // Act
         let required_scope = required_scope_for_request(
@@ -1429,7 +1267,7 @@ mod tests {
             required_scope_for_request(
                 br#"{"method":"tools/call","params":{"name":"repository_task_run"}}"#
             ),
-            Some("sqrzl:task")
+            None
         );
         assert_eq!(
             required_scope_for_request(
@@ -1452,7 +1290,7 @@ mod tests {
     #[test]
     fn should_encode_tool_paths_with_query_limits() {
         // Arrange
-        let spec = tool_specs(&[])
+        let spec = tool_specs()
             .into_iter()
             .find(|spec| spec.name == "object_list")
             .unwrap();
@@ -1471,7 +1309,7 @@ mod tests {
     #[test]
     fn should_bound_all_paginated_tool_schemas_to_admin_limits() {
         // Arrange
-        let specs = tool_specs(&[]);
+        let specs = tool_specs();
 
         // Act
         let page_limits = specs
@@ -1488,73 +1326,6 @@ mod tests {
         assert_ne!(page_limits.len(), 0);
         assert!(page_limits.iter().all(|limit| limit["minimum"] == 1));
         assert!(page_limits.iter().all(|limit| limit["maximum"] == 500));
-    }
-
-    #[test]
-    fn should_list_only_enabled_repository_task_names() {
-        // Arrange
-        let tasks = vec!["git_status".to_string()];
-
-        // Act
-        let spec = tool_specs(&tasks)
-            .into_iter()
-            .find(|spec| spec.name == "repository_task_run")
-            .expect("opted-in repository task tool should be listed");
-        let schema: Value = serde_json::from_str(&spec.schema).unwrap();
-
-        // Assert
-        assert_eq!(schema["properties"]["task"]["enum"], json!(["git_status"]));
-    }
-
-    #[tokio::test]
-    async fn should_truncate_repository_task_output_at_its_configured_limit() {
-        // Arrange
-        let (mut writer, reader) = tokio::io::duplex(16);
-        tokio::io::AsyncWriteExt::write_all(&mut writer, b"abcdef")
-            .await
-            .unwrap();
-        drop(writer);
-
-        // Act
-        let result = read_bounded(reader, 3).await.unwrap();
-
-        // Assert
-        assert_eq!(result, (b"abc".to_vec(), true));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn should_not_run_configured_git_fsmonitor_helpers() {
-        // Arrange
-        let root =
-            std::env::temp_dir().join(format!("sqrzl-mcp-git-task-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let init = StdCommand::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(["init", "--quiet"])
-            .output()
-            .unwrap();
-        assert!(init.status.success());
-        let config = StdCommand::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args([
-                "config",
-                "core.fsmonitor",
-                "sh -c 'touch fsmonitor-ran; echo token'",
-            ])
-            .output()
-            .unwrap();
-        assert!(config.status.success());
-
-        // Act
-        let result = execute_repository_task("git_status", Some(&root)).await;
-
-        // Assert
-        assert!(result.is_ok());
-        assert!(!root.join("fsmonitor-ran").exists());
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
