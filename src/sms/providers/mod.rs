@@ -62,6 +62,18 @@ impl SmsAdapterRegistry {
         Self { adapters }
     }
 
+    pub(crate) fn resolve_by_head(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        headers: &HeaderMap,
+    ) -> Option<&'static str> {
+        self.adapters
+            .iter()
+            .find(|adapter| adapter.matches_request_head(method, uri, headers))
+            .map(|adapter| adapter.name())
+    }
+
     pub async fn route(
         &self,
         store: Arc<dyn SmsStore>,
@@ -171,6 +183,7 @@ mod tests {
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
             vendor_credentials: crate::config::VendorCredentials::default(),
+            mcp: crate::config::McpConfig::default(),
         })
     }
 

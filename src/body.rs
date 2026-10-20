@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use http_body_util::{combinators::UnsyncBoxBody, BodyExt};
 use hyper::body::{Frame, SizeHint};
 use std::io;
 use std::pin::Pin;
@@ -19,6 +20,7 @@ enum Kind {
         expected: u64,
         done: bool,
     },
+    Stream(UnsyncBoxBody<Bytes, io::Error>),
 }
 
 impl Body {
@@ -46,6 +48,27 @@ impl Body {
     #[must_use]
     pub(crate) fn aborts_connection(&self) -> bool {
         matches!(self.kind, Kind::Abort { .. })
+    }
+
+    /// Wrap a streaming HTTP body while preserving its frames for Hyper.
+    pub(crate) fn from_stream<B>(body: B) -> Self
+    where
+        B: hyper::body::Body<Data = Bytes> + Send + 'static,
+        B::Error: std::fmt::Display + Send + Sync + 'static,
+    {
+        Self {
+            kind: Kind::Stream(
+                body.map_err(|error| io::Error::other(error.to_string()))
+                    .boxed_unsync(),
+            ),
+        }
+    }
+
+    pub(crate) fn full_bytes(&self) -> Option<&Bytes> {
+        match &self.kind {
+            Kind::Full(bytes) => bytes.as_ref(),
+            _ => None,
+        }
     }
 }
 
@@ -87,7 +110,7 @@ impl hyper::body::Body for Body {
 
     fn poll_frame(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         match &mut self.kind {
             Kind::Full(bytes) => Poll::Ready(
@@ -120,11 +143,16 @@ impl hyper::body::Body for Body {
                     ))))
                 }
             }
+            Kind::Stream(body) => Pin::new(body).poll_frame(cx),
         }
     }
 
     fn is_end_stream(&self) -> bool {
-        matches!(&self.kind, Kind::Full(None))
+        match &self.kind {
+            Kind::Full(None) => true,
+            Kind::Stream(body) => body.is_end_stream(),
+            _ => false,
+        }
     }
 
     fn size_hint(&self) -> SizeHint {
@@ -133,6 +161,7 @@ impl hyper::body::Body for Body {
             Kind::Abort { expected, done } | Kind::Truncated { expected, done, .. } => {
                 u64::from(!done).saturating_mul(*expected)
             }
+            Kind::Stream(body) => return body.size_hint(),
         };
         SizeHint::with_exact(exact)
     }

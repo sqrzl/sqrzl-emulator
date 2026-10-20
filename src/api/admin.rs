@@ -716,14 +716,14 @@ fn delete_object_version(
     Ok(empty_response(StatusCode::NO_CONTENT))
 }
 
-fn ensure_admin_bucket_mutable(storage: &Arc<dyn Storage>, bucket: &str) -> Result<()> {
+pub(crate) fn ensure_admin_bucket_mutable(storage: &Arc<dyn Storage>, bucket: &str) -> Result<()> {
     if crate::lifecycle::foreign_provider_data_protection_active(storage.as_ref(), bucket)? {
         return Err(Error::AccessDenied);
     }
     Ok(())
 }
 
-fn ensure_admin_object_mutable(
+pub(crate) fn ensure_admin_object_mutable(
     storage: &Arc<dyn Storage>,
     bucket: &str,
     key: &str,

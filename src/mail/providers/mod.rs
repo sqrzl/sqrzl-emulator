@@ -80,6 +80,18 @@ impl MailAdapterRegistry {
         Self { adapters }
     }
 
+    pub(crate) fn resolve_by_head(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        headers: &HeaderMap,
+    ) -> Option<&'static str> {
+        self.adapters
+            .iter()
+            .find(|adapter| adapter.matches_request_head(method, uri, headers))
+            .map(|adapter| adapter.name())
+    }
+
     pub async fn route(
         &self,
         mail: Arc<dyn MailStore>,

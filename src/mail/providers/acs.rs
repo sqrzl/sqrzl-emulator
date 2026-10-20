@@ -998,6 +998,7 @@ mod tests {
                     max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
                     smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
                     vendor_credentials: crate::config::VendorCredentials::default(),
+                    mcp: crate::config::McpConfig::default(),
                 }),
                 req,
             )
@@ -1027,6 +1028,7 @@ mod tests {
                     max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
                     smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
                     vendor_credentials: crate::config::VendorCredentials::default(),
+                    mcp: crate::config::McpConfig::default(),
                 }),
                 poll_request,
             )
@@ -1072,6 +1074,7 @@ mod tests {
                     max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
                     smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
                     vendor_credentials: crate::config::VendorCredentials::default(),
+                    mcp: crate::config::McpConfig::default(),
                 }),
                 req,
             )

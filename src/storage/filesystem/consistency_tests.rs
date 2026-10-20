@@ -376,6 +376,7 @@ async fn wire_get(
         max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: 0,
         vendor_credentials: crate::config::VendorCredentials::default(),
+        mcp: crate::config::McpConfig::default(),
     });
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
@@ -693,6 +694,7 @@ async fn should_admit_s3_replacements_and_subresources_without_loading_existing_
         max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: 0,
         vendor_credentials: crate::config::VendorCredentials::default(),
+        mcp: crate::config::McpConfig::default(),
     });
     for (method, suffix, body, headers) in [
         ("PUT", "", b"replacement".as_slice(), vec![]),
@@ -770,6 +772,7 @@ async fn should_bound_s3_current_and_historical_materialization_before_payload_r
         max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: 0,
         vendor_credentials: crate::config::VendorCredentials::default(),
+        mcp: crate::config::McpConfig::default(),
     });
     let upload = storage
         .create_multipart_upload("coherent", "copy-part".to_string())

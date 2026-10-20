@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod admin_mail;
 pub mod admin_text;
+pub mod mcp;
 pub mod models;
 pub mod server;
 

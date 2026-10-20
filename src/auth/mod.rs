@@ -2,6 +2,7 @@
 pub mod acs_hmac;
 pub mod admin_session;
 pub mod authenticator;
+pub mod mcp;
 pub mod presigned;
 pub mod sigv4;
 
