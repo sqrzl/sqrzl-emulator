@@ -578,7 +578,7 @@ mod tests {
     use http::HeaderValue;
 
     #[test]
-    fn should_record_usage_dimensions_size_and_list_activity() {
+    fn should_record_usage_for_list_requests() {
         // Arrange
         let metrics = UsageMetrics::default();
         let response = Response::builder()
@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn should_classify_provider_send_endpoints_and_bucket_creation_as_mutations() {
+    fn should_classify_provider_send_as_mutation() {
         // Arrange
         let metrics = UsageMetrics::default();
         let response = Response::builder()
@@ -718,6 +718,24 @@ mod tests {
             &response,
             Some("acs"),
         );
+
+        // Assert
+        let rows = metrics.snapshot(1, 0);
+        assert!(rows
+            .iter()
+            .any(|row| row.provider == "acs" && row.operation == "acs_post"));
+    }
+
+    #[test]
+    fn should_classify_bucket_creation_as_mutation() {
+        // Arrange
+        let metrics = UsageMetrics::default();
+        let response = Response::builder()
+            .body(Body::from(Bytes::from_static(br#"{"accepted":true}"#)))
+            .unwrap();
+        let headers = HeaderMap::new();
+
+        // Act
         metrics.record_http_request(
             &Method::POST,
             &"/admin/v1/buckets".parse().unwrap(),
@@ -729,9 +747,6 @@ mod tests {
 
         // Assert
         let rows = metrics.snapshot(1, 0);
-        assert!(rows
-            .iter()
-            .any(|row| row.provider == "acs" && row.operation == "acs_post"));
         let create = rows
             .iter()
             .find(|row| row.operation == "storage_create")
