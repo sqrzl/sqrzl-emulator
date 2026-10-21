@@ -29,6 +29,9 @@ static DATA_PROTECTION_ACTIVATION_LOCKS: OnceLock<Mutex<HashMap<String, Weak<Mut
 /// Foreign adapters cannot honor Azure lease IDs or WORM version semantics, so
 /// their operations fail explicitly rather than discarding those attributes.
 pub(crate) fn azure_object_protection_active(storage: &dyn Storage, bucket: &str) -> bool {
+    if storage.azure_object_protection_absent(bucket) {
+        return false;
+    }
     let now = chrono::Utc::now();
     let mut marker = None;
     loop {

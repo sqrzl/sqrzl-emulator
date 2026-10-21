@@ -15,10 +15,14 @@ use std::sync::{Arc, Mutex, Weak};
 use uuid::Uuid;
 
 #[cfg(test)]
+mod bucket_recovery_tests;
+#[cfg(test)]
 mod consistency_tests;
 #[cfg(test)]
 mod crash_tests;
 mod io;
+#[cfg(test)]
+mod protection_tests;
 mod publication;
 
 #[cfg(test)]
@@ -33,6 +37,11 @@ enum TestPhase {
     VersionMetadataPrepared,
     BodyPublished,
     DirectoryCreated,
+    BucketDirectoryCreated,
+    BucketNamePrepared,
+    BucketNamePublished,
+    BucketCreated,
+    MetadataReplacementPrepared,
     PublicationStaged,
     PublicationCommitted,
     MetadataPublished,
@@ -71,6 +80,9 @@ pub struct FilesystemStorage {
     uploads_cache: Mutex<HashMap<String, HashMap<String, MultipartUpload>>>,
     object_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     bucket_locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    // False is a recovered absence proof; true is a monotonic admission of
+    // possible protection. Never clear it after failed writes or bucket reuse.
+    azure_protection_possible: Mutex<HashMap<String, bool>>,
     #[cfg(test)]
     test_hook: Mutex<Option<TestHook>>,
 }
@@ -94,8 +106,15 @@ impl BucketStore for FilesystemStorage {
         }
 
         Self::create_directory_durable(&bucket_dir)?;
-        Self::atomic_write(&bucket_dir.join(".bucket.name"), name.as_bytes())
-            .map_err(|e| Error::InternalError(format!("Failed to persist bucket identity: {e}")))?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::BucketDirectoryCreated);
+        Self::atomic_write_prepared(&bucket_dir.join(".bucket.name"), name.as_bytes(), || {
+            #[cfg(test)]
+            self.test_phase(TestPhase::BucketNamePrepared);
+        })
+        .map_err(|e| Error::InternalError(format!("Failed to persist bucket identity: {e}")))?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::BucketNamePublished);
         let now = chrono::Utc::now();
         if let Err(error) = self.write_bucket_identity(
             &name,
@@ -113,6 +132,15 @@ impl BucketStore for FilesystemStorage {
         }
 
         // Update index
+        #[cfg(test)]
+        self.test_phase(TestPhase::BucketCreated);
+        self.azure_protection_possible
+            .lock()
+            .map_err(|_| {
+                Error::InternalError("Failed to initialize Azure protection proof".to_string())
+            })?
+            .entry(name.clone())
+            .or_insert(false);
         self.index.get_or_create_bucket(name);
 
         Ok(())
@@ -311,6 +339,7 @@ impl FilesystemStorage {
         if !self.bucket_dir(bucket).exists() {
             return Err(Error::BucketNotFound);
         }
+        self.admit_azure_protection(bucket, &object)?;
         let object_id = Self::compute_object_id(bucket, key);
         let versioning_enabled = self.versioning_enabled(bucket);
         let versioning_suspended = self.versioning_suspended(bucket);
@@ -475,6 +504,12 @@ impl FilesystemStorage {
 }
 
 impl ObjectStore for FilesystemStorage {
+    fn azure_object_protection_absent(&self, bucket: &str) -> bool {
+        self.azure_protection_possible
+            .lock()
+            .is_ok_and(|proofs| proofs.get(bucket) == Some(&false))
+    }
+
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
         let object_lock = self.object_lock(bucket, &key)?;
         let _guard = object_lock
@@ -577,6 +612,9 @@ impl ObjectStore for FilesystemStorage {
         current
             .provider_metadata
             .clone_from(&updated.provider_metadata);
+        self.admit_azure_protection(bucket, &current)?;
+        #[cfg(test)]
+        self.test_phase(TestPhase::MetadataReplacementPrepared);
         Self::write_object_metadata(&metadata_path, &current)?;
         Ok(true)
     }
@@ -673,6 +711,18 @@ impl ObjectStore for FilesystemStorage {
 }
 
 impl FilesystemStorage {
+    fn admit_azure_protection(&self, bucket: &str, object: &Object) -> Result<()> {
+        if crate::lifecycle::object_has_azure_protection_metadata(object) {
+            self.azure_protection_possible
+                .lock()
+                .map_err(|_| {
+                    Error::InternalError("Failed to invalidate Azure protection proof".to_string())
+                })?
+                .insert(bucket.to_string(), true);
+        }
+        Ok(())
+    }
+
     // Callers must hold the object's mutex. Mutations use these helpers rather
     // than the public readers so the non-reentrant mutex is acquired only once.
     fn read_object_locked(&self, bucket: &str, key: &str) -> Result<Object> {
@@ -2090,6 +2140,9 @@ impl VersionStore for FilesystemStorage {
             None
         };
         let clear_current = promoted.is_none() && (deleting_current || current.is_none());
+        if let Some((object, _)) = &promoted {
+            self.admit_azure_protection(bucket, object)?;
+        }
         self.change_history(
             &directory,
             promoted

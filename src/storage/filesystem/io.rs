@@ -98,45 +98,42 @@ impl FilesystemStorage {
         Self::recover_publications(&base_path)?;
 
         let index = Arc::new(LockFreeIndex::new());
+        let mut azure_protection_possible = HashMap::new();
 
-        // Rebuild index from filesystem
-        if let Ok(entries) = fs::read_dir(&base_path) {
-            for entry in entries.flatten() {
-                let Ok(metadata) = entry.metadata() else {
-                    continue;
-                };
-
-                if metadata.is_dir() {
-                    if entry
-                        .file_name()
-                        .to_str()
-                        .is_some_and(|name| name.starts_with('.'))
+        // Recovery precedes this complete metadata pass. Skipping unreadable
+        // current objects would make both listings and absence proofs unsafe.
+        let io_error = |error: std::io::Error| {
+            Error::InternalError(format!("Failed to rebuild storage metadata index: {error}"))
+        };
+        for entry in fs::read_dir(&base_path).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            if !entry.file_type().map_err(io_error)?.is_dir()
+                || entry.file_name().to_string_lossy().starts_with('.')
+            {
+                continue;
+            }
+            let bucket_name = match fs::read_to_string(entry.path().join(".bucket.name")) {
+                Ok(name) => name,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if !entry.file_name().to_string_lossy().starts_with("b-")
+                        || Self::recover_uncommitted_bucket(&entry.path())?
                     {
                         continue;
                     }
-                    if let Ok(bucket_name) = fs::read_to_string(entry.path().join(".bucket.name")) {
-                        index.get_or_create_bucket(bucket_name.clone());
-
-                        // Scan bucket for object_id directories
-                        if let Ok(objects) = fs::read_dir(entry.path()) {
-                            for obj_entry in objects.flatten() {
-                                let path = obj_entry.path();
-                                if path.is_dir() {
-                                    // Each directory is an object_id, read metadata to get key
-                                    let metadata_path = path.join("object.meta.json");
-                                    if let Ok(metadata_json) = fs::read(&metadata_path) {
-                                        if let Ok(obj) =
-                                            serde_json::from_slice::<Object>(&metadata_json)
-                                        {
-                                            index.insert(&bucket_name, &obj.key);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    return Err(io_error(error));
                 }
+                Err(error) => return Err(io_error(error)),
+            };
+            if entry.file_name()
+                != format!("b-{}", hex::encode(Sha256::digest(bucket_name.as_bytes()))).as_str()
+            {
+                return Err(Error::InternalError(
+                    "Bucket metadata has an invalid namespace identity".to_string(),
+                ));
             }
+            index.get_or_create_bucket(bucket_name.clone());
+            let possible = Self::rebuild_bucket_index(&index, &bucket_name, &entry.path())?;
+            azure_protection_possible.insert(bucket_name, possible);
         }
 
         let storage = Self {
@@ -145,11 +142,102 @@ impl FilesystemStorage {
             uploads_cache: Mutex::new(HashMap::new()),
             object_locks: Mutex::new(HashMap::new()),
             bucket_locks: Mutex::new(HashMap::new()),
+            azure_protection_possible: Mutex::new(azure_protection_possible),
             #[cfg(test)]
             test_hook: Mutex::new(None),
         };
         storage.recover_gcs_cancellations()?;
         Ok(storage)
+    }
+
+    fn recover_uncommitted_bucket(directory: &Path) -> Result<bool> {
+        let Some(digest) = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("b-"))
+        else {
+            return Ok(false);
+        };
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Ok(false);
+        }
+        let io_error = |error: std::io::Error| {
+            Error::InternalError(format!(
+                "Failed to recover uncommitted bucket '{}': {error}",
+                directory.display()
+            ))
+        };
+        let mut temporary_files = Vec::new();
+        for entry in fs::read_dir(directory).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            let name = entry.file_name();
+            // Before the name rename, creation can leave only its empty
+            // directory and private name file. Do not follow symlinks or
+            // discard any published identity, object, upload, or unknown state.
+            if !entry.file_type().map_err(io_error)?.is_file()
+                || name
+                    .to_str()
+                    .and_then(|name| name.strip_prefix("..bucket.name."))
+                    .and_then(|suffix| suffix.strip_suffix(".tmp"))
+                    .is_none_or(|suffix| Uuid::parse_str(suffix).is_err())
+            {
+                return Ok(false);
+            }
+            temporary_files.push(entry.path());
+        }
+        // Inspect every entry before removing anything. remove_dir also refuses
+        // to remove the bucket if unexpected contents appear during recovery.
+        for temporary in temporary_files {
+            fs::remove_file(temporary).map_err(io_error)?;
+        }
+        fs::remove_dir(directory).map_err(io_error)?;
+        let parent = directory
+            .parent()
+            .ok_or_else(|| Error::InternalError("Invalid bucket directory".to_string()))?;
+        Self::sync_directory(parent)?;
+        Ok(true)
+    }
+
+    fn rebuild_bucket_index(index: &LockFreeIndex, bucket: &str, directory: &Path) -> Result<bool> {
+        let io_error = |error: std::io::Error| {
+            Error::InternalError(format!("Failed to rebuild bucket metadata index: {error}"))
+        };
+        let mut possible = false;
+        for entry in fs::read_dir(directory).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            if !entry.file_type().map_err(io_error)?.is_dir()
+                || entry.file_name().to_string_lossy().starts_with('.')
+            {
+                continue;
+            }
+            let path = entry.path();
+            let metadata_path = path.join("object.meta.json");
+            let has_payload = path.join("object.blob").try_exists().map_err(io_error)?;
+            let has_metadata = metadata_path.try_exists().map_err(io_error)?;
+            if !has_payload && !has_metadata {
+                // History-only object directories have no current object.
+                continue;
+            }
+            if !has_payload {
+                return Err(Error::InternalError(format!(
+                    "Current object metadata has no payload: {}",
+                    path.display()
+                )));
+            }
+            let object = Self::read_object_metadata(&metadata_path)?;
+            if entry.file_name() != Self::compute_object_id(bucket, &object.key).as_str() {
+                return Err(Error::InternalError(
+                    "Current object metadata has an invalid key identity".to_string(),
+                ));
+            }
+            possible |= crate::lifecycle::object_has_azure_protection_metadata(&object);
+            index.insert(bucket, &object.key);
+        }
+        Ok(possible)
     }
 
     fn recover_gcs_cancellations(&self) -> Result<()> {
@@ -671,6 +759,14 @@ impl FilesystemStorage {
     }
 
     pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+        Self::atomic_write_prepared(path, bytes, || {})
+    }
+
+    pub(super) fn atomic_write_prepared(
+        path: &Path,
+        bytes: &[u8],
+        prepared: impl FnOnce(),
+    ) -> Result<()> {
         let parent = path
             .parent()
             .ok_or_else(|| Error::InternalError("Invalid file path".to_string()))?;
@@ -689,6 +785,7 @@ impl FilesystemStorage {
                 .map_err(|e| Error::InternalError(format!("Failed to write temp file: {e}")))?;
             file.sync_all()
                 .map_err(|e| Error::InternalError(format!("Failed to sync temp file: {e}")))?;
+            prepared();
             fs::rename(&temp_path, path)
                 .map_err(|e| Error::InternalError(format!("Failed to commit temp file: {e}")))?;
             Self::sync_directory(parent)

@@ -58,6 +58,9 @@ impl ObjectStore for IndexedStorage {
     fn operation_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
         self.inner.operation_gate()
     }
+    fn azure_object_protection_absent(&self, bucket: &str) -> bool {
+        self.inner.azure_object_protection_absent(bucket)
+    }
     fn put_object(&self, bucket: &str, key: String, object: Object) -> Result<()> {
         self.inner.put_object(bucket, key, object)?;
         Ok(())
