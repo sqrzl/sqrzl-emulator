@@ -27,6 +27,11 @@
   min-inline-size: 0;
 }
 
+:where([data-sqrzl-slot='storage-search-field'])
+  > :where([data-slot='field']) {
+  width: 100%;
+}
+
 :where([data-sqrzl-slot='storage-table-scroll']) {
   max-inline-size: 100%;
   padding-block-end: var(--ak-space-xs);
