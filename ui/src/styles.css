@@ -8,6 +8,23 @@
   }
 }
 
+:where([data-sqrzl-slot='application-brand-mark']) {
+  background: transparent;
+  box-shadow: none;
+}
+
+:where([data-sqrzl-slot='application-brand-logo']) {
+  display: block;
+  inline-size: 2rem;
+  block-size: 2rem;
+  object-fit: contain;
+}
+
+[data-theme='dark']
+  :where([data-sqrzl-slot='application-brand-logo']) {
+  filter: invert(1);
+}
+
 :where([data-sqrzl-slot='inline-message-details']) {
   padding: var(--ak-space-4);
   border: 1px solid var(--ak-color-border-subtle);
