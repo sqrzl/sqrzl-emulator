@@ -45,6 +45,7 @@ export default function LogoutPage() {
 
   const [phase, setPhase] = state<'pending' | 'error'>('pending');
   const [error, setError] = state('');
+  const errorMessage = error();
 
   async function signOutAndRedirect() {
     setPhase('pending');
@@ -91,7 +92,7 @@ export default function LogoutPage() {
               {phase() === 'error' ? (
                 <Block direction="column" gap="md">
                   <Text tone="danger" size="sm">
-                    {error() ||
+                    {errorMessage ||
                       'The auth cookie could not be cleared right now.'}
                   </Text>
                   <Button

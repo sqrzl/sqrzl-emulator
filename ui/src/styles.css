@@ -1,21 +1,28 @@
 @import '@askrjs/themes/default';
 
-:where([data-sqrzl-slot='navbar-utilities']) {
-  display: flex;
-  margin-inline-start: auto;
+/* Askr 0.5.0 keeps collapsed navbar content vertical above its md breakpoint. */
+@media (min-width: 48rem) {
+  :where([data-sqrzl-slot='application-navbar'][data-collapse-at='md'])
+    :where([data-slot='navbar-content']) {
+    flex-direction: row;
+  }
 }
 
-@media (min-width: 768px) {
-  :where([data-sqrzl-slot='navbar-utilities']) {
-    position: absolute;
-    inset-inline-end: 0;
-    top: 50%;
-    transform: translateY(-50%);
-  }
+:where([data-sqrzl-slot='application-brand-mark']) {
+  background: transparent;
+  box-shadow: none;
+}
 
-  :where([data-slot='navbar']:has([data-sqrzl-slot='navbar-utilities'])) {
-    position: relative;
-  }
+:where([data-sqrzl-slot='application-brand-logo']) {
+  display: block;
+  inline-size: 2rem;
+  block-size: 2rem;
+  object-fit: contain;
+}
+
+[data-theme='dark']
+  :where([data-sqrzl-slot='application-brand-logo']) {
+  filter: invert(1);
 }
 
 :where([data-sqrzl-slot='inline-message-details']) {
@@ -35,6 +42,11 @@
 
 :where([data-sqrzl-slot='storage-search-field']) {
   min-inline-size: 0;
+}
+
+:where([data-sqrzl-slot='storage-search-field'])
+  > :where([data-slot='field']) {
+  width: 100%;
 }
 
 :where([data-sqrzl-slot='storage-table-scroll']) {
