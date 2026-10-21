@@ -53,27 +53,25 @@ export default function AppLayout({ children }: { children?: unknown }) {
                 Texts
               </NavLink>
             </NavGroup>
-            <div data-sqrzl-slot="navbar-utilities">
-              <NavGroup align="end">
-                <ThemeToggle
-                  aria-label="Toggle theme"
-                  variant="ghost"
-                  size="icon"
-                  darkIcon={<MoonIcon size={16} aria-hidden="true" />}
-                  lightIcon={<SunIcon size={16} aria-hidden="true" />}
-                />
+            <NavGroup align="end" data-sqrzl-slot="navbar-utilities">
+              <ThemeToggle
+                aria-label="Toggle theme"
+                variant="ghost"
+                size="icon"
+                darkIcon={<MoonIcon size={16} aria-hidden="true" />}
+                lightIcon={<SunIcon size={16} aria-hidden="true" />}
+              />
 
-                {showLogout ? (
-                  <NavLink
-                    href={logoutPath()}
-                    match="exact"
-                    aria-label="Log out"
-                  >
-                    <LogOutIcon size={16} aria-hidden="true" />
-                  </NavLink>
-                ) : null}
-              </NavGroup>
-            </div>
+              {showLogout ? (
+                <NavLink
+                  href={logoutPath()}
+                  match="exact"
+                  aria-label="Log out"
+                >
+                  <LogOutIcon size={16} aria-hidden="true" />
+                </NavLink>
+              ) : null}
+            </NavGroup>
           </Navbar>
         </Container>
       </Header>

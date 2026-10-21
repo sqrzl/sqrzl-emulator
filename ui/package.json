@@ -15,19 +15,21 @@
     "gen": "npx @fgrzl/fetch-gen --input ../public/openapi.yml --output ./src/adapters/api.g.ts"
   },
   "dependencies": {
-    "@askrjs/askr": "^0.2.0",
-    "@askrjs/charts": ">=0.2.0 <0.3.0",
-    "@askrjs/lucide": "^0.2.0",
-    "@askrjs/themes": "^0.2.0",
+    "@askrjs/askr": "0.5.0",
+    "@askrjs/auth": "0.5.0",
+    "@askrjs/charts": "0.5.0",
+    "@askrjs/lucide": "0.5.0",
+    "@askrjs/themes": "0.5.0",
+    "@askrjs/ui": "0.5.0",
     "@fgrzl/fetch": "^2.0.0"
   },
   "devDependencies": {
-    "@askrjs/vite": "^0.2.0",
+    "@askrjs/vite": "0.5.0",
     "@types/node": "^26.2.0",
     "jiti": "^2.7.0",
     "jsdom": "^30.0.1",
     "typescript": "^7.0.2",
-    "vite-plus": "^0.2.9"
+    "vite-plus": "1.3.0"
   },
   "engines": {
     "node": ">=24"
