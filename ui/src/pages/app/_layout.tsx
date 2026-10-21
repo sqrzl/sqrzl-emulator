@@ -31,6 +31,7 @@ export default function AppLayout({ children }: { children?: unknown }) {
             breakpoint="md"
             width="full"
             aria-label="Application navigation"
+            data-sqrzl-slot="application-navbar"
           >
             <NavBrand>
               <Brand asChild>

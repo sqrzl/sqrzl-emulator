@@ -1,5 +1,13 @@
 @import '@askrjs/themes/default';
 
+/* Askr 0.5.0 keeps collapsed navbar content vertical above its md breakpoint. */
+@media (min-width: 48rem) {
+  :where([data-sqrzl-slot='application-navbar'][data-collapse-at='md'])
+    :where([data-slot='navbar-content']) {
+    flex-direction: row;
+  }
+}
+
 :where([data-sqrzl-slot='inline-message-details']) {
   padding: var(--ak-space-4);
   border: 1px solid var(--ak-color-border-subtle);

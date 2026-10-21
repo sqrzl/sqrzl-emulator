@@ -65,7 +65,7 @@ The UI is pinned to the coordinated stable Askr 0.5 package set. `vite-plus`
 | `@askrjs/vite` | 0.5.0 |
 | `vite-plus` | 1.3.0 |
 
-Migration was checked against the [Core 0.5.0 guide](https://github.com/askrjs/askr/blob/v0.5.0/docs/migration/0.5.0.md), the [coordinated package guide](https://github.com/askrjs/askr/blob/v0.5.0/docs/migration/0.5.0-packages.md), and the Themes, UI, and Vite 0.5.0 guides. The app already uses the registry-based router and named `askr()` Vite plugin; `@askrjs/auth` is declared directly because the route registry imports `requireUser`. The shared root layout now sets its vertical direction explicitly, the responsive navbar utility group stays within the Navbar's layout, and logout reads its error state during render under Askr's development checks. The migration does not change the OpenAPI contract, generated client, or `@fgrzl/fetch` transport boundary.
+Migration was checked against the [Core 0.5.0 guide](https://github.com/askrjs/askr/blob/v0.5.0/docs/migration/0.5.0.md), the [coordinated package guide](https://github.com/askrjs/askr/blob/v0.5.0/docs/migration/0.5.0-packages.md), and the Themes, UI, and Vite 0.5.0 guides. The app already uses the registry-based router and named `askr()` Vite plugin; `@askrjs/auth` is declared directly because the route registry imports `requireUser`. The shared root layout now sets its vertical direction explicitly, and the responsive navbar utility group stays on the top row above `md` with a scoped override for the 0.5.0 collapsed-content direction. Logout reads its error state during render under Askr's development checks. The migration does not change the OpenAPI contract, generated client, or `@fgrzl/fetch` transport boundary.
 
 ## Routes
 
