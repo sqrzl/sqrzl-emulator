@@ -27,6 +27,96 @@ impl Drop for Fixture {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn should_accept_azure_2024_api_version_on_existing_head_routes() {
+    // Arrange
+    let fixture = Fixture::new();
+    let storage = fixture.open();
+    storage.create_bucket("midge".to_string()).unwrap();
+    storage
+        .put_object(
+            "midge",
+            "lease".to_string(),
+            sqrzl_emulator::models::Object::new(
+                "lease".to_string(),
+                b"lease bytes".to_vec(),
+                "text/plain".to_string(),
+            ),
+        )
+        .unwrap();
+
+    // Act
+    // Assert
+    for (path, status, code) in [
+        ("midge?restype=container", StatusCode::OK, None),
+        ("midge/lease", StatusCode::OK, None),
+        ("midge/missing", StatusCode::NOT_FOUND, Some("BlobNotFound")),
+        (
+            "missing?restype=container",
+            StatusCode::NOT_FOUND,
+            Some("ContainerNotFound"),
+        ),
+    ] {
+        let response = call(
+            storage.clone(),
+            auth_disabled(),
+            request(
+                "HEAD",
+                &format!("http://localhost/devstoreaccount1/{path}"),
+                &[
+                    ("x-ms-version", "2024-11-04"),
+                    ("x-ms-client-request-id", "midge-head"),
+                ],
+                b"",
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), status, "{path}");
+        assert_eq!(response.headers()["x-ms-version"], "2024-11-04");
+        assert_eq!(response.headers()["x-ms-client-request-id"], "midge-head");
+        assert_eq!(
+            response
+                .headers()
+                .get("x-ms-error-code")
+                .map(|value| value.to_str().unwrap()),
+            code
+        );
+        if path == "midge/lease" {
+            assert_eq!(response.headers()["content-length"], "11");
+        }
+        assert_eq!(body_bytes(response).await, Vec::<u8>::new());
+    }
+    let deleted = call(
+        storage.clone(),
+        auth_disabled(),
+        request(
+            "DELETE",
+            "http://localhost/devstoreaccount1/midge?restype=container",
+            &[("x-ms-version", "2024-11-04")],
+            b"",
+        ),
+    )
+    .await;
+    assert_eq!(deleted.status(), StatusCode::ACCEPTED);
+    for path in ["midge?restype=container", "midge/lease"] {
+        let response = call(
+            storage.clone(),
+            auth_disabled(),
+            request(
+                "HEAD",
+                &format!("http://localhost/devstoreaccount1/{path}"),
+                &[("x-ms-version", "2024-11-04")],
+                b"",
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()["x-ms-version"], "2024-11-04");
+        assert_eq!(response.headers()["x-ms-error-code"], "ContainerNotFound");
+        assert_eq!(body_bytes(response).await, Vec::<u8>::new());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn should_validate_s3_part_md5_before_replacing_an_acknowledged_part() {
     // Arrange
     let fixture = Fixture::new();

@@ -4164,6 +4164,229 @@
           "native-error"
         ]
       }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts": {
+      "provider": "azure",
+      "operations": [
+        "CreateContainer",
+        "PutBlob",
+        "GetContainerProperties",
+        "GetBlobProperties",
+        "GetBlob",
+        "DeleteBlob",
+        "DeleteContainer"
+      ],
+      "checks": [
+        "positive",
+        "boundary",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Explicit API version 2024-11-04 through the official Azure client; container/blob HEAD request and response version selectors, current/missing resources, metadata, length and native errors. Create/upload/download/delete establish selected data-plane compatibility. No additional API-version feature breadth is claimed.",
+      "operation_checks": {
+        "CreateContainer": [
+          "positive"
+        ],
+        "PutBlob": [
+          "positive"
+        ],
+        "GetContainerProperties": [
+          "positive",
+          "boundary"
+        ],
+        "GetBlobProperties": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "GetBlob": [
+          "positive"
+        ],
+        "DeleteBlob": [
+          "positive"
+        ],
+        "DeleteContainer": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.CreateContainer.put.default",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.GetContainerProperties.head.default",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlob.get.range",
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.DeleteContainer.delete.default"
+      ],
+      "operation_id_aliases": {
+        "CreateContainer": [
+          "azure-blob.CreateContainer.put.default"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetContainerProperties": [
+          "azure-blob.GetContainerProperties.head.default"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.range"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ],
+        "DeleteContainer": [
+          "azure-blob.DeleteContainer.delete.default"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.CreateContainer.put.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive"
+        ],
+        "azure-blob.GetContainerProperties.head.default": [
+          "positive",
+          "boundary"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.GetBlob.get.range": [
+          "positive"
+        ],
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive"
+        ],
+        "azure-blob.DeleteContainer.delete.default": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart": {
+      "provider": "azure",
+      "operations": [
+        "Authenticate(SharedKey)",
+        "Authenticate(ServiceSAS)",
+        "PutBlob",
+        "GetBlobProperties",
+        "GetBlob"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth",
+        "boundary",
+        "condition",
+        "restart"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Explicit 2026-10-06 API and SAS signing version; SharedKey and SAS positives and wrong signatures, same-byte conditional ETag revision, stale-write rejection, persisted ETags/bytes and SAS range read after an owned process restart. This is storage-service restart evidence, not Midge engine empty-cache recovery.",
+      "operation_checks": {
+        "Authenticate(SharedKey)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "Authenticate(ServiceSAS)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "PutBlob": [
+          "positive",
+          "negative",
+          "boundary",
+          "condition",
+          "native-error",
+          "native-auth"
+        ],
+        "GetBlobProperties": [
+          "positive",
+          "condition",
+          "restart",
+          "native-auth"
+        ],
+        "GetBlob": [
+          "positive",
+          "boundary",
+          "restart",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.Authenticate.http.shared-key",
+        "azure-blob.Authenticate.http.service-sas",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlob.get.range"
+      ],
+      "operation_id_aliases": {
+        "Authenticate(SharedKey)": [
+          "azure-blob.Authenticate.http.shared-key"
+        ],
+        "Authenticate(ServiceSAS)": [
+          "azure-blob.Authenticate.http.service-sas"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.range"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.Authenticate.http.shared-key": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "azure-blob.Authenticate.http.service-sas": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "negative",
+          "boundary",
+          "condition",
+          "native-error",
+          "native-auth"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "condition",
+          "restart",
+          "native-auth"
+        ],
+        "azure-blob.GetBlob.get.range": [
+          "positive",
+          "boundary",
+          "restart",
+          "native-auth"
+        ]
+      }
     }
   }
 }

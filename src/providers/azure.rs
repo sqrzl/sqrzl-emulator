@@ -32,6 +32,7 @@ const AZURE_VERSION: &str = "2023-11-03";
 // operations share the post-2019-12-12 upload limits and post-2020-12-06 SAS format.
 const AZURE_SUPPORTED_VERSIONS: &[&str] = &[
     "2023-11-03",
+    "2024-11-04",
     "2025-01-05",
     "2026-04-06",
     "2026-06-06",
@@ -2229,7 +2230,7 @@ impl AzureBlobAdapter {
         Err(Self::error_response(
             if valid_date { StatusCode::NOT_IMPLEMENTED } else { StatusCode::BAD_REQUEST },
             if valid_date { "FeatureNotSupported" } else { "InvalidHeaderValue" },
-            "This emulator accepts Azure service versions 2023-11-03, 2025-01-05, 2026-04-06, 2026-06-06 and 2026-10-06.",
+            "This emulator accepts Azure service versions 2023-11-03, 2024-11-04, 2025-01-05, 2026-04-06, 2026-06-06 and 2026-10-06.",
         ))
     }
 
@@ -2339,7 +2340,7 @@ impl AzureBlobAdapter {
         match storage.get_bucket(&container) {
             Ok(_) => {}
             Err(crate::error::Error::BucketNotFound) => {
-                return Ok(Self::container_not_found_for_blob_request(req));
+                return Ok(Self::container_not_found_for_request(req));
             }
             Err(error) => {
                 return Ok(Self::error_response(
@@ -2600,7 +2601,9 @@ impl AzureBlobAdapter {
 
         let namespace = match storage.as_ref().get_namespace(container) {
             Ok(namespace) => namespace,
-            Err(crate::error::Error::BucketNotFound) => return Ok(Self::container_not_found()),
+            Err(crate::error::Error::BucketNotFound) => {
+                return Ok(Self::container_not_found_for_request(req))
+            }
             Err(error) => return Err(error.to_string()),
         };
         let mut response = Self::namespace_response(StatusCode::OK, &namespace)
@@ -2721,7 +2724,7 @@ impl AzureBlobAdapter {
         )
     }
 
-    fn container_not_found_for_blob_request(req: &Request) -> Response<Body> {
+    fn container_not_found_for_request(req: &Request) -> Response<Body> {
         if *req.method() == Method::HEAD {
             Self::response(StatusCode::NOT_FOUND)
                 .header("x-ms-error-code", "ContainerNotFound")
@@ -2754,7 +2757,7 @@ impl AzureBlobAdapter {
                 "The specified container is being deleted.",
             )));
         }
-        Ok(Some(Self::container_not_found()))
+        Ok(Some(Self::container_not_found_for_request(req)))
     }
 
     fn finish_expired_container_deletion(
@@ -10040,7 +10043,7 @@ mod tests {
         let storage = temp_storage();
         storage.create_bucket("contracts".to_string()).unwrap();
         let adapter = AzureBlobAdapter::new();
-        for version in ["2023-11-03", "2026-10-06"] {
+        for version in ["2023-11-03", "2024-11-04", "2026-10-06"] {
             for (suffix, body) in [
                 ("?comp=block&blockid=YQ==", b"checked".as_slice()),
                 (

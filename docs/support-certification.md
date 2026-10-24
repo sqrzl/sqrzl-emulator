@@ -82,9 +82,17 @@ the future. S3 alone accepts `UNSIGNED-PAYLOAD`; a supplied SHA256 digest is
 checked against buffered or spooled bytes. Streaming signature chains and
 checksum trailers remain unsupported.
 
-Azure accepts service versions `2023-11-03`, `2025-01-05`, `2026-04-06`,
+Azure accepts service versions `2023-11-03`, `2024-11-04`, `2025-01-05`, `2026-04-06`,
 `2026-06-06` and `2026-10-06`. Other well-formed versions receive an unsupported
 error; malformed versions are rejected. Service SAS uses HTTP localhost.
+The `2024-11-04` subset includes Midge's container/blob HEAD probes, native
+Shared Key signing and the existing data-plane operations; the official SDK
+gate explicitly selects that API version. Microsoft's [2024-11-04 release notes](https://learn.microsoft.com/en-us/rest/api/storageservices/version-2024-11-04)
+describe version-specific additions outside this emulator's blob subset.
+The explicit `2026-10-06` SDK gate verifies Shared Key and SAS signatures,
+credential negatives, same-byte ETag revisions, conditional-write rejection,
+and persisted bytes/ETags plus SAS range reads after an owned process restart.
+Its request and response selectors are asserted, including the SAS `sv` value.
 HTTPS-only, account/user-delegation SAS, signed IP constraints, stored access
 policies and response overrides are rejected. Create-only SAS cannot overwrite
 an existing blob, including at block-list commit.
@@ -157,6 +165,9 @@ image identity, logs and original workload reports are retained in artifacts.
 An upstream emulator cost fix and a downstream engine scheduling fix are
 separate claims; [Sqrzl #75](https://github.com/sqrzl/sqrzl-emulator/issues/75)
 and [Midge #894](https://github.com/cntryl/midge/issues/894) record that boundary.
+That pinned Midge consumer uses Azure `2025-01-05`. Its engine recovery result
+does not establish Midge recovery under `2026-10-06`; the explicit newer-version
+SDK gate covers the emulator's storage-service restart contract separately.
 
 ## Ownership and durability
 
