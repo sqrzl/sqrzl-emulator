@@ -9,13 +9,164 @@ import pytest
 azure_blob = pytest.importorskip("azure.storage.blob")
 
 
-def _service(sqrzl_server):
+def _service(sqrzl_server, *, api_version=None):
     return azure_blob.BlobServiceClient(
         account_url=f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}",
         credential=(
             sqrzl_server.azure_account_key if sqrzl_server.enforce_auth else None
         ),
+        **({"api_version": api_version} if api_version is not None else {}),
     )
+
+
+def test_azure_2024_api_version_head_contracts(sqrzl_server, record_property):
+    sqrzl_server.require_provider("azure")
+    from azure.core.exceptions import HttpResponseError
+
+    service = _service(sqrzl_server, api_version="2024-11-04")
+    record_property("api_version", "2024-11-04")
+    container = service.create_container(sqrzl_server.bucket_name("sdk-azure-2024"))
+    blob = container.get_blob_client("lease")
+    blob.upload_blob(b"midge-compatible", metadata={"owner": "midge"})
+    responses = []
+
+    def capture(response):
+        assert response.http_response.request.headers["x-ms-version"] == "2024-11-04"
+        assert response.http_response.headers["x-ms-version"] == "2024-11-04"
+        responses.append(response.http_response.status_code)
+
+    assert container.get_container_properties(raw_response_hook=capture).etag
+    props = blob.get_blob_properties(raw_response_hook=capture)
+    assert props.size == len(b"midge-compatible")
+    assert props.metadata == {"owner": "midge"}
+    assert responses == [200, 200]
+    assert container.exists()
+    assert blob.exists()
+    assert not container.get_blob_client("missing").exists()
+    with pytest.raises(HttpResponseError) as error:
+        container.get_blob_client("missing").get_blob_properties()
+    assert error.value.status_code == 404
+    assert error.value.error_code == "BlobNotFound"
+    if sqrzl_server.enforce_auth:
+        wrong_key = azure_blob.BlobServiceClient(
+            account_url=f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}",
+            credential=base64.b64encode(b"wrong-2024-key").decode("ascii"),
+            api_version="2024-11-04",
+        ).get_blob_client(container.container_name, "lease")
+        with pytest.raises(HttpResponseError) as error:
+            wrong_key.get_blob_properties()
+        assert error.value.status_code == 403
+        assert error.value.error_code == "AuthenticationFailed"
+    assert blob.download_blob().readall() == b"midge-compatible"
+    blob.delete_blob()
+    container.delete_container()
+    assert not container.exists()
+
+
+def test_azure_2026_authenticated_conditions_and_process_restart(sqrzl_server, record_property):
+    sqrzl_server.require_provider("azure")
+    sqrzl_server.require_process()
+    if not sqrzl_server.enforce_auth:
+        pytest.skip("explicit 2026 protocol qualification requires native authentication")
+    from azure.core import MatchConditions
+    from azure.core.exceptions import HttpResponseError
+    from urllib.parse import parse_qs
+
+    version = "2026-10-06"
+    record_property("api_version", version)
+
+    def capture(response):
+        assert response.http_response.request.headers["x-ms-version"] == version
+        assert response.http_response.headers["x-ms-version"] == version
+
+    service = _service(sqrzl_server, api_version=version)
+    container = service.create_container(
+        sqrzl_server.bucket_name("sdk-azure-2026"), raw_response_hook=capture
+    )
+    blob = container.get_blob_client("conditional")
+    payload = b"native 2026 persisted bytes"
+    first = blob.upload_blob(payload, raw_response_hook=capture)
+    current = blob.upload_blob(
+        payload, overwrite=True, etag=first["etag"],
+        match_condition=MatchConditions.IfNotModified, raw_response_hook=capture,
+    )
+    assert first["etag"] != current["etag"]
+
+    def reject_stale_write():
+        with pytest.raises(HttpResponseError) as error:
+            blob.upload_blob(
+                b"rejected replacement", overwrite=True, etag=first["etag"],
+                match_condition=MatchConditions.IfNotModified, raw_response_hook=capture,
+            )
+        assert error.value.status_code == 412
+        assert error.value.error_code == "ConditionNotMet"
+        assert blob.get_blob_properties(raw_response_hook=capture).etag == current["etag"]
+
+    reject_stale_write()
+    wrong_key = azure_blob.BlobServiceClient(
+        account_url=f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}",
+        credential=base64.b64encode(b"wrong-2026-key").decode("ascii"), api_version=version,
+    ).get_blob_client(container.container_name, blob.blob_name)
+    with pytest.raises(HttpResponseError) as error:
+        wrong_key.get_blob_properties(raw_response_hook=capture)
+    assert error.value.status_code == 403
+    assert error.value.error_code == "AuthenticationFailed"
+
+    token = azure_blob.generate_blob_sas(
+        account_name=sqrzl_server.azure_account, container_name=container.container_name,
+        blob_name=blob.blob_name, account_key=sqrzl_server.azure_account_key,
+        permission=azure_blob.BlobSasPermissions(read=True),
+        expiry=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    assert parse_qs(token)["sv"] == [version]
+    signed = azure_blob.BlobClient.from_blob_url(f"{blob.url}?{token}", api_version=version)
+    assert signed.download_blob(raw_response_hook=capture).readall() == payload
+    wrong_sas = azure_blob.BlobClient.from_blob_url(
+        f"{blob.url}?{token.replace('sig=', 'sig=invalid')}", api_version=version,
+    )
+    with pytest.raises(HttpResponseError) as error:
+        wrong_sas.get_blob_properties(raw_response_hook=capture)
+    assert error.value.status_code == 403
+    assert error.value.error_code == "AuthenticationFailed"
+
+    old_pid = sqrzl_server.process_pid
+    new_pid = sqrzl_server.restart()
+    record_property("normal_restart", {"old_pid": old_pid, "new_pid": new_pid})
+    assert old_pid != new_pid
+    reject_stale_write()
+    assert blob.download_blob(raw_response_hook=capture).readall() == payload
+    assert signed.download_blob(offset=1, length=5, raw_response_hook=capture).readall() == payload[1:6]
+    blob.delete_blob()
+    container.delete_container()
+
+
+def test_azure_listing_metadata_and_include_boundaries(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    from azure.core.exceptions import HttpResponseError
+
+    container = _service(sqrzl_server).create_container(
+        sqrzl_server.bucket_name("sdk-azure-list-metadata")
+    )
+    keys = [f"folder/{index}" for index in range(3)]
+    for key in keys:
+        container.upload_blob(key, b"metadata payload", metadata={"owner": "a&b<c>", "key": key})
+    pages = [list(page) for page in container.list_blobs(
+        name_starts_with="folder/", include=["metadata"], results_per_page=1
+    ).by_page()]
+    assert len(pages) == 3
+    assert [item.name for page in pages for item in page] == keys
+    for page in pages:
+        for blob in page:
+            assert blob.metadata == {"owner": "a&b<c>", "key": blob.name}
+    assert all(not blob.metadata for blob in container.list_blobs())
+    for include in (["snapshots"], ["versions"], ["deleted"], ["metadata", "tags"]):
+        with pytest.raises(HttpResponseError) as error:
+            list(container.list_blobs(include=include))
+        assert error.value.status_code == 501
+        assert error.value.error_code == "FeatureNotSupported"
+    for key in keys:
+        container.delete_blob(key)
+    container.delete_container()
 
 
 def test_azure_same_byte_writes_revise_etags(sqrzl_server):

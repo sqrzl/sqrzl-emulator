@@ -93,13 +93,15 @@
           "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
           "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
           "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
-          "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
+          "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files",
+          "storage_provider_parity::should_validate_s3_part_md5_before_replacing_an_acknowledged_part"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
           "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-          "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+          "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
+          "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
         ],
         "limitations": [
           "Core multipart create, upload, paginated listing, selected-part completion, abort, UploadPartCopy, and SigV4-presigned UploadPart flows are supported. Conditional completion headers and Object Lock parameters on multipart initiation remain outside the certified subset."
@@ -224,11 +226,13 @@
           "providers::azure::tests::should_not_schedule_or_purge_container_with_azure_worm_data",
           "providers::azure::tests::should_reject_unsupported_azure_subresources_before_mutation",
           "providers::tests::should_serialize_conflicting_azure_and_s3_protection_creation",
-          "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation"
+          "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation",
+          "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+          "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts"
         ],
         "limitations": [
           "Delete Container enters a durable local deleting-name state, hides the container immediately, and rejects same-name recreation until lazy purge. Data-plane deletion rejects active or malformed fail-closed WORM protection across current blobs, snapshots, and versions before scheduling or reclaiming bytes. Unsupported container subresources return FeatureNotSupported before namespace mutation. Production control-plane garbage-collection timing is not claimed."
@@ -266,11 +270,14 @@
           "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
           "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
           "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
-          "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
+          "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create",
+          "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+          "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
+          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
         ],
         "limitations": [
           "Azure local versioning/soft-delete mode is mutually exclusive with S3 and GCS data-protection ownership of the same container. Conflicting activation, protected mutation, or foreign version access returns FeatureVersionMismatch 409 without mutation. Selected previous-version and snapshot mutations are either handled by the supported delete path or rejected before changing the current blob. Put Block List preserves Committed, Uncommitted, and Latest selectors and reports real block sizes. Unimplemented blob subresources return FeatureNotSupported before ordinary blob CRUD can run."
@@ -327,14 +334,16 @@
           "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
           "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists",
           "interop_azure::should_page_azure_blob_prefixes_without_exposing_snapshot_storage_keys",
-          "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
+          "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door",
+          "storage_provider_parity::should_enforce_azure_listing_include_contracts"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+          "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries"
         ],
         "limitations": [
-          "Certification is suspended pending authenticated negative, pagination, restart-durability, and provider error-response contract gates."
+          "Current blobs and delimiter pagination are supported. include=metadata returns user metadata; snapshot/version/deleted/tag/uncommitted/copy/protection datasets fail explicitly. Stored metadata names that cannot be represented in XML also fail explicitly."
         ]
       },
       "shared_key_auth": {
@@ -346,7 +355,9 @@
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows"
+          "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
+          "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
+          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
         ],
         "limitations": [
           "Certification is suspended pending authenticated negative, pagination, restart-durability, and provider error-response contract gates."
@@ -360,7 +371,8 @@
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow"
+          "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
+          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
         ],
         "limitations": [
           "Blob SAS read, create, write, and delete permissions are verified, including staging and committing a multi-block upload through one SDK-generated SAS. Account SAS and service-level SAS operations remain outside this subset."
@@ -521,14 +533,16 @@
           "providers::gcs::tests::should_reject_mismatched_resumable_metadata_crc32c_without_mutation",
           "providers::gcs::tests::should_validate_matching_gcs_json_media_x_goog_hash_crc32c",
           "providers::gcs::tests::should_reject_invalid_gcs_json_media_x_goog_hash_without_mutation",
-          "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
+          "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch",
+          "storage_provider_parity::should_validate_gcs_xml_integrity_headers_before_publishing_an_object"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+          "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers"
         ],
         "limitations": [
-          "The accepted JSON upload checksum subset validates base64 big-endian CRC32C supplied in multipart object metadata and in X-Goog-Hash on media or final resumable requests. Malformed, conflicting, mismatched, and unsupported checksum algorithms fail before mutation; a failed final resumable checksum leaves the session retriable. A separate third multipart checksum part and MD5 validation remain explicitly rejected rather than approximated. Current-generation JSON metadata, media, and delete selectors are accepted only when they equal the stored generation; historical generation access remains unsupported.",
+          "The accepted JSON upload checksum subset validates base64 big-endian CRC32C supplied in multipart object metadata and in X-Goog-Hash on media or final resumable requests. Malformed, conflicting, mismatched, and unsupported checksum algorithms fail before mutation; a failed final resumable checksum leaves the session retriable. A separate third JSON multipart checksum part and JSON MD5 validation remain explicitly rejected rather than approximated. Current-generation JSON metadata, media, and delete selectors are accepted only when they equal the stored generation; historical generation access remains unsupported.",
           "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
         ]
       },
@@ -1434,7 +1448,8 @@
             "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
             "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
             "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart",
-            "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object"
+            "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
           ]
         },
         "acceptance_gates": {
@@ -1844,7 +1859,7 @@
         "path": "/{bucket}/{key}?uploadId={id}&partNumber={n}",
         "variant": "plain",
         "support_tier": "partial",
-        "boundary": "Durable streamed parts; local per-request limit applies.",
+        "boundary": "Durable streamed parts; Content-MD5 is validated before staging or replacing an acknowledged part. Invalid Base64/length receives InvalidDigest; mismatches receive BadDigest. Local per-request limit applies; additional-checksum multipart remains unsupported.",
         "evidence_candidates": {
           "rust": [
             "services::object::tests::should_roundtrip_object_through_service",
@@ -1853,14 +1868,16 @@
             "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
-            "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
+            "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files",
+            "storage_provider_parity::should_validate_s3_part_md5_before_replacing_an_acknowledged_part"
           ],
           "sdk": [
             "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
             "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
-            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication"
+            "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
           ]
         },
         "acceptance_gates": {
@@ -1975,7 +1992,8 @@
             "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
             "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
           ]
         },
         "acceptance_gates": {
@@ -2053,7 +2071,8 @@
           "sdk": [
             "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
           ]
         },
         "acceptance_gates": {
@@ -4017,7 +4036,8 @@
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts"
           ]
         },
         "acceptance_gates": {
@@ -4056,7 +4076,8 @@
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts"
           ]
         },
         "acceptance_gates": {
@@ -4081,7 +4102,7 @@
         "path": "/{account}/{container}?restype=container",
         "variant": "default",
         "support_tier": "partial",
-        "boundary": "Metadata-only properties and stable creation/modification identity.",
+        "boundary": "Metadata-only properties and stable creation/modification identity. Service version 2024-11-04 is accepted and echoed on current/missing HEAD results; unsupported service versions are still rejected.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
@@ -4091,11 +4112,13 @@
             "providers::azure::tests::should_not_schedule_or_purge_container_with_azure_worm_data",
             "providers::azure::tests::should_reject_unsupported_azure_subresources_before_mutation",
             "providers::tests::should_serialize_conflicting_azure_and_s3_protection_creation",
-            "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation"
+            "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation",
+            "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
-            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints"
+            "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts"
           ]
         },
         "acceptance_gates": {
@@ -4156,20 +4179,22 @@
         "path": "/{account}/{container}?restype=container&comp=list",
         "variant": "flat",
         "support_tier": "partial",
-        "boundary": "Paged local blobs and selected include selectors.",
+        "boundary": "Paged local current blobs. include=metadata returns escaped user metadata; default listing omits it. Known history, tags, copy, uncommitted and protection include datasets receive FeatureNotSupported 501; invalid include values receive InvalidQueryParameterValue 400. Metadata names outside the representable XML contract fail explicitly.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
             "interop_azure::should_list_containers_and_blobs_given_stored_objects_when_querying_azure_lists",
             "interop_azure::should_page_azure_blob_prefixes_without_exposing_snapshot_storage_keys",
-            "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door"
+            "provider_conformance::should_rewrite_malformed_and_repeated_pagination_tokens_on_every_storage_front_door",
+            "storage_provider_parity::should_enforce_azure_listing_include_contracts"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
             "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
-            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries"
           ]
         },
         "acceptance_gates": {
@@ -4269,7 +4294,9 @@
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
-            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob"
+            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob",
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -4372,7 +4399,9 @@
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -4397,12 +4426,13 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "current",
         "support_tier": "partial",
-        "boundary": "Metadata-only; selected HTTP and user properties.",
+        "boundary": "Metadata-only; selected HTTP and user properties. Service version 2024-11-04 is accepted and echoed on current/missing HEAD results; unsupported service versions are still rejected.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
-            "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
+            "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head",
+            "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
@@ -4410,7 +4440,9 @@
             "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
             "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -4475,7 +4507,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
-            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts"
           ]
         },
         "acceptance_gates": {
@@ -5464,7 +5497,8 @@
             "interop_azure::should_round_trip_block_blob_given_container_exists_when_using_basic_blob_operations"
           ],
           "sdk": [
-            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob"
+            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob",
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -5497,7 +5531,8 @@
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
-            "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow"
+            "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
           ]
         },
         "acceptance_gates": {
@@ -5686,7 +5721,7 @@
         "path": "/{bucket}/{object}",
         "variant": "xml",
         "support_tier": "partial",
-        "boundary": "Native HMAC XML signing and streamed object upload.",
+        "boundary": "Native HMAC XML signing and streamed direct object upload. Content-MD5 and X-Goog-Hash MD5/CRC32C validate the actual uploaded bytes before publication; malformed or conflicting digests and mismatches receive native XML 400 errors without replacing current bytes or identity. This does not qualify resumable MD5 validation.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
@@ -5721,10 +5756,12 @@
             "providers::gcs::tests::should_reject_mismatched_resumable_metadata_crc32c_without_mutation",
             "providers::gcs::tests::should_validate_matching_gcs_json_media_x_goog_hash_crc32c",
             "providers::gcs::tests::should_reject_invalid_gcs_json_media_x_goog_hash_without_mutation",
-            "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
+            "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch",
+            "storage_provider_parity::should_validate_gcs_xml_integrity_headers_before_publishing_an_object"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers"
           ]
         },
         "acceptance_gates": {
@@ -5787,7 +5824,8 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers"
           ]
         },
         "acceptance_gates": {

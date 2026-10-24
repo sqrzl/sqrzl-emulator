@@ -4003,6 +4003,390 @@
           "native-auth"
         ]
       }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes": {
+      "provider": "s3",
+      "operations": [
+        "UploadPart",
+        "ListParts",
+        "CompleteMultipartUpload",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Streamed Content-MD5 part admission; invalid digests preserve the acknowledged part, ListParts identity, and completed object bytes.",
+      "operation_checks": {
+        "UploadPart": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "ListParts": [
+          "positive"
+        ],
+        "CompleteMultipartUpload": [
+          "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.UploadPart.put.plain",
+        "s3-family.ListParts.get.default",
+        "s3-family.CompleteMultipartUpload.post.ordered-parts",
+        "s3-family.GetObject.get.current"
+      ],
+      "operation_id_aliases": {
+        "UploadPart": [
+          "s3-family.UploadPart.put.plain"
+        ],
+        "ListParts": [
+          "s3-family.ListParts.get.default"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.ordered-parts"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.UploadPart.put.plain": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "s3-family.ListParts.get.default": [
+          "positive"
+        ],
+        "s3-family.CompleteMultipartUpload.post.ordered-parts": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers": {
+      "provider": "gcs",
+      "operations": [
+        "PUT Object",
+        "GET Object"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-v2-hmac-official-signed-url-api",
+      "scope": "Direct XML PUT validates Content-MD5 and X-Goog-Hash MD5/CRC32C on spooled bytes; native XML errors preserve current bytes and ETag. JSON bearer setup does not qualify native bucket authentication.",
+      "operation_checks": {
+        "PUT Object": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "GET Object": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "gcs.PutObject.put.xml",
+        "gcs.GetObject.get.xml"
+      ],
+      "operation_id_aliases": {
+        "PUT Object": [
+          "gcs.PutObject.put.xml"
+        ],
+        "GET Object": [
+          "gcs.GetObject.get.xml"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.PutObject.put.xml": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "gcs.GetObject.get.xml": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries": {
+      "provider": "azure",
+      "operations": [
+        "ListBlobs"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "pages",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Three one-entry metadata listing pages, escaped values and absent unrequested metadata; unsupported history/tag includes fail explicitly.",
+      "operation_checks": {
+        "ListBlobs": [
+          "positive",
+          "negative",
+          "boundary",
+          "pages",
+          "native-error"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.ListBlobs.get.flat"
+      ],
+      "operation_id_aliases": {
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.ListBlobs.get.flat": [
+          "positive",
+          "negative",
+          "boundary",
+          "pages",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts": {
+      "provider": "azure",
+      "operations": [
+        "CreateContainer",
+        "PutBlob",
+        "GetContainerProperties",
+        "GetBlobProperties",
+        "GetBlob",
+        "DeleteBlob",
+        "DeleteContainer"
+      ],
+      "checks": [
+        "positive",
+        "boundary",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Explicit API version 2024-11-04 through the official Azure client; container/blob HEAD request and response version selectors, current/missing resources, metadata, length and native errors. Create/upload/download/delete establish selected data-plane compatibility. No additional API-version feature breadth is claimed.",
+      "operation_checks": {
+        "CreateContainer": [
+          "positive"
+        ],
+        "PutBlob": [
+          "positive"
+        ],
+        "GetContainerProperties": [
+          "positive",
+          "boundary"
+        ],
+        "GetBlobProperties": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "GetBlob": [
+          "positive"
+        ],
+        "DeleteBlob": [
+          "positive"
+        ],
+        "DeleteContainer": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.CreateContainer.put.default",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.GetContainerProperties.head.default",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlob.get.range",
+        "azure-blob.DeleteBlob.delete.current",
+        "azure-blob.DeleteContainer.delete.default"
+      ],
+      "operation_id_aliases": {
+        "CreateContainer": [
+          "azure-blob.CreateContainer.put.default"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetContainerProperties": [
+          "azure-blob.GetContainerProperties.head.default"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.range"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ],
+        "DeleteContainer": [
+          "azure-blob.DeleteContainer.delete.default"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.CreateContainer.put.default": [
+          "positive"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive"
+        ],
+        "azure-blob.GetContainerProperties.head.default": [
+          "positive",
+          "boundary"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "azure-blob.GetBlob.get.range": [
+          "positive"
+        ],
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive"
+        ],
+        "azure-blob.DeleteContainer.delete.default": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart": {
+      "provider": "azure",
+      "operations": [
+        "Authenticate(SharedKey)",
+        "Authenticate(ServiceSAS)",
+        "PutBlob",
+        "GetBlobProperties",
+        "GetBlob"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error",
+        "native-auth",
+        "boundary",
+        "condition",
+        "restart"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Explicit 2026-10-06 API and SAS signing version; SharedKey and SAS positives and wrong signatures, same-byte conditional ETag revision, stale-write rejection, persisted ETags/bytes and SAS range read after an owned process restart. This is storage-service restart evidence, not Midge engine empty-cache recovery.",
+      "operation_checks": {
+        "Authenticate(SharedKey)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "Authenticate(ServiceSAS)": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "PutBlob": [
+          "positive",
+          "negative",
+          "boundary",
+          "condition",
+          "native-error",
+          "native-auth"
+        ],
+        "GetBlobProperties": [
+          "positive",
+          "condition",
+          "restart",
+          "native-auth"
+        ],
+        "GetBlob": [
+          "positive",
+          "boundary",
+          "restart",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.Authenticate.http.shared-key",
+        "azure-blob.Authenticate.http.service-sas",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.GetBlob.get.range"
+      ],
+      "operation_id_aliases": {
+        "Authenticate(SharedKey)": [
+          "azure-blob.Authenticate.http.shared-key"
+        ],
+        "Authenticate(ServiceSAS)": [
+          "azure-blob.Authenticate.http.service-sas"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.range"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.Authenticate.http.shared-key": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "azure-blob.Authenticate.http.service-sas": [
+          "positive",
+          "negative",
+          "native-error",
+          "native-auth",
+          "boundary"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "negative",
+          "boundary",
+          "condition",
+          "native-error",
+          "native-auth"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "condition",
+          "restart",
+          "native-auth"
+        ],
+        "azure-blob.GetBlob.get.range": [
+          "positive",
+          "boundary",
+          "restart",
+          "native-auth"
+        ]
+      }
     }
   }
 }

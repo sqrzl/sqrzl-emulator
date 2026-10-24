@@ -82,9 +82,17 @@ the future. S3 alone accepts `UNSIGNED-PAYLOAD`; a supplied SHA256 digest is
 checked against buffered or spooled bytes. Streaming signature chains and
 checksum trailers remain unsupported.
 
-Azure accepts service versions `2023-11-03`, `2025-01-05`, `2026-04-06`,
+Azure accepts service versions `2023-11-03`, `2024-11-04`, `2025-01-05`, `2026-04-06`,
 `2026-06-06` and `2026-10-06`. Other well-formed versions receive an unsupported
 error; malformed versions are rejected. Service SAS uses HTTP localhost.
+The `2024-11-04` subset includes Midge's container/blob HEAD probes, native
+Shared Key signing and the existing data-plane operations; the official SDK
+gate explicitly selects that API version. Microsoft's [2024-11-04 release notes](https://learn.microsoft.com/en-us/rest/api/storageservices/version-2024-11-04)
+describe version-specific additions outside this emulator's blob subset.
+The explicit `2026-10-06` SDK gate verifies Shared Key and SAS signatures,
+credential negatives, same-byte ETag revisions, conditional-write rejection,
+and persisted bytes/ETags plus SAS range reads after an owned process restart.
+Its request and response selectors are asserted, including the SAS `sv` value.
 HTTPS-only, account/user-delegation SAS, signed IP constraints, stored access
 policies and response overrides are rejected. Create-only SAS cannot overwrite
 an existing blob, including at block-list commit.
@@ -107,6 +115,26 @@ selected transactional control bodies; additional-checksum multipart/copy and
 checksum trailers are explicitly unsupported. The pinned boto3 default
 UploadPart checksum must be opted out for the plain multipart subset. A default
 SDK request is tested separately from that opt-out workflow.
+
+Plain S3 multipart parts validate `Content-MD5` before changing staged bytes.
+Malformed, repeated or non-ASCII values receive `InvalidDigest`; mismatched
+digests receive `BadDigest`. Rejected replacements retain the acknowledged
+part identity and remain completable after reopening.
+
+GCS direct XML PUT validates `Content-MD5` and `x-goog-hash` MD5/CRC32C against
+the buffered or spooled request bytes before publication. Malformed hashes,
+conflicting values and mismatches return native XML errors and preserve the
+current object. This scope follows Google's [PUT Object contract](https://docs.cloud.google.com/storage/docs/xml-api/put-object)
+and [XML error definitions](https://docs.cloud.google.com/storage/docs/xml-api/reference-status);
+it does not qualify resumable MD5 or JSON MD5 support.
+
+Azure current-blob listing returns escaped user metadata when
+`include=metadata` is requested and omits it otherwise, including across pages.
+Other recognized include datasets (snapshots, versions, deleted objects, tags,
+uncommitted blobs, copy and protection state) fail explicitly with
+`FeatureNotSupported`; unknown values receive `InvalidQueryParameterValue`.
+Stored metadata names that cannot form XML elements also fail explicitly.
+See Microsoft's [List Blobs contract](https://learn.microsoft.com/en-us/rest/api/storageservices/list-blobs).
 
 Whole materialized S3/Azure/GCS reads, S3/Azure copies, Azure snapshot creation and
 payload-rewriting metadata operations have an explicit 64 MiB local limit.

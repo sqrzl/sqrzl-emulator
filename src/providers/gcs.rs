@@ -498,6 +498,77 @@ impl GcsAdapter {
         Ok(u32::from_be_bytes(bytes))
     }
 
+    fn validate_xml_upload_checksums(req: &Request) -> Option<Response<Body>> {
+        let error = |code, message| Self::error_response(StatusCode::BAD_REQUEST, code, message);
+        let mut md5 = None;
+        let mut crc32c = None;
+        for value in req.headers.get_all("content-md5") {
+            let decoded = value
+                .to_str()
+                .ok()
+                .and_then(|value| BASE64.decode(value).ok());
+            let Some(decoded) = decoded.filter(|value| value.len() == 16) else {
+                return Some(error(
+                    "InvalidDigest",
+                    "Content-MD5 must encode a 16-byte MD5 digest.",
+                ));
+            };
+            if md5.as_ref().is_some_and(|prior| prior != &decoded) {
+                return Some(error("InvalidDigest", "Content-MD5 values must agree."));
+            }
+            md5 = Some(decoded);
+        }
+        for value in req.headers.get_all("x-goog-hash") {
+            let Ok(value) = value.to_str() else {
+                return Some(error("InvalidHash", "X-Goog-Hash must be ASCII."));
+            };
+            for token in value.split(',').map(str::trim) {
+                let Some((algorithm, encoded)) = token.split_once('=') else {
+                    return Some(error(
+                        "InvalidHash",
+                        "X-Goog-Hash must use algorithm=value tokens.",
+                    ));
+                };
+                let (expected, length) = if algorithm.eq_ignore_ascii_case("md5") {
+                    (&mut md5, 16)
+                } else if algorithm.eq_ignore_ascii_case("crc32c") {
+                    (&mut crc32c, 4)
+                } else {
+                    return Some(error(
+                        "InvalidHash",
+                        "X-Goog-Hash accepts only MD5 and CRC32C.",
+                    ));
+                };
+                let Some(decoded) = BASE64
+                    .decode(encoded)
+                    .ok()
+                    .filter(|value| value.len() == length)
+                else {
+                    return Some(error(
+                        "InvalidHash",
+                        "X-Goog-Hash contains an invalid checksum digest.",
+                    ));
+                };
+                if expected.as_ref().is_some_and(|prior| prior != &decoded) {
+                    return Some(error(
+                        "InvalidHash",
+                        "Supplied checksums for one algorithm must agree.",
+                    ));
+                }
+                *expected = Some(decoded);
+            }
+        }
+        if md5.is_some_and(|expected| expected != req.payload_md5())
+            || crc32c.is_some_and(|expected| expected != req.payload_crc32c().to_be_bytes())
+        {
+            return Some(error(
+                "BadDigest",
+                "The supplied checksum does not match the uploaded data.",
+            ));
+        }
+        None
+    }
+
     fn request_crc32c(req: &Request) -> Result<Option<u32>, UploadMetadataError> {
         let mut expected = None;
         for (_, value) in req
@@ -6853,6 +6924,9 @@ impl GcsAdapter {
     ) -> Response<Body> {
         if req.payload_len() > GCS_MAX_OBJECT_SIZE {
             return Self::object_too_large_response(false);
+        }
+        if let Some(response) = Self::validate_xml_upload_checksums(req) {
+            return response;
         }
         if Self::existing_object_is_retained(storage, bucket, object) {
             return Self::error_response(
