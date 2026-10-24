@@ -389,3 +389,34 @@ def test_s3_native_default_multipart_checksum_boundary(sqrzl_server):
     assert len(client.list_parts(Bucket=bucket, Key="plain", UploadId=upload["UploadId"])["Parts"]) == 1
     client.abort_multipart_upload(Bucket=bucket, Key="plain", UploadId=upload["UploadId"])
     client.delete_bucket(Bucket=bucket)
+
+
+def test_s3_multipart_part_content_md5_preserves_acknowledged_bytes(sqrzl_server):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-part-md5")
+    client.create_bucket(Bucket=bucket)
+    upload = client.create_multipart_upload(Bucket=bucket, Key="checksummed")
+    params = dict(Bucket=bucket, Key="checksummed", UploadId=upload["UploadId"], PartNumber=1)
+    payload = b"acknowledged part"
+    part = client.upload_part(
+        **params, Body=io.BytesIO(payload),
+        ContentMD5=base64.b64encode(hashlib.md5(payload).digest()).decode("ascii"),
+    )
+    for digest, code in (("not-base64", "InvalidDigest"), ("AAAAAA==", "InvalidDigest"),
+                         ("AAAAAAAAAAAAAAAAAAAAAA==", "BadDigest")):
+        with pytest.raises(botocore_exceptions.ClientError) as error:
+            client.upload_part(**params, Body=io.BytesIO(b"changed"), ContentMD5=digest)
+        assert error.value.response["ResponseMetadata"]["HTTPStatusCode"] == 400
+        assert error.value.response["Error"]["Code"] == code
+        stored = client.list_parts(Bucket=bucket, Key="checksummed", UploadId=upload["UploadId"])["Parts"]
+        assert len(stored) == 1
+        assert stored[0]["ETag"] == part["ETag"]
+        assert stored[0]["Size"] == len(payload)
+    client.complete_multipart_upload(
+        Bucket=bucket, Key="checksummed", UploadId=upload["UploadId"],
+        MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": part["ETag"]}]},
+    )
+    assert client.get_object(Bucket=bucket, Key="checksummed")["Body"].read() == payload
+    client.delete_object(Bucket=bucket, Key="checksummed")
+    client.delete_bucket(Bucket=bucket)

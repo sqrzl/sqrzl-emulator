@@ -54,6 +54,9 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "storage_provider_parity::should_validate_s3_part_md5_before_replacing_an_acknowledged_part",
+            "storage_provider_parity::should_validate_gcs_xml_integrity_headers_before_publishing_an_object",
+            "storage_provider_parity::should_enforce_azure_listing_include_contracts",
             "interop_email::should_capture_message_when_sending_over_a_smtp_session",
             "interop_email::should_capture_sendgrid_send_and_fan_out_recipients",
             "interop_email::should_capture_ses_send_with_signature_authorization",
@@ -290,6 +293,9 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers",
+            "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries",
             "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message",
             "sdk-tests/test_email_sdk.py::test_sendgrid_sdk_send",
             "sdk-tests/test_email_sdk.py::test_ses_sdk_send",

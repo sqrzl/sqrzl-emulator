@@ -4003,6 +4003,167 @@
           "native-auth"
         ]
       }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes": {
+      "provider": "s3",
+      "operations": [
+        "UploadPart",
+        "ListParts",
+        "CompleteMultipartUpload",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Streamed Content-MD5 part admission; invalid digests preserve the acknowledged part, ListParts identity, and completed object bytes.",
+      "operation_checks": {
+        "UploadPart": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "ListParts": [
+          "positive"
+        ],
+        "CompleteMultipartUpload": [
+          "positive"
+        ],
+        "GetObject": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.UploadPart.put.plain",
+        "s3-family.ListParts.get.default",
+        "s3-family.CompleteMultipartUpload.post.ordered-parts",
+        "s3-family.GetObject.get.current"
+      ],
+      "operation_id_aliases": {
+        "UploadPart": [
+          "s3-family.UploadPart.put.plain"
+        ],
+        "ListParts": [
+          "s3-family.ListParts.get.default"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.ordered-parts"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.UploadPart.put.plain": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "s3-family.ListParts.get.default": [
+          "positive"
+        ],
+        "s3-family.CompleteMultipartUpload.post.ordered-parts": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers": {
+      "provider": "gcs",
+      "operations": [
+        "PUT Object",
+        "GET Object"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "native-v2-hmac-official-signed-url-api",
+      "scope": "Direct XML PUT validates Content-MD5 and X-Goog-Hash MD5/CRC32C on spooled bytes; native XML errors preserve current bytes and ETag. JSON bearer setup does not qualify native bucket authentication.",
+      "operation_checks": {
+        "PUT Object": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "GET Object": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "gcs.PutObject.put.xml",
+        "gcs.GetObject.get.xml"
+      ],
+      "operation_id_aliases": {
+        "PUT Object": [
+          "gcs.PutObject.put.xml"
+        ],
+        "GET Object": [
+          "gcs.GetObject.get.xml"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.PutObject.put.xml": [
+          "positive",
+          "negative",
+          "boundary",
+          "native-error"
+        ],
+        "gcs.GetObject.get.xml": [
+          "positive"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries": {
+      "provider": "azure",
+      "operations": [
+        "ListBlobs"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "boundary",
+        "pages",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Three one-entry metadata listing pages, escaped values and absent unrequested metadata; unsupported history/tag includes fail explicitly.",
+      "operation_checks": {
+        "ListBlobs": [
+          "positive",
+          "negative",
+          "boundary",
+          "pages",
+          "native-error"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.ListBlobs.get.flat"
+      ],
+      "operation_id_aliases": {
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.ListBlobs.get.flat": [
+          "positive",
+          "negative",
+          "boundary",
+          "pages",
+          "native-error"
+        ]
+      }
     }
   }
 }

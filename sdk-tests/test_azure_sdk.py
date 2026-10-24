@@ -18,6 +18,35 @@ def _service(sqrzl_server):
     )
 
 
+def test_azure_listing_metadata_and_include_boundaries(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    from azure.core.exceptions import HttpResponseError
+
+    container = _service(sqrzl_server).create_container(
+        sqrzl_server.bucket_name("sdk-azure-list-metadata")
+    )
+    keys = [f"folder/{index}" for index in range(3)]
+    for key in keys:
+        container.upload_blob(key, b"metadata payload", metadata={"owner": "a&b<c>", "key": key})
+    pages = [list(page) for page in container.list_blobs(
+        name_starts_with="folder/", include=["metadata"], results_per_page=1
+    ).by_page()]
+    assert len(pages) == 3
+    assert [item.name for page in pages for item in page] == keys
+    for page in pages:
+        for blob in page:
+            assert blob.metadata == {"owner": "a&b<c>", "key": blob.name}
+    assert all(not blob.metadata for blob in container.list_blobs())
+    for include in (["snapshots"], ["versions"], ["deleted"], ["metadata", "tags"]):
+        with pytest.raises(HttpResponseError) as error:
+            list(container.list_blobs(include=include))
+        assert error.value.status_code == 501
+        assert error.value.error_code == "FeatureNotSupported"
+    for key in keys:
+        container.delete_blob(key)
+    container.delete_container()
+
+
 def test_azure_same_byte_writes_revise_etags(sqrzl_server):
     from azure.core import MatchConditions
     from azure.core.exceptions import HttpResponseError

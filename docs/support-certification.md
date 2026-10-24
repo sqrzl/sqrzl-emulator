@@ -108,6 +108,26 @@ checksum trailers are explicitly unsupported. The pinned boto3 default
 UploadPart checksum must be opted out for the plain multipart subset. A default
 SDK request is tested separately from that opt-out workflow.
 
+Plain S3 multipart parts validate `Content-MD5` before changing staged bytes.
+Malformed, repeated or non-ASCII values receive `InvalidDigest`; mismatched
+digests receive `BadDigest`. Rejected replacements retain the acknowledged
+part identity and remain completable after reopening.
+
+GCS direct XML PUT validates `Content-MD5` and `x-goog-hash` MD5/CRC32C against
+the buffered or spooled request bytes before publication. Malformed hashes,
+conflicting values and mismatches return native XML errors and preserve the
+current object. This scope follows Google's [PUT Object contract](https://docs.cloud.google.com/storage/docs/xml-api/put-object)
+and [XML error definitions](https://docs.cloud.google.com/storage/docs/xml-api/reference-status);
+it does not qualify resumable MD5 or JSON MD5 support.
+
+Azure current-blob listing returns escaped user metadata when
+`include=metadata` is requested and omits it otherwise, including across pages.
+Other recognized include datasets (snapshots, versions, deleted objects, tags,
+uncommitted blobs, copy and protection state) fail explicitly with
+`FeatureNotSupported`; unknown values receive `InvalidQueryParameterValue`.
+Stored metadata names that cannot form XML elements also fail explicitly.
+See Microsoft's [List Blobs contract](https://learn.microsoft.com/en-us/rest/api/storageservices/list-blobs).
+
 Whole materialized S3/Azure/GCS reads, S3/Azure copies, Azure snapshot creation and
 payload-rewriting metadata operations have an explicit 64 MiB local limit.
 Metadata-only HEAD/admission and bounded ranges can inspect larger objects.
@@ -124,6 +144,19 @@ resource bounds. See [large-upload qualification](large-upload-qualification.md)
 That separate workflow runs the selected four-provider 1 GiB scope when the
 qualification harness changes and on manual dispatch; routine CI retains the
 functional, native-auth and raw Rust results and validates exact references.
+
+The separate **Downstream storage qualification** workflow builds the selected
+Sqrzl source into a local Linux container without publishing it. It runs the
+unchanged Midge `9bee951c78a0cd9743c7dfc004ae2e3013b52219` S3, Azure, GCS XML
+and GCS JSON workloads on independent runners: 3,600 seconds, original client
+ramps and resource limits, the 60-second no-progress watchdog and 4,500-second
+outer deadline, final flush, exact verification and empty-cache recovery.
+It runs when its workflow changes and on manual dispatch; provider contract
+tests or a shorter smoke run cannot replace this downstream gate. Source IDs,
+image identity, logs and original workload reports are retained in artifacts.
+An upstream emulator cost fix and a downstream engine scheduling fix are
+separate claims; [Sqrzl #75](https://github.com/sqrzl/sqrzl-emulator/issues/75)
+and [Midge #894](https://github.com/cntryl/midge/issues/894) record that boundary.
 
 ## Ownership and durability
 

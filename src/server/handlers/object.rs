@@ -766,7 +766,20 @@ fn validate_content_md5(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Option<Response<Body>> {
-    let supplied = req.header("content-md5")?;
+    if !req.headers.contains_key("content-md5") {
+        return None;
+    }
+    let Some(supplied) = req
+        .header("content-md5")
+        .filter(|_| req.headers.get_all("content-md5").iter().count() == 1)
+    else {
+        return Some(xml_error_response(
+            StatusCode::BAD_REQUEST,
+            "InvalidDigest",
+            "Content-MD5 must occur once and contain an ASCII digest.",
+            req_id,
+        ));
+    };
     let Ok(decoded) = BASE64.decode(supplied) else {
         return Some(xml_error_response(
             StatusCode::BAD_REQUEST,
@@ -896,6 +909,10 @@ fn upload_multipart_part(
     };
     if upload.key != key {
         return upload_key_mismatch_response(req_id);
+    }
+
+    if let Some(response) = validate_content_md5(req, req_id) {
+        return response;
     }
 
     match tokio::task::block_in_place(|| match &req.spooled_body {

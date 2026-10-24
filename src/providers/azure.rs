@@ -668,7 +668,26 @@ impl AzureBlobAdapter {
             xml.push_str(&crate::utils::headers::format_last_modified_at(
                 &blob.last_modified,
             ));
-            xml.push_str("</Last-Modified></Properties></Blob>");
+            xml.push_str("</Last-Modified></Properties>");
+            if req
+                .query_param("include")
+                .is_some_and(|include| include.split(',').any(|value| value.trim() == "metadata"))
+            {
+                xml.push_str("<Metadata>");
+                let mut metadata = blob
+                    .metadata
+                    .iter()
+                    .filter(|(key, _)| !key.starts_with("__sqrzl_"))
+                    .collect::<Vec<_>>();
+                metadata.sort_unstable_by_key(|(key, _)| *key);
+                for (key, value) in metadata {
+                    write!(&mut xml, "<{key}>").unwrap();
+                    push_escaped_xml(&mut xml, value);
+                    write!(&mut xml, "</{key}>").unwrap();
+                }
+                xml.push_str("</Metadata>");
+            }
+            xml.push_str("</Blob>");
         }
 
         xml.push_str("</Blobs><NextMarker>");
@@ -2551,6 +2570,9 @@ impl AzureBlobAdapter {
         container: &str,
     ) -> Result<Response<Body>, String> {
         if req.query_param("comp") == Some("list") {
+            if let Some(response) = Self::validate_list_includes(req) {
+                return Ok(response);
+            }
             let max_results = match Self::max_results(req) {
                 Ok(value) => value,
                 Err(response) => return Ok(response),
@@ -2564,6 +2586,12 @@ impl AzureBlobAdapter {
                 .get(max_results)
                 .map(|entry| entry.name().to_string());
             entries.truncate(max_results);
+            if req.query_param("include").is_some() && entries.iter().any(|entry| {
+                matches!(entry, AzureListEntry::Blob(blob) if blob.metadata.keys().any(|key| !Self::metadata_xml_name(key)))
+            }) {
+                return Ok(Self::error_response(StatusCode::NOT_IMPLEMENTED, "FeatureNotSupported",
+                    "Stored metadata names cannot be represented by the Azure metadata contract."));
+            }
             return Ok(Self::xml_response(
                 StatusCode::OK,
                 Self::list_blobs_xml(req, container, &entries, next_marker.as_deref()),
@@ -2584,6 +2612,48 @@ impl AzureBlobAdapter {
             }
         }
         Ok(response.empty())
+    }
+
+    fn validate_list_includes(req: &Request) -> Option<Response<Body>> {
+        let include = req.query_param("include")?;
+        let mut unsupported = false;
+        for value in include.split(',').map(str::trim) {
+            match value {
+                "metadata" => {}
+                "snapshots"
+                | "versions"
+                | "deleted"
+                | "deletedwithversions"
+                | "tags"
+                | "uncommittedblobs"
+                | "copy"
+                | "immutabilitypolicy"
+                | "legalhold"
+                | "permissions" => unsupported = true,
+                _ => {
+                    return Some(Self::error_response(
+                        StatusCode::BAD_REQUEST,
+                        "InvalidQueryParameterValue",
+                        "The include parameter contains an invalid dataset.",
+                    ))
+                }
+            }
+        }
+        unsupported.then(|| {
+            Self::error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "FeatureNotSupported",
+                "Only the metadata dataset is implemented by this Azure listing surface.",
+            )
+        })
+    }
+
+    fn metadata_xml_name(name: &str) -> bool {
+        let mut bytes = name.bytes();
+        bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+            && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
     }
 
     fn azure_list_entries(
