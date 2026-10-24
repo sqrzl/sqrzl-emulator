@@ -153,22 +153,6 @@ That separate workflow runs the selected four-provider 1 GiB scope when the
 qualification harness changes and on manual dispatch; routine CI retains the
 functional, native-auth and raw Rust results and validates exact references.
 
-The separate **Downstream storage qualification** workflow builds the selected
-Sqrzl source into a local Linux container without publishing it. It runs the
-unchanged Midge `9bee951c78a0cd9743c7dfc004ae2e3013b52219` S3, Azure, GCS XML
-and GCS JSON workloads on independent runners: 3,600 seconds, original client
-ramps and resource limits, the 60-second no-progress watchdog and 4,500-second
-outer deadline, final flush, exact verification and empty-cache recovery.
-It runs when its workflow changes and on manual dispatch; provider contract
-tests or a shorter smoke run cannot replace this downstream gate. Source IDs,
-image identity, logs and original workload reports are retained in artifacts.
-An upstream emulator cost fix and a downstream engine scheduling fix are
-separate claims; [Sqrzl #75](https://github.com/sqrzl/sqrzl-emulator/issues/75)
-and [Midge #894](https://github.com/cntryl/midge/issues/894) record that boundary.
-That pinned Midge consumer uses Azure `2025-01-05`. Its engine recovery result
-does not establish Midge recovery under `2026-10-06`; the explicit newer-version
-SDK gate covers the emulator's storage-service restart contract separately.
-
 ## Ownership and durability
 
 Production startup claims an exclusive cooperative filesystem writer lock before

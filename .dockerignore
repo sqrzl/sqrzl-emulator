@@ -44,7 +44,6 @@ temp/
 # Non-build project files
 docs/
 tests/
-downstream-midge/
 sdk-tests/
 askr-bug.md
 docker-compose.override.yml
