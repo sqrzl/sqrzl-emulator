@@ -1440,7 +1440,8 @@
             "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
             "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
             "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart",
-            "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object"
+            "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
           ]
         },
         "acceptance_gates": {
@@ -1983,7 +1984,8 @@
             "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
             "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
-            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow"
+            "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
           ]
         },
         "acceptance_gates": {
@@ -2061,7 +2063,8 @@
           "sdk": [
             "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
-            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
           ]
         },
         "acceptance_gates": {
@@ -5799,7 +5802,8 @@
             "providers::gcs::tests::should_retain_resumable_session_after_x_goog_hash_crc32c_mismatch"
           ],
           "sdk": [
-            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_native_hmac_signed_url_contract",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers"
           ]
         },
         "acceptance_gates": {
