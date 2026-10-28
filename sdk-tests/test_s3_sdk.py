@@ -141,7 +141,7 @@ def test_s3_multipart_checksum_receipt_faults(sqrzl_server, mode):
     client.delete_bucket(Bucket=bucket)
 
 
-@pytest.mark.parametrize("shape", ["wrong-root", "duplicate-etag", "nested-checksum", "nonconsecutive"])
+@pytest.mark.parametrize("shape", ["wrong-root", "duplicate-etag", "nested-checksum", "nonconsecutive", "escaped-etag"])
 def test_s3_checksum_manifest_structure(sqrzl_server, shape):
     sqrzl_server.require_provider("s3")
     client = _client(sqrzl_server)
@@ -152,6 +152,10 @@ def test_s3_checksum_manifest_structure(sqrzl_server, shape):
     number = 2 if shape == "nonconsecutive" else 1
     part = client.upload_part(**args, PartNumber=number, Body=b"part")
     fields = f'<PartNumber>{number}</PartNumber><ETag>{part["ETag"]}</ETag>'
+    if shape == "escaped-etag":
+        fields = fields.replace('"', '&quot;')
+        escaped_crc = part["ChecksumCRC32C"].replace('=', '&#61;')
+        fields += f"<ChecksumCRC32C>{escaped_crc}</ChecksumCRC32C>"
     root = "WrongRoot" if shape == "wrong-root" else "CompleteMultipartUpload"
     if shape == "duplicate-etag":
         fields += f'<ETag>{part["ETag"]}</ETag>'
@@ -163,6 +167,13 @@ def test_s3_checksum_manifest_structure(sqrzl_server, shape):
         params["body"] = xml
 
     client.meta.events.register("before-call.s3.CompleteMultipartUpload", replace_body)
+    if shape == "escaped-etag":
+        result = client.complete_multipart_upload(**args, MultipartUpload={"Parts": [dict(PartNumber=number, ETag=part["ETag"])]})
+        assert result["ChecksumCRC32C"] == part["ChecksumCRC32C"]
+        assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"part"
+        client.delete_object(Bucket=bucket, Key="key")
+        client.delete_bucket(Bucket=bucket)
+        return
     with pytest.raises(botocore_exceptions.ClientError) as bad:
         client.complete_multipart_upload(**args, MultipartUpload={"Parts": [dict(PartNumber=number, ETag=part["ETag"])]})
     assert bad.value.response["Error"]["Code"] == ("InvalidPartOrder" if shape == "nonconsecutive" else "MalformedXML")

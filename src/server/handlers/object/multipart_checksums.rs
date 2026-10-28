@@ -249,6 +249,19 @@ fn validate_manifest(
                     return Err(malformed());
                 }
             }
+            Ok(Event::GeneralRef(value)) if path.len() == 3 => {
+                let reference = value.decode().map_err(|_| malformed())?;
+                let encoded = format!("&{reference};");
+                let decoded = quick_xml::escape::unescape(&encoded).map_err(|_| malformed())?;
+                if path.last().is_some_and(|name| name == b"ChecksumCRC32C") {
+                    checksum.push_str(&decoded);
+                }
+            }
+            Ok(Event::CData(value)) if path.len() == 3 => {
+                if path.last().is_some_and(|name| name == b"ChecksumCRC32C") {
+                    checksum.push_str(&value.decode().map_err(|_| malformed())?);
+                }
+            }
             Ok(Event::End(tag)) => {
                 if path.pop().as_deref() != Some(tag.local_name().as_ref()) {
                     return Err(malformed());

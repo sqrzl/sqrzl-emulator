@@ -19,28 +19,39 @@ pub fn parse_complete_multipart_upload_xml(body: &str) -> Result<Vec<(u32, Strin
     reader.config_mut().trim_text(true);
     let mut parts = Vec::new();
     let mut current_tag = None;
+    let mut text = String::new();
     let mut part_number = None;
     let mut etag = None;
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(event)) => current_tag = Some(event.name().as_ref().to_vec()),
+            Ok(Event::Start(event)) => {
+                current_tag = Some(event.name().as_ref().to_vec());
+                text.clear();
+            }
             Ok(Event::Text(event)) => {
                 let decoded = event.decode().map_err(|error| error.to_string())?;
-                let value = unescape(&decoded).map_err(|error| error.to_string())?;
+                text.push_str(&unescape(&decoded).map_err(|error| error.to_string())?);
+            }
+            Ok(Event::CData(event)) => {
+                text.push_str(&event.decode().map_err(|error| error.to_string())?);
+            }
+            Ok(Event::GeneralRef(event)) => {
+                let reference = event.decode().map_err(|error| error.to_string())?;
+                let encoded = format!("&{reference};");
+                text.push_str(&unescape(&encoded).map_err(|error| error.to_string())?);
+            }
+            Ok(Event::End(event)) => {
                 match current_tag.as_deref() {
                     Some(b"PartNumber") => {
                         part_number = Some(
-                            value
-                                .parse::<u32>()
+                            text.parse::<u32>()
                                 .map_err(|_| "Invalid PartNumber".to_string())?,
                         );
                     }
-                    Some(b"ETag") => etag = Some(value.trim_matches('"').to_string()),
+                    Some(b"ETag") => etag = Some(text.trim_matches('"').to_string()),
                     _ => {}
                 }
-            }
-            Ok(Event::End(event)) => {
                 if event.name().as_ref() == b"Part" {
                     parts.push((
                         part_number
@@ -50,6 +61,7 @@ pub fn parse_complete_multipart_upload_xml(body: &str) -> Result<Vec<(u32, Strin
                     ));
                 }
                 current_tag = None;
+                text.clear();
             }
             Ok(Event::Eof) => break,
             Err(error) => return Err(format!("XML parse error: {error}")),

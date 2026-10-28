@@ -4996,6 +4996,35 @@
           "negative"
         ]
       }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[escaped-etag]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "positive"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Accept XML entity references in quoted ETags and Base64 checksum text.",
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "positive"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive"
+        ]
+      }
     }
   }
 }

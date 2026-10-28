@@ -9434,7 +9434,8 @@
             "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[wrong-root]",
             "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[duplicate-etag]",
             "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nested-checksum]",
-            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nonconsecutive]"
+            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nonconsecutive]",
+            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[escaped-etag]"
           ]
         },
         "acceptance_gates": {

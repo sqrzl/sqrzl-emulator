@@ -178,6 +178,22 @@
           ]
         }
       ]
+    },
+    {
+      "lane": "issue79-escaped-xml-red",
+      "binary_sha256": "4ba317af72b7ca79604ded1114a5eb3a7bfb23c03a25362e4cf75fb5d80f81fa",
+      "binary_source_verified": false,
+      "test_source_commit": "34c6b4e4fc52d1a08dcb02d06e5a407d258ce2ea",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[escaped-etag]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E           botocore.exceptions.ClientError: An error occurred (MalformedXML) when calling the CompleteMultipartUpload operation: Invalid completion manifest schema."
+          ]
+        }
+      ]
     }
   ]
 }
