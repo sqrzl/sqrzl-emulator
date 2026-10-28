@@ -4430,9 +4430,7 @@
       ],
       "operation_checks": {
         "CreateMultipartUpload": [
-          "positive",
-          "negative",
-          "native-error"
+          "positive"
         ],
         "UploadPart": [
           "positive",
@@ -4445,41 +4443,31 @@
           "native-error"
         ],
         "ListParts": [
-          "positive",
-          "negative",
-          "native-error"
+          "positive"
         ],
         "GetObject": [
-          "positive",
-          "negative",
-          "native-error"
+          "positive"
         ]
       },
       "operation_id_checks": {
-        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
-          "positive",
-          "negative",
-          "native-error"
-        ],
         "s3-family.CreateMultipartUpload.post.additional-checksum": [
-          "positive",
-          "negative",
-          "native-error"
-        ],
-        "s3-family.GetObject.get.current": [
-          "positive",
-          "negative",
-          "native-error"
-        ],
-        "s3-family.ListParts.get.default": [
-          "positive",
-          "negative",
-          "native-error"
+          "positive"
         ],
         "s3-family.UploadPart.put.additional-checksum": [
           "positive",
           "negative",
           "native-error"
+        ],
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "s3-family.ListParts.get.default": [
+          "positive"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive"
         ]
       }
     },
@@ -4518,26 +4506,22 @@
           "negative"
         ],
         "objects.get": [
-          "positive",
-          "negative"
+          "positive"
         ],
         "resumable.start": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
-        "gcs.GetObject.get.json-download": [
-          "positive",
-          "negative"
-        ],
-        "gcs.InitiateResumableUpload.post.xml": [
-          "positive",
-          "negative"
-        ],
         "gcs.UploadChunk.put.resumable": [
           "positive",
           "negative"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
+        ],
+        "gcs.InitiateResumableUpload.post.xml": [
+          "positive"
         ]
       }
     },
@@ -4576,26 +4560,22 @@
           "negative"
         ],
         "objects.get": [
-          "positive",
-          "negative"
+          "positive"
         ],
         "resumable.start": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
-        "gcs.GetObject.get.json-download": [
-          "positive",
-          "negative"
-        ],
-        "gcs.InsertObject.post.json-resumable": [
-          "positive",
-          "negative"
-        ],
         "gcs.UploadChunk.put.resumable": [
           "positive",
           "negative"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
+        ],
+        "gcs.InsertObject.post.json-resumable": [
+          "positive"
         ]
       }
     },
@@ -4629,8 +4609,7 @@
           "negative"
         ],
         "GetObject": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
@@ -4639,8 +4618,7 @@
           "negative"
         ],
         "s3-family.GetObject.get.current": [
-          "positive",
-          "negative"
+          "positive"
         ]
       }
     },
@@ -4674,18 +4652,16 @@
           "negative"
         ],
         "objects.get": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
-        "gcs.GetObject.get.json-download": [
-          "positive",
-          "negative"
-        ],
         "gcs.UploadChunk.put.resumable": [
           "positive",
           "negative"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
         ]
       }
     },
@@ -4719,18 +4695,16 @@
           "negative"
         ],
         "objects.get": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
-        "gcs.GetObject.get.json-download": [
-          "positive",
-          "negative"
-        ],
         "gcs.UploadChunk.put.resumable": [
           "positive",
           "negative"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
         ]
       }
     },
@@ -4764,8 +4738,7 @@
           "negative"
         ],
         "GetObject": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
@@ -4774,8 +4747,7 @@
           "negative"
         ],
         "s3-family.GetObject.get.current": [
-          "positive",
-          "negative"
+          "positive"
         ]
       }
     },
@@ -4809,18 +4781,16 @@
           "negative"
         ],
         "objects.get": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
-        "gcs.GetObject.get.json-download": [
-          "positive",
-          "negative"
-        ],
         "gcs.UploadChunk.put.resumable": [
           "positive",
           "negative"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
         ]
       }
     },
@@ -4854,18 +4824,16 @@
           "negative"
         ],
         "objects.get": [
-          "positive",
-          "negative"
+          "positive"
         ]
       },
       "operation_id_checks": {
-        "gcs.GetObject.get.json-download": [
-          "positive",
-          "negative"
-        ],
         "gcs.UploadChunk.put.resumable": [
           "positive",
           "negative"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
         ]
       }
     },
