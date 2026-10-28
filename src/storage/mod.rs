@@ -37,6 +37,14 @@ pub enum ObjectCondition {
     MetadataNot { key: String, value: String },
 }
 
+/// Validation and publication predicates for a multipart completion.
+#[derive(Debug, Clone, Default)]
+pub struct MultipartCompletion {
+    pub crc32c: Option<u32>,
+    pub size: Option<u64>,
+    pub condition: Option<ObjectCondition>,
+}
+
 /// Bucket metadata and lifecycle-independent bucket operations.
 pub trait BucketStore: Send + Sync {
     ///
@@ -325,10 +333,34 @@ pub trait MultipartStore: Send + Sync {
         }
         self.complete_multipart_upload(bucket, upload_id)
     }
+    /// Completes selected parts after validating bytes and the publication predicate.
     ///
     /// # Errors
     ///
-    /// Returns an error when the underlying emulator operation fails.
+    /// Returns an error for invalid integrity, size, or conditional publication.
+    fn complete_multipart_upload_checked(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+        completion: &MultipartCompletion,
+    ) -> Result<String> {
+        if completion.crc32c.is_some()
+            || completion.size.is_some()
+            || completion.condition.is_some()
+        {
+            return Err(Error::InvalidRequest(
+                "Checked multipart completion is unsupported by this backend".to_string(),
+            ));
+        }
+        self.complete_multipart_upload_with_parts(bucket, upload_id, parts)
+    }
+
+    /// Aborts an unfinished upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the upload cannot be removed.
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()>;
     /// Stores a part with its bytes read from `payload_path` (a file already
     /// fully written to disk) rather than passed in memory as `Vec<u8>`.
@@ -821,10 +853,24 @@ pub trait Storage: Send + Sync {
         upload_id: &str,
         parts: &[(u32, String)],
     ) -> Result<String>;
+    /// Completes selected parts after validating bytes and the publication predicate.
     ///
     /// # Errors
     ///
-    /// Returns an error when the underlying emulator operation fails.
+    /// Returns an error for invalid integrity, size, or conditional publication.
+    fn complete_multipart_upload_checked(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+        completion: &MultipartCompletion,
+    ) -> Result<String>;
+
+    /// Aborts an unfinished upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the upload cannot be removed.
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()>;
     /// See [`MultipartStore::upload_part_streamed`].
     ///
@@ -1251,6 +1297,23 @@ where
         MultipartStore::complete_multipart_upload_with_parts(self, bucket, upload_id, parts)
     }
 
+    /// Completes selected parts after validating bytes and the publication predicate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid integrity, size, or conditional publication.
+    fn complete_multipart_upload_checked(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+        completion: &MultipartCompletion,
+    ) -> Result<String> {
+        MultipartStore::complete_multipart_upload_checked(
+            self, bucket, upload_id, parts, completion,
+        )
+    }
+
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {
         MultipartStore::abort_multipart_upload(self, bucket, upload_id)
     }
@@ -1647,6 +1710,21 @@ impl MultipartStore for dyn Storage + '_ {
         parts: &[(u32, String)],
     ) -> Result<String> {
         Storage::complete_multipart_upload_with_parts(self, bucket, upload_id, parts)
+    }
+
+    /// Completes selected parts after validating bytes and the publication predicate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid integrity, size, or conditional publication.
+    fn complete_multipart_upload_checked(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+        completion: &MultipartCompletion,
+    ) -> Result<String> {
+        Storage::complete_multipart_upload_checked(self, bucket, upload_id, parts, completion)
     }
 
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {

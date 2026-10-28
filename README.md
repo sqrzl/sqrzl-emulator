@@ -292,7 +292,12 @@ python -m pytest sdk-tests/test_large_upload_qualification.py
 Set `SQRZL_LARGE_UPLOAD_BYTES` to a smaller byte count for a quick harness
 smoke. Keep it above 64 MiB to exercise multipart behavior on every provider.
 
-S3 direct PUT accepts the selected additional checksum algorithms. Plain S3
+S3 direct PUT accepts the selected additional checksum algorithms. Checksum-aware
+multipart supports explicit `CRC32C` / `FULL_OBJECT` initiation, validated part
+and completion receipts, and atomic conditional completion. Other multipart
+checksum algorithms, composite profiles, checksum copy and trailers remain
+explicit `501` boundaries. See [streaming checksum qualification](docs/checksum-streaming-qualification.md)
+for provider specification links and reproducible authenticated tests. Plain S3
 multipart uploads require boto3's `request_checksum_calculation="when_required"`
 configuration; the SDK-default CRC32 UploadPart variant is explicitly rejected.
 Whole materialized S3/Azure reads, copies and selected payload-rewriting Azure
@@ -347,6 +352,7 @@ Tests can request one deterministic adverse response with
 | `timeout-before-commit` | Delays before dispatch. |
 | `timeout-after-commit` | Dispatches first, then delays the response. |
 | `response-loss-after-commit` | Commits a mutation, then closes with an intentionally incomplete response. |
+| `checksum-receipt-missing`, `checksum-receipt-corrupt` | After a successful mutation, removes or changes CRC32C response receipts without changing stored bytes or metadata, for pinned-readback fallback tests. |
 | `truncate-response` | Returns half the body while retaining the original declared length. |
 | `repeated-pagination-token`, `malformed-pagination-token` | Rewrites the provider continuation token deterministically. |
 

@@ -800,13 +800,18 @@ pub fn list_parts_xml(result: &ListPartsXml<'_>) -> String {
     <PartNumber>{}</PartNumber>
     <LastModified>{}</LastModified>
     <ETag>"{}"</ETag>
-    <Size>{}</Size>
-  </Part>"#,
+    <Size>{}</Size>"#,
             part.part_number,
             modified,
             escape_xml(&part.etag),
             part.size
         );
+        if let Some(crc) = part.crc32c {
+            use base64::Engine as _;
+            let checksum = base64::engine::general_purpose::STANDARD.encode(crc.to_be_bytes());
+            let _ = write!(xml, "\n    <ChecksumCRC32C>{checksum}</ChecksumCRC32C>");
+        }
+        xml.push_str("\n  </Part>");
     }
 
     xml.push_str("\n</ListPartsResult>");

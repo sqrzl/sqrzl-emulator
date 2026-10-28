@@ -22,6 +22,8 @@ mod consistency_tests;
 mod crash_tests;
 mod io;
 #[cfg(test)]
+mod multipart_tests;
+#[cfg(test)]
 mod protection_tests;
 mod publication;
 
@@ -1557,12 +1559,27 @@ impl MultipartStore for FilesystemStorage {
         self.complete_multipart_upload_with_parts(bucket, upload_id, &parts)
     }
 
-    #[allow(clippy::too_many_lines)]
     fn complete_multipart_upload_with_parts(
         &self,
         bucket: &str,
         upload_id: &str,
         manifest: &[(u32, String)],
+    ) -> Result<String> {
+        self.complete_multipart_upload_checked(
+            bucket,
+            upload_id,
+            manifest,
+            &super::MultipartCompletion::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn complete_multipart_upload_checked(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        manifest: &[(u32, String)],
+        completion: &super::MultipartCompletion,
     ) -> Result<String> {
         if !self.bucket_exists(bucket)? {
             return Err(Error::BucketNotFound);
@@ -1627,6 +1644,15 @@ impl MultipartStore for FilesystemStorage {
             return Err(Error::EntityTooLarge);
         }
 
+        if completion
+            .size
+            .is_some_and(|expected| expected != total_size)
+        {
+            return Err(Error::InvalidRequest(
+                "Multipart object size does not match the selected parts".to_string(),
+            ));
+        }
+
         // Compute final ETag: MD5(concat(part_etags)) + "-" + part_count
         let mut etag_hash = md5::Context::new();
         for part in &parts {
@@ -1647,6 +1673,7 @@ impl MultipartStore for FilesystemStorage {
             fs::create_dir_all(parent)
                 .map_err(|e| Error::InternalError(format!("Failed to create spool dir: {e}")))?;
         }
+        let mut crc32c = 0;
         let assemble_result = (|| -> Result<()> {
             let mut dest = fs::File::create(&spool_path)
                 .map_err(|e| Error::InternalError(format!("Failed to create spool file: {e}")))?;
@@ -1654,8 +1681,30 @@ impl MultipartStore for FilesystemStorage {
                 let part_path = self.part_path(bucket, upload_id, part.part_number);
                 let mut src = fs::File::open(&part_path)
                     .map_err(|e| Error::InternalError(format!("Failed to open part: {e}")))?;
-                std::io::copy(&mut src, &mut dest)
-                    .map_err(|e| Error::InternalError(format!("Failed to append part: {e}")))?;
+                let mut part_crc = 0;
+                let mut part_size = 0u64;
+                let mut buffer = vec![0u8; 64 * 1024];
+                loop {
+                    let read = src
+                        .read(&mut buffer)
+                        .map_err(|e| Error::InternalError(format!("Failed to read part: {e}")))?;
+                    if read == 0 {
+                        break;
+                    }
+                    std::io::Write::write_all(&mut dest, &buffer[..read])
+                        .map_err(|e| Error::InternalError(format!("Failed to append part: {e}")))?;
+                    part_size += read as u64;
+                    part_crc = crc32c::crc32c_append(part_crc, &buffer[..read]);
+                    crc32c = crc32c::crc32c_append(crc32c, &buffer[..read]);
+                }
+                if part_size != part.size
+                    || part.crc32c.is_some_and(|expected| expected != part_crc)
+                {
+                    return Err(Error::BadDigest);
+                }
+            }
+            if completion.crc32c.is_some_and(|expected| expected != crc32c) {
+                return Err(Error::BadDigest);
             }
             dest.sync_all()
                 .map_err(|e| Error::InternalError(format!("Failed to sync spool file: {e}")))?;
@@ -1699,7 +1748,30 @@ impl MultipartStore for FilesystemStorage {
         {
             obj.tags = tags;
         }
-        let put_result = self.put_object_streamed(bucket, key, obj, &spool_path);
+        if provider_metadata
+            .get("s3_checksum_algorithm")
+            .is_some_and(|v| v == "CRC32C")
+        {
+            use base64::Engine as _;
+            obj.provider_metadata.insert(
+                "s3_checksum_crc32c".to_string(),
+                base64::engine::general_purpose::STANDARD.encode(crc32c.to_be_bytes()),
+            );
+            obj.provider_metadata
+                .insert("s3_checksum_type".to_string(), "FULL_OBJECT".to_string());
+        }
+        let put_result = if let Some(condition) = &completion.condition {
+            self.put_object_streamed_if(bucket, key, obj, &spool_path, condition)
+                .and_then(|written| {
+                    if written {
+                        Ok(())
+                    } else {
+                        Err(Error::PreconditionFailed)
+                    }
+                })
+        } else {
+            self.put_object_streamed(bucket, key, obj, &spool_path)
+        };
         if spool_path.exists() {
             let _ = fs::remove_file(&spool_path);
         }

@@ -5,6 +5,8 @@ use http_body_util::BodyExt;
 use hyper::Response;
 use std::time::Duration;
 
+mod checksum;
+
 pub(super) const HEADER: &str = "x-sqrzl-failpoint";
 
 pub(super) enum Before {
@@ -70,6 +72,14 @@ pub(super) async fn after(
         return Ok(response);
     };
     let committed_mutation = is_mutation(req.method()) && response.status().is_success();
+    if committed_mutation
+        && matches!(
+            name,
+            "checksum-receipt-missing" | "checksum-receipt-corrupt"
+        )
+    {
+        return checksum::rewrite(response, name).await;
+    }
     if name == "timeout-after-commit" && committed_mutation {
         tokio::time::sleep(delay(req)).await;
         return Ok(response);

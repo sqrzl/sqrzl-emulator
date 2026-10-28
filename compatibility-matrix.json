@@ -90,7 +90,7 @@
           "services::object::tests::should_roundtrip_object_through_service",
           "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
           "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-          "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+          "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
           "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
           "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
           "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files",
@@ -101,10 +101,11 @@
           "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
           "sdk-tests/test_s3_sdk.py::test_s3_presigned_multipart_parts_with_authentication",
           "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
-          "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
+          "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes",
+          "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract"
         ],
         "limitations": [
-          "Core multipart create, upload, paginated listing, selected-part completion, abort, UploadPartCopy, and SigV4-presigned UploadPart flows are supported. Conditional completion headers and Object Lock parameters on multipart initiation remain outside the certified subset."
+          "Core multipart operations and CRC32C / FULL_OBJECT initiation, part receipts, checksum manifests, size validation, and atomic If-Match or If-None-Match: * completion are supported. Composite checksums, other multipart checksum algorithms, checksum trailers, checksum UploadPartCopy, and multipart Object Lock remain explicit unsupported boundaries. Plain multipart still requires opting out of SDK-default CRC32 part checksums."
         ]
       },
       "versioning": {
@@ -634,10 +635,13 @@
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
+          "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
+          "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]"
         ],
         "limitations": [
-          "JSON and XML resumable sessions persist across restart, accept repeated 256 KiB-aligned non-final chunks and status probes, combine CRC32C incrementally, compose on disk, expire after seven days, and enforce the 5 TiB object ceiling. Initiation supports object name, contentType, string metadata, and GOOG4 HMAC signed URLs; unsupported writable metadata fields such as cacheControl return 501 instead of being silently ignored."
+          "JSON and XML resumable sessions persist across restart, accept repeated 256 KiB-aligned non-final chunks and status probes, combine CRC32C incrementally, compose on disk, expire after seven days, and enforce the 5 TiB object ceiling. Initiation supports object name, contentType, string metadata, and GOOG4 HMAC signed URLs; unsupported writable metadata fields such as cacheControl return 501 instead of being silently ignored.",
+          "New session URIs expose one upload_id query identity and retain the local UUID path; the returned URI is opaque and existing path-only sessions remain valid. XML completions return empty bodies with ETag, generation, and x-goog-hash CRC32C; JSON completions return object metadata with crc32c."
         ]
       },
       "json_api_breadth": {
@@ -1449,7 +1453,10 @@
             "sdk-tests/test_s3_sdk.py::test_s3_upload_part_copy_workflow",
             "sdk-tests/test_storage_acceptance.py::test_s3_object_pages_conditions_and_process_restart",
             "sdk-tests/test_storage_auth_acceptance.py::test_s3_native_signature_error_preserves_object",
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes",
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[missing]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[corrupt]"
           ]
         },
         "acceptance_gates": {
@@ -1787,7 +1794,7 @@
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
@@ -1821,24 +1828,25 @@
         "method": "POST",
         "path": "/{bucket}/{key}?uploads",
         "variant": "additional-checksum",
-        "support_tier": "unsupported",
-        "boundary": "Explicit additional-checksum initiation receives native501; no session.",
+        "support_tier": "partial",
+        "boundary": "CRC32C / FULL_OBJECT checksum-aware multipart profile is supported with server-calculated persisted receipts; other multipart checksum algorithms, composite profiles, copy and trailers remain native 501 boundaries. Rejected digests and invalid manifests preserve staged parts and current objects.",
         "evidence_candidates": {
           "rust": [
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract"
           ]
         },
         "acceptance_gates": {
-          "positive": "not-applicable",
+          "positive": "pending",
           "negative": "pending",
           "boundary": "not-applicable",
           "condition": "not-applicable",
@@ -1865,7 +1873,7 @@
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files",
@@ -1901,24 +1909,26 @@
         "method": "PUT",
         "path": "/{bucket}/{key}?uploadId={id}&partNumber={n}",
         "variant": "additional-checksum",
-        "support_tier": "unsupported",
-        "boundary": "Additional-checksum multipart parts receive native501.",
+        "support_tier": "partial",
+        "boundary": "CRC32C / FULL_OBJECT checksum-aware multipart profile is supported with server-calculated persisted receipts; other multipart checksum algorithms, composite profiles, copy and trailers remain native 501 boundaries. Rejected digests and invalid manifests preserve staged parts and current objects.",
         "evidence_candidates": {
           "rust": [
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_part_sdk_algorithm_header_contract"
           ]
         },
         "acceptance_gates": {
-          "positive": "not-applicable",
+          "positive": "pending",
           "negative": "pending",
           "boundary": "not-applicable",
           "condition": "not-applicable",
@@ -1945,7 +1955,7 @@
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
@@ -1976,13 +1986,13 @@
         "path": "/{bucket}/{key}?uploadId={id}",
         "variant": "ordered-parts",
         "support_tier": "partial",
-        "boundary": "Minimum part-size and identity validation before consuming upload.",
+        "boundary": "Selected-part size and identity validation precedes publication. If-Match and If-None-Match: * are evaluated atomically at publication; failure returns 412 PreconditionFailed without consuming the upload.",
         "evidence_candidates": {
           "rust": [
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
@@ -2024,7 +2034,7 @@
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
@@ -2063,7 +2073,7 @@
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
@@ -2072,7 +2082,8 @@
             "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
             "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes"
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes",
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract"
           ]
         },
         "acceptance_gates": {
@@ -2103,7 +2114,7 @@
             "services::object::tests::should_roundtrip_object_through_service",
             "interop_s3::should_assemble_completed_object_given_uploaded_parts_when_finishing_s3_multipart_upload",
             "interop_s3::should_return_entity_too_small_without_consuming_s3_multipart_upload",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
             "server::handlers::object::s3_contract_tests::should_store_source_bytes_for_upload_part_copy",
             "storage::filesystem::tests::should_assemble_multipart_object_from_disk_without_leftover_spool_files"
@@ -6498,7 +6509,7 @@
         "path": "/upload/storage/v1/b/{bucket}/o?uploadType=resumable",
         "variant": "json-resumable",
         "support_tier": "partial",
-        "boundary": "Durable session with typed metadata and object limit.",
+        "boundary": "Durable session with typed metadata and object limit. New locations contain one nonempty upload_id; each returned session URI is an opaque upload capability.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access",
@@ -6515,7 +6526,8 @@
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
-            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]"
           ]
         },
         "acceptance_gates": {
@@ -6557,7 +6569,13 @@
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
-            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]"
           ]
         },
         "acceptance_gates": {
@@ -8728,7 +8746,7 @@
         "path": "/{bucket}/{object}",
         "variant": "xml",
         "support_tier": "partial",
-        "boundary": "x-goog-resumable:start initiates a durable local session; selected native HMAC authorization and upload framing.",
+        "boundary": "x-goog-resumable:start initiates a durable local session; selected native HMAC authorization and upload framing. New locations contain one nonempty upload_id; each returned session URI is an opaque upload capability.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_support_gcs_resumable_uploads_and_signed_access",
@@ -8743,7 +8761,9 @@
             "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
             "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -9132,7 +9152,13 @@
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
-            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]"
           ]
         },
         "acceptance_gates": {
@@ -9394,18 +9420,25 @@
         "method": "POST",
         "path": "/{bucket}/{key}?uploadId={id}",
         "variant": "additional-checksum",
-        "support_tier": "unsupported",
-        "boundary": "Additional-checksum fields in the completion manifest receive native501 NotImplemented before consuming the upload or replacing the object; selected SDK verifies uploaded parts remain available.",
+        "support_tier": "partial",
+        "boundary": "CRC32C / FULL_OBJECT checksum-aware multipart profile is supported with server-calculated persisted receipts; other multipart checksum algorithms, composite profiles, copy and trailers remain native 501 boundaries. Rejected digests and invalid manifests preserve staged parts and current objects.",
         "evidence_candidates": {
           "rust": [
-            "server::handlers::object::s3_contract_tests::should_explicitly_reject_s3_multipart_checksums_without_mutating_uploads"
+            "server::handlers::object::s3_contract_tests::should_explicitly_reject_unsupported_s3_multipart_checksum_variants_without_mutating_uploads"
           ],
           "sdk": [
-            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary"
+            "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[missing]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[corrupt]",
+            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[wrong-root]",
+            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[duplicate-etag]",
+            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nested-checksum]",
+            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nonconsecutive]"
           ]
         },
         "acceptance_gates": {
-          "positive": "not-applicable",
+          "positive": "pending",
           "negative": "pending",
           "boundary": "not-applicable",
           "condition": "not-applicable",

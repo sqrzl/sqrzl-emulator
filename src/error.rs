@@ -47,6 +47,12 @@ pub enum Error {
     #[error("Incomplete multipart upload")]
     IncompleteMultipartUpload,
 
+    #[error("The checksum does not match the uploaded bytes")]
+    BadDigest,
+
+    #[error("The publication precondition failed")]
+    PreconditionFailed,
+
     #[error("No such version")]
     NoSuchVersion,
 
@@ -75,6 +81,7 @@ impl Error {
     #[must_use]
     pub fn status_code(&self) -> http::StatusCode {
         match self {
+            Error::PreconditionFailed => http::StatusCode::PRECONDITION_FAILED,
             Error::CaptureTooLarge => http::StatusCode::PAYLOAD_TOO_LARGE,
             Error::BucketAlreadyExists | Error::BucketNotEmpty => http::StatusCode::CONFLICT,
             Error::BucketNotFound
@@ -85,7 +92,8 @@ impl Error {
             | Error::NoSuchVersion
             | Error::NoSuchLifecycleConfiguration
             | Error::MessageNotFound => http::StatusCode::NOT_FOUND,
-            Error::InvalidRequest(_)
+            Error::BadDigest
+            | Error::InvalidRequest(_)
             | Error::InvalidPartNumber
             | Error::InvalidPartOrder
             | Error::EntityTooSmall
@@ -101,6 +109,8 @@ impl Error {
     #[must_use]
     pub fn error_code(&self) -> &'static str {
         match self {
+            Error::BadDigest => "BadDigest",
+            Error::PreconditionFailed => "PreconditionFailed",
             Error::CaptureTooLarge => "RequestEntityTooLarge",
             Error::BucketAlreadyExists => "BucketAlreadyExists",
             Error::BucketNotFound => "NoSuchBucket",

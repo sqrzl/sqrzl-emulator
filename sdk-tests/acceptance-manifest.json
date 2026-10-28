@@ -4387,6 +4387,647 @@
           "native-auth"
         ]
       }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract": {
+      "provider": "s3",
+      "operations": [
+        "CreateMultipartUpload",
+        "UploadPart",
+        "CompleteMultipartUpload",
+        "ListParts",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "CRC32C FULL_OBJECT multipart checksum validation, size, manifest, conditional completion and independent readback.",
+      "operation_id_aliases": {
+        "CreateMultipartUpload": [
+          "s3-family.CreateMultipartUpload.post.additional-checksum"
+        ],
+        "UploadPart": [
+          "s3-family.UploadPart.put.additional-checksum"
+        ],
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ],
+        "ListParts": [
+          "s3-family.ListParts.get.default"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum",
+        "s3-family.CreateMultipartUpload.post.additional-checksum",
+        "s3-family.GetObject.get.current",
+        "s3-family.ListParts.get.default",
+        "s3-family.UploadPart.put.additional-checksum"
+      ],
+      "operation_checks": {
+        "CreateMultipartUpload": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "UploadPart": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "CompleteMultipartUpload": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "ListParts": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "GetObject": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "s3-family.CreateMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "s3-family.ListParts.get.default": [
+          "positive",
+          "negative",
+          "native-error"
+        ],
+        "s3-family.UploadPart.put.additional-checksum": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]": {
+      "provider": "gcs",
+      "operations": [
+        "resumable.start",
+        "resumable.upload",
+        "objects.get"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-hmac-init-and-session-capability",
+      "scope": "Distinct opaque upload_id sessions, interleaved prefixes, checksum rejection and exact readback.",
+      "operation_id_aliases": {
+        "resumable.upload": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-download"
+        ],
+        "resumable.start": [
+          "gcs.InitiateResumableUpload.post.xml"
+        ]
+      },
+      "operation_ids": [
+        "gcs.GetObject.get.json-download",
+        "gcs.InitiateResumableUpload.post.xml",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_checks": {
+        "resumable.upload": [
+          "positive",
+          "negative"
+        ],
+        "objects.get": [
+          "positive",
+          "negative"
+        ],
+        "resumable.start": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.GetObject.get.json-download": [
+          "positive",
+          "negative"
+        ],
+        "gcs.InitiateResumableUpload.post.xml": [
+          "positive",
+          "negative"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]": {
+      "provider": "gcs",
+      "operations": [
+        "resumable.start",
+        "resumable.upload",
+        "objects.get"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "local-bearer-or-anonymous-convenience",
+      "scope": "Distinct opaque upload_id sessions, interleaved prefixes, checksum rejection and exact readback.",
+      "operation_id_aliases": {
+        "resumable.upload": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-download"
+        ],
+        "resumable.start": [
+          "gcs.InsertObject.post.json-resumable"
+        ]
+      },
+      "operation_ids": [
+        "gcs.GetObject.get.json-download",
+        "gcs.InsertObject.post.json-resumable",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_checks": {
+        "resumable.upload": [
+          "positive",
+          "negative"
+        ],
+        "objects.get": [
+          "positive",
+          "negative"
+        ],
+        "resumable.start": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.GetObject.get.json-download": [
+          "positive",
+          "negative"
+        ],
+        "gcs.InsertObject.post.json-resumable": [
+          "positive",
+          "negative"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[missing]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Explicit checksum receipt response faults leave persisted bytes intact for identity-pinned readback.",
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum",
+        "s3-family.GetObject.get.current"
+      ],
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "positive",
+          "negative"
+        ],
+        "GetObject": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]": {
+      "provider": "gcs",
+      "operations": [
+        "resumable.upload",
+        "objects.get"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-hmac-init-and-session-capability",
+      "scope": "Explicit checksum receipt response faults leave persisted bytes intact for generation-pinned readback.",
+      "operation_id_aliases": {
+        "resumable.upload": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-download"
+        ]
+      },
+      "operation_ids": [
+        "gcs.GetObject.get.json-download",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_checks": {
+        "resumable.upload": [
+          "positive",
+          "negative"
+        ],
+        "objects.get": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.GetObject.get.json-download": [
+          "positive",
+          "negative"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]": {
+      "provider": "gcs",
+      "operations": [
+        "resumable.upload",
+        "objects.get"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "local-bearer-or-anonymous-convenience",
+      "scope": "Explicit checksum receipt response faults leave persisted bytes intact for generation-pinned readback.",
+      "operation_id_aliases": {
+        "resumable.upload": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-download"
+        ]
+      },
+      "operation_ids": [
+        "gcs.GetObject.get.json-download",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_checks": {
+        "resumable.upload": [
+          "positive",
+          "negative"
+        ],
+        "objects.get": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.GetObject.get.json-download": [
+          "positive",
+          "negative"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[corrupt]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Explicit checksum receipt response faults leave persisted bytes intact for identity-pinned readback.",
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ],
+        "GetObject": [
+          "s3-family.GetObject.get.current"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum",
+        "s3-family.GetObject.get.current"
+      ],
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "positive",
+          "negative"
+        ],
+        "GetObject": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative"
+        ],
+        "s3-family.GetObject.get.current": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]": {
+      "provider": "gcs",
+      "operations": [
+        "resumable.upload",
+        "objects.get"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-hmac-init-and-session-capability",
+      "scope": "Explicit checksum receipt response faults leave persisted bytes intact for generation-pinned readback.",
+      "operation_id_aliases": {
+        "resumable.upload": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-download"
+        ]
+      },
+      "operation_ids": [
+        "gcs.GetObject.get.json-download",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_checks": {
+        "resumable.upload": [
+          "positive",
+          "negative"
+        ],
+        "objects.get": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.GetObject.get.json-download": [
+          "positive",
+          "negative"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]": {
+      "provider": "gcs",
+      "operations": [
+        "resumable.upload",
+        "objects.get"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "local-bearer-or-anonymous-convenience",
+      "scope": "Explicit checksum receipt response faults leave persisted bytes intact for generation-pinned readback.",
+      "operation_id_aliases": {
+        "resumable.upload": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "objects.get": [
+          "gcs.GetObject.get.json-download"
+        ]
+      },
+      "operation_ids": [
+        "gcs.GetObject.get.json-download",
+        "gcs.UploadChunk.put.resumable"
+      ],
+      "operation_checks": {
+        "resumable.upload": [
+          "positive",
+          "negative"
+        ],
+        "objects.get": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.GetObject.get.json-download": [
+          "positive",
+          "negative"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[wrong-root]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Reject schema-invalid checksum completion manifests without publishing or consuming parts.",
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[duplicate-etag]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Reject schema-invalid checksum completion manifests without publishing or consuming parts.",
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nested-checksum]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Reject schema-invalid checksum completion manifests without publishing or consuming parts.",
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nonconsecutive]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "CRC32C part numbering starts at one and is consecutive per AWS CompletedPart.",
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_crc32c_part_sdk_algorithm_header_contract": {
+      "provider": "s3",
+      "operations": [
+        "UploadPart"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "AWS SDK algorithm requires a corresponding checksum; explicit individual checksum overrides the SDK selector.",
+      "operation_ids": [
+        "s3-family.UploadPart.put.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "UploadPart": [
+          "s3-family.UploadPart.put.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "UploadPart": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.UploadPart.put.additional-checksum": [
+          "positive",
+          "negative"
+        ]
+      }
     }
   }
 }

@@ -2055,7 +2055,13 @@ mod tests {
                 )
                 .unwrap();
             let location = stage_cancellable_upload(&storage, json_origin).await;
-            let session_id = location.rsplit('/').next().unwrap();
+            let session_id = location
+                .split('?')
+                .next()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
             assert!(state::load_json::<ResumableSession>(
                 storage.as_ref(),
                 GCS_RESUMABLE_SESSION_STATE,
@@ -2123,7 +2129,13 @@ mod tests {
         let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
         storage.create_bucket("cancel".to_string()).unwrap();
         let location = stage_cancellable_upload(&storage, true).await;
-        let session_id = location.rsplit('/').next().unwrap();
+        let session_id = location
+            .split('?')
+            .next()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap();
         let mut legacy: serde_json::Value = serde_json::from_slice(
             &storage
                 .get_provider_state(GCS_RESUMABLE_SESSION_STATE, session_id)
@@ -2195,7 +2207,13 @@ mod tests {
                 )
                 .unwrap();
             let location = stage_cancellable_upload(&storage, false).await;
-            let session_id = location.rsplit('/').next().unwrap();
+            let session_id = location
+                .split('?')
+                .next()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
             let session = state::load_json::<ResumableSession>(
                 storage.as_ref(),
                 GCS_RESUMABLE_SESSION_STATE,
@@ -2279,7 +2297,13 @@ mod tests {
             let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
             storage.create_bucket("cancel".to_string()).unwrap();
             let location = stage_cancellable_upload(&storage, false).await;
-            let session_id = location.rsplit('/').next().unwrap();
+            let session_id = location
+                .split('?')
+                .next()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
             let session = state::load_json::<ResumableSession>(
                 storage.as_ref(),
                 GCS_RESUMABLE_SESSION_STATE,
@@ -2343,7 +2367,13 @@ mod tests {
             let storage: Arc<dyn Storage> = Arc::new(FilesystemStorage::new(&base));
             storage.create_bucket("cancel".to_string()).unwrap();
             let location = stage_cancellable_upload(&storage, false).await;
-            let session_id = location.rsplit('/').next().unwrap();
+            let session_id = location
+                .split('?')
+                .next()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap();
             let adapter = GcsAdapter::new();
             let request = parsed_request("DELETE", &location, &[], b"").await;
             assert_eq!(
@@ -6228,6 +6258,9 @@ mod tests {
             .expect("session location should exist")
             .to_string();
         let session_id = location
+            .split('?')
+            .next()
+            .unwrap()
             .rsplit('/')
             .next()
             .expect("session id should exist")
@@ -6909,7 +6942,10 @@ impl GcsAdapter {
             .lock()
             .map_err(|_| "Failed to lock resumable sessions".to_string())?
             .insert(session_id.clone(), session);
-        let location = format!("{}/upload/resumable/{session_id}", request_origin(req));
+        let location = format!(
+            "{}/upload/resumable/{session_id}?upload_id={session_id}",
+            request_origin(req)
+        );
         Ok(Self::response(StatusCode::CREATED)
             .header("location", &location)
             .empty())
@@ -7174,6 +7210,28 @@ impl GcsAdapter {
         }
 
         if parts.starts_with(&["upload", "resumable"]) && parts.len() == 3 {
+            // Keep legacy path sessions usable; newly issued locations also carry
+            // the provider's documented upload_id identity. Never select a
+            // different upload via a conflicting or duplicated query identity.
+            let identities = req
+                .uri
+                .query()
+                .unwrap_or_default()
+                .split('&')
+                .map(|pair| pair.split_once('=').unwrap_or((pair, "")))
+                .filter(|(name, _)| urlencoding::decode(name).is_ok_and(|name| name == "upload_id"))
+                .collect::<Vec<_>>();
+            if identities.len() > 1
+                || identities
+                    .first()
+                    .is_some_and(|(_, id)| !urlencoding::decode(id).is_ok_and(|id| id == parts[2]))
+            {
+                return Ok(Self::json_upload_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    "The resumable upload identity is ambiguous.",
+                ));
+            }
             return self.complete_resumable_upload(storage, req, parts[2]);
         }
 
@@ -7254,6 +7312,24 @@ impl GcsAdapter {
                 "The uploaded object exceeds the 5 TiB Cloud Storage limit.",
             )
         }
+    }
+
+    fn resumable_checksum_error(error: UploadMetadataError, json: bool) -> Response<Body> {
+        if json {
+            return Self::upload_metadata_error_response(error);
+        }
+        let (status, code, message) = match error {
+            UploadMetadataError::ChecksumMismatch(message) => {
+                (StatusCode::BAD_REQUEST, "BadDigest", message)
+            }
+            UploadMetadataError::Invalid(message) => {
+                (StatusCode::BAD_REQUEST, "InvalidHash", message)
+            }
+            UploadMetadataError::Unsupported(message) => {
+                (StatusCode::NOT_IMPLEMENTED, "NotImplemented", message)
+            }
+        };
+        Self::error_response(status, code, &message)
     }
 
     fn upload_metadata_error_response(error: UploadMetadataError) -> Response<Body> {
@@ -7574,7 +7650,10 @@ impl GcsAdapter {
             .lock()
             .map_err(|_| "Failed to lock resumable sessions".to_string())?
             .insert(session_id.clone(), session);
-        let upload_location = format!("{}/upload/resumable/{}", request_origin(req), session_id);
+        let upload_location = format!(
+            "{}/upload/resumable/{session_id}?upload_id={session_id}",
+            request_origin(req)
+        );
         Ok(Self::response(StatusCode::OK)
             .header("location", &upload_location)
             .empty())
@@ -7739,19 +7818,30 @@ impl GcsAdapter {
 
         let header_crc32c = match Self::request_crc32c(req) {
             Ok(expected) => expected,
-            Err(error) => return Ok(Self::upload_metadata_error_response(error)),
+            Err(error) => {
+                return Ok(Self::resumable_checksum_error(
+                    error,
+                    session.initiated_via_json != Some(false),
+                ))
+            }
         };
         let expected_crc32c = match Self::combined_crc32c(session.crc32c, header_crc32c) {
             Ok(expected) => expected,
-            Err(error) => return Ok(Self::upload_metadata_error_response(error)),
+            Err(error) => {
+                return Ok(Self::resumable_checksum_error(
+                    error,
+                    session.initiated_via_json != Some(false),
+                ))
+            }
         };
         if expected_crc32c.is_some_and(|expected| expected != session.calculated_crc32c) {
-            return Ok(Self::upload_metadata_error_response(
+            return Ok(Self::resumable_checksum_error(
                 UploadMetadataError::ChecksumMismatch(format!(
                     "Provided CRC32C \"{}\" does not match calculated CRC32C \"{}\"",
                     BASE64.encode(expected_crc32c.unwrap_or_default().to_be_bytes()),
                     BASE64.encode(session.calculated_crc32c.to_be_bytes())
                 )),
+                session.initiated_via_json != Some(false),
             ));
         }
         if Self::foreign_data_protection_active(storage, &session.bucket) {
@@ -7829,6 +7919,24 @@ impl GcsAdapter {
             &stored,
         ));
         self.remove_resumable_session(storage, session_id)?;
+        let checksum = format!(
+            "crc32c={}",
+            BASE64.encode(session.calculated_crc32c.to_be_bytes())
+        );
+        if session.initiated_via_json == Some(false) {
+            return Ok(Self::response(StatusCode::OK)
+                .header("etag", &format!("\"{}\"", stored.etag))
+                .header(
+                    "x-goog-generation",
+                    &Self::generation_from_metadata(&stored.metadata),
+                )
+                .header(
+                    "x-goog-metageneration",
+                    &Self::metageneration_from_metadata(&stored.metadata),
+                )
+                .header("x-goog-hash", &checksum)
+                .empty());
+        }
         Ok(Self::gcs_object_json_response(StatusCode::OK, &stored))
     }
 
