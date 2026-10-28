@@ -5025,6 +5025,492 @@
           "positive"
         ]
       }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[nonascii-part]": {
+      "provider": "s3",
+      "operations": [
+        "UploadPart"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.UploadPart.put.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "UploadPart": [
+          "s3-family.UploadPart.put.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "UploadPart": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.UploadPart.put.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[nonascii-complete]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[duplicate-part]": {
+      "provider": "s3",
+      "operations": [
+        "UploadPart"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.UploadPart.put.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "UploadPart": [
+          "s3-family.UploadPart.put.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "UploadPart": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.UploadPart.put.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[duplicate-complete]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-if-none-match]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-if-match]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-x-amz-mp-object-size]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-x-amz-checksum-type]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-if-none-match]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-if-match]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-x-amz-mp-object-size]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-x-amz-checksum-type]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_requires_read_permission": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "positive",
+          "negative"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_missing_current_version[missing]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_missing_current_version[deleted]": {
+      "provider": "s3",
+      "operations": [
+        "CompleteMultipartUpload"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Adversarial multipart header admission, authorization, and missing-current-version regressions; rejected requests retain staged parts and existing object authority.",
+      "operation_ids": [
+        "s3-family.CompleteMultipartUpload.post.additional-checksum"
+      ],
+      "operation_id_aliases": {
+        "CompleteMultipartUpload": [
+          "s3-family.CompleteMultipartUpload.post.additional-checksum"
+        ]
+      },
+      "operation_checks": {
+        "CompleteMultipartUpload": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.CompleteMultipartUpload.post.additional-checksum": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      }
     }
   }
 }

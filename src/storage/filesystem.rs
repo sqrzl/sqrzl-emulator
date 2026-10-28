@@ -1760,18 +1760,26 @@ impl MultipartStore for FilesystemStorage {
             obj.provider_metadata
                 .insert("s3_checksum_type".to_string(), "FULL_OBJECT".to_string());
         }
-        let put_result = if let Some(condition) = &completion.condition {
-            self.put_object_streamed_if(bucket, key, obj, &spool_path, condition)
-                .and_then(|written| {
-                    if written {
-                        Ok(())
-                    } else {
-                        Err(Error::PreconditionFailed)
-                    }
-                })
-        } else {
-            self.put_object_streamed(bucket, key, obj, &spool_path)
-        };
+        let put_result = (|| {
+            let object_lock = self.object_lock(bucket, &key)?;
+            let _guard = object_lock.lock().map_err(|_| {
+                Error::InternalError("Failed to lock multipart publication".to_string())
+            })?;
+            if completion.require_existing {
+                self.read_object_metadata_locked(bucket, &key)?;
+            }
+            if let Some(condition) = &completion.condition {
+                if !self.object_condition_matches(bucket, &key, condition)? {
+                    return Err(Error::PreconditionFailed);
+                }
+            }
+            self.put_object_locked_with_payload(
+                bucket,
+                &key,
+                obj,
+                ObjectPayload::Spooled(&spool_path),
+            )
+        })();
         if spool_path.exists() {
             let _ = fs::remove_file(&spool_path);
         }

@@ -1924,7 +1924,9 @@
           "sdk": [
             "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
             "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
-            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_part_sdk_algorithm_header_contract"
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_part_sdk_algorithm_header_contract",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[nonascii-part]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[duplicate-part]"
           ]
         },
         "acceptance_gates": {
@@ -9435,7 +9437,20 @@
             "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[duplicate-etag]",
             "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nested-checksum]",
             "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nonconsecutive]",
-            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[escaped-etag]"
+            "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[escaped-etag]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[nonascii-complete]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[duplicate-complete]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-if-none-match]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-if-match]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-x-amz-mp-object-size]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-x-amz-checksum-type]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-if-none-match]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-if-match]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-x-amz-mp-object-size]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-x-amz-checksum-type]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_requires_read_permission",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_missing_current_version[missing]",
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_missing_current_version[deleted]"
           ]
         },
         "acceptance_gates": {

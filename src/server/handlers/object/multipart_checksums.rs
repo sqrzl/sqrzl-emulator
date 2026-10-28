@@ -29,7 +29,44 @@ fn allowed(req: &Request, names: &[&str]) -> bool {
             .is_some_and(|v| v.starts_with("STREAMING-"))
 }
 
+fn validate_headers(req: &Request, req_id: &str) -> Option<Response<Body>> {
+    for name in req.headers.keys() {
+        let name = name.as_str();
+        let checksum = name.starts_with("x-amz-checksum-");
+        if !checksum
+            && !matches!(
+                name,
+                "x-amz-sdk-checksum-algorithm"
+                    | "x-amz-mp-object-size"
+                    | "if-match"
+                    | "if-none-match"
+            )
+        {
+            continue;
+        }
+        let values = req.headers.get_all(name);
+        if values.iter().count() != 1 || values.iter().any(|value| value.to_str().is_err()) {
+            let code = if checksum
+                && !matches!(name, "x-amz-checksum-algorithm" | "x-amz-checksum-type")
+            {
+                "InvalidDigest"
+            } else {
+                "InvalidRequest"
+            };
+            return Some(*error(
+                code,
+                "Multipart integrity and publication headers must contain one ASCII value.",
+                req_id,
+            ));
+        }
+    }
+    None
+}
+
 pub(super) fn initiate(req: &Request, req_id: &str) -> Result<bool, Box<Response<Body>>> {
+    if let Some(response) = validate_headers(req, req_id) {
+        return Err(Box::new(response));
+    }
     if !checksums::requested(req) {
         return Ok(false);
     }
@@ -47,6 +84,9 @@ pub(super) fn validate_part(
     upload: &MultipartUpload,
     req_id: &str,
 ) -> Option<Response<Body>> {
+    if let Some(response) = validate_headers(req, req_id) {
+        return Some(response);
+    }
     if !enabled(upload) {
         return checksums::requested(req).then(|| checksums::unsupported(req_id));
     }
@@ -122,6 +162,9 @@ pub(super) fn completion(
     manifest: &[(u32, String)],
     req_id: &str,
 ) -> Result<MultipartCompletion, Box<Response<Body>>> {
+    if let Some(response) = validate_headers(req, req_id) {
+        return Err(Box::new(response));
+    }
     let enabled = enabled(upload);
     if !allowed(req, &["x-amz-checksum-crc32c", "x-amz-checksum-type"])
         || (!enabled
@@ -195,6 +238,7 @@ pub(super) fn completion(
         crc32c,
         size,
         condition: super::helpers::mutation_condition(req),
+        require_existing: req.headers.contains_key("if-match"),
     })
 }
 

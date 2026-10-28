@@ -79,6 +79,7 @@ fn should_publish_one_checked_multipart_winner_given_concurrent_create_only_comp
                         crc32c: Some(crc32c::crc32c(payload)),
                         size: Some(payload.len() as u64),
                         condition: Some(ObjectCondition::Missing),
+                        ..MultipartCompletion::default()
                     },
                 );
                 (result, payload)

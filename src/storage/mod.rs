@@ -43,6 +43,8 @@ pub struct MultipartCompletion {
     pub crc32c: Option<u32>,
     pub size: Option<u64>,
     pub condition: Option<ObjectCondition>,
+    /// Return `KeyNotFound` when the current object is absent, under the publication lock.
+    pub require_existing: bool,
 }
 
 /// Bucket metadata and lifecycle-independent bucket operations.
@@ -348,6 +350,7 @@ pub trait MultipartStore: Send + Sync {
         if completion.crc32c.is_some()
             || completion.size.is_some()
             || completion.condition.is_some()
+            || completion.require_existing
         {
             return Err(Error::InvalidRequest(
                 "Checked multipart completion is unsupported by this backend".to_string(),

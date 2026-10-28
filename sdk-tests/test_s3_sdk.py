@@ -216,6 +216,132 @@ def test_s3_crc32c_part_sdk_algorithm_header_contract(sqrzl_server):
     client.delete_bucket(Bucket=bucket)
 
 
+def _raw_presigned_s3(client, operation, args, payload, headers):
+    import http.client
+    from urllib.parse import urlsplit
+
+    url = urlsplit(client.generate_presigned_url(operation, Params=args))
+    connection = http.client.HTTPConnection(url.hostname, url.port, timeout=30)
+    try:
+        connection.putrequest("PUT" if operation == "upload_part" else "POST", url.path + "?" + url.query)
+        connection.putheader("content-length", str(len(payload)))
+        for name, value in headers:
+            connection.putheader(name, value)
+        connection.endheaders(payload)
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("operation", ["part", "complete"])
+@pytest.mark.parametrize("malformation", ["nonascii", "duplicate"])
+def test_s3_multipart_rejects_malformed_digest_headers(sqrzl_server, operation, malformation):
+    from xml.etree import ElementTree
+
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-malformed-digest")
+    client.create_bucket(Bucket=bucket)
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"acknowledged")
+    payload = b"replacement" if operation == "part" else f'<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{part["ETag"]}</ETag></Part></CompleteMultipartUpload>'.encode()
+    values = [b"\x80"] if malformation == "nonascii" else [part["ChecksumCRC32C"], "AAAAAA=="]
+    status, body = _raw_presigned_s3(client, "upload_part" if operation == "part" else "complete_multipart_upload", {**args, **({"PartNumber": 1} if operation == "part" else {})}, payload, [("x-amz-checksum-crc32c", value) for value in values])
+    expected = (403, "SignatureDoesNotMatch") if malformation == "duplicate" and sqrzl_server.enforce_auth else (400, "InvalidDigest")
+    assert (status, ElementTree.fromstring(body).findtext("Code")) == expected, body
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    with pytest.raises(botocore_exceptions.ClientError) as missing:
+        client.head_object(Bucket=bucket, Key="key")
+    assert missing.value.response["ResponseMetadata"]["HTTPStatusCode"] == 404
+    client.abort_multipart_upload(**args)
+    client.delete_bucket(Bucket=bucket)
+
+
+@pytest.mark.parametrize("header", ["if-none-match", "if-match", "x-amz-mp-object-size", "x-amz-checksum-type"])
+@pytest.mark.parametrize("malformation", ["nonascii", "duplicate"])
+def test_s3_multipart_rejects_malformed_publication_headers(sqrzl_server, header, malformation):
+    from xml.etree import ElementTree
+
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-malformed-condition")
+    client.create_bucket(Bucket=bucket)
+    original = client.put_object(Bucket=bucket, Key="key", Body=b"original")
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"replacement")
+    payload = f'<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{part["ETag"]}</ETag></Part></CompleteMultipartUpload>'.encode()
+    valid = {"if-none-match": "*", "if-match": original["ETag"], "x-amz-mp-object-size": "11", "x-amz-checksum-type": "FULL_OBJECT"}[header]
+    values = [b"\x80"] if malformation == "nonascii" else [valid, valid]
+    status, body = _raw_presigned_s3(client, "complete_multipart_upload", args, payload, [(header, value) for value in values])
+    expected = (403, "SignatureDoesNotMatch") if malformation == "duplicate" and header.startswith("x-amz-") and sqrzl_server.enforce_auth else (400, "InvalidRequest")
+    assert (status, ElementTree.fromstring(body).findtext("Code")) == expected, body
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"original"
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    client.abort_multipart_upload(**args)
+    client.delete_object(Bucket=bucket, Key="key")
+    client.delete_bucket(Bucket=bucket)
+
+
+def test_s3_multipart_if_match_requires_read_permission(sqrzl_server):
+    import json
+
+    sqrzl_server.require_provider("s3")
+    if not sqrzl_server.enforce_auth:
+        pytest.skip("read-permission denial requires the authenticated storage lane")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-match-read-auth")
+    client.create_bucket(Bucket=bucket)
+    original = client.put_object(Bucket=bucket, Key="key", Body=b"original")
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"replacement")
+    policy = {"Version": "2012-10-17", "Statement": [{"Effect": "Deny", "Principal": "*", "Action": "s3:GetObject", "Resource": f"arn:aws:s3:::{bucket}/*"}]}
+    client.put_bucket_policy(Bucket=bucket, Policy=json.dumps(policy))
+    with pytest.raises(botocore_exceptions.ClientError) as denied:
+        client.get_object(Bucket=bucket, Key="key")
+    assert denied.value.response["ResponseMetadata"]["HTTPStatusCode"] == 403
+    with pytest.raises(botocore_exceptions.ClientError) as denied:
+        client.complete_multipart_upload(**args, IfMatch=original["ETag"], MultipartUpload={"Parts": [dict(PartNumber=1, ETag=part["ETag"])]})
+    assert denied.value.response["ResponseMetadata"]["HTTPStatusCode"] == 403
+    client.delete_bucket_policy(Bucket=bucket)
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"original"
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    result = client.complete_multipart_upload(**args, IfMatch=original["ETag"], MultipartUpload={"Parts": [dict(PartNumber=1, ETag=part["ETag"])]})
+    assert result["ResponseMetadata"]["HTTPStatusCode"] == 200
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"replacement"
+    client.delete_object(Bucket=bucket, Key="key")
+    client.delete_bucket(Bucket=bucket)
+
+
+@pytest.mark.parametrize("state", ["missing", "deleted"])
+def test_s3_multipart_if_match_missing_current_version(sqrzl_server, state):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-match-missing")
+    client.create_bucket(Bucket=bucket)
+    client.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
+    if state == "deleted":
+        client.put_object(Bucket=bucket, Key="key", Body=b"original")
+        assert client.delete_object(Bucket=bucket, Key="key")["DeleteMarker"]
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"replacement")
+    manifest = {"Parts": [dict(PartNumber=1, ETag=part["ETag"])]}
+    with pytest.raises(botocore_exceptions.ClientError) as missing:
+        client.complete_multipart_upload(**args, IfMatch='"missing"', MultipartUpload=manifest)
+    assert missing.value.response["ResponseMetadata"]["HTTPStatusCode"] == 404
+    assert missing.value.response["Error"]["Code"] == "NoSuchKey"
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    # The same retained upload is valid for create-only publication over a delete marker.
+    client.complete_multipart_upload(**args, IfNoneMatch="*", MultipartUpload=manifest)
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"replacement"
+    _empty_versioned_bucket(client, bucket)
+    client.delete_bucket(Bucket=bucket)
+
+
 def _empty_versioned_bucket(client, bucket: str) -> None:
     versions = client.list_object_versions(Bucket=bucket)
     for version in versions.get("Versions", []):

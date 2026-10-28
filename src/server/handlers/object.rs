@@ -2657,6 +2657,19 @@ fn complete_multipart_upload_request(
         return response;
     }
 
+    if req.headers.contains_key("if-match") {
+        if let Err(response) = check_authorization(
+            req,
+            auth_config,
+            storage,
+            bucket,
+            Some(upload.key.as_str()),
+            "s3:GetObject",
+        ) {
+            return response;
+        }
+    }
+
     if s3_foreign_history_conflict(storage.as_ref(), bucket) {
         return s3_foreign_history_conflict_response(req_id);
     }
@@ -5565,7 +5578,7 @@ mod s3_contract_tests {
         .expect("conditional completion should respond");
 
         // Assert
-        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert!(storage
             .get_multipart_upload("bucket", &upload.upload_id)
             .is_ok());

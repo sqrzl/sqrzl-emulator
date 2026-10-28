@@ -18,6 +18,11 @@ The implementation follows these provider specifications, reviewed 2026-10-28:
   defines the checksum manifest, full-object receipt in XML, checksum-type
   mismatch (`BadDigest`), size mismatch (`InvalidRequest`), and conditional
   completion (`412 PreconditionFailed`).
+- AWS [conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)
+  requires both `s3:PutObject` and `s3:GetObject` for `If-Match`. A missing current
+  version or current delete marker returns `404`; a nonmatching existing ETag
+  returns `412`. Existence, the ETag predicate, and publication are evaluated
+  under one object lock.
 - AWS [CompletedPart](https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompletedPart.html)
   requires consecutive additional-checksum part numbers starting at one,
   with `400 InvalidPartOrder` for violations.
@@ -48,6 +53,12 @@ in completion manifests, full-object checksum/size validation, and atomic
 by the server. Completion receipts appear in XML; checksum-enabled GET/HEAD
 returns the stored full-object checksum. Assembly validates staged bytes before
 publication with a bounded buffer. A rejected completion retains its session.
+Present multipart integrity and publication headers must contain one ASCII
+value. Malformed or duplicated values fail before staging or publication;
+authenticated requests with duplicated `x-amz-*` headers can be rejected earlier
+by the SigV4 verifier. They are never interpreted as absent preconditions or
+absent caller digests. An `If-Match` read-authorization failure retains both the
+existing object and the upload, allowing completion after permissions are restored.
 
 Other multipart checksum algorithms, composite profiles, checksum copy, and
 streaming checksum trailers return explicit `501 NotImplemented`. Plain
