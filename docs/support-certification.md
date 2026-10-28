@@ -111,8 +111,12 @@ SQRZL_MAX_REQUEST_BYTES=134217728
 An oversized or incomplete body fails before publication. Multipart/resumable
 assembly uses disk-to-disk composition, so the completed object can exceed the
 per-request limit. S3 additional checksums are accepted for direct PUT and
-selected transactional control bodies; additional-checksum multipart/copy and
-checksum trailers are explicitly unsupported. The pinned boto3 default
+selected transactional control bodies. Multipart accepts the explicit CRC32C /
+FULL_OBJECT profile with validated part and full-object receipts and atomic
+conditional completion. Other multipart checksum algorithms, composite profiles,
+checksum copy and trailers remain explicitly unsupported; see
+[specification and qualification details](checksum-streaming-qualification.md).
+The pinned boto3 default
 UploadPart checksum must be opted out for the plain multipart subset. A default
 SDK request is tested separately from that opt-out workflow.
 

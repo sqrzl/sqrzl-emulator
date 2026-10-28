@@ -152,6 +152,114 @@ def _client(sqrzl_server):
     )
 
 
+@pytest.mark.parametrize("protocol", ["xml", "json"])
+def test_gcs_isolated_resumable_checksum_contract(sqrzl_server, protocol):
+    """Google resumable protocol: opaque sessions, 308 prefixes, hash receipts."""
+    from urllib.parse import urlsplit, parse_qs
+    import google_crc32c
+
+    sqrzl_server.require_provider("gcs")
+    client = _client(sqrzl_server)
+    bucket = client.bucket(sqrzl_server.bucket_name("sdk-gcs-session"))
+    bucket.create()
+    payloads = [b"g" * (5 * 1024 * 1024) + b"first tail", b"h" * (5 * 1024 * 1024) + b"second tail"]
+    checksum = lambda data: base64.b64encode(google_crc32c.value(data).to_bytes(4, "big")).decode()
+    native_client = gcs_storage.Client(project="sqrzl", credentials=google_auth.AnonymousCredentials(),
+                                       client_options={"api_endpoint": sqrzl_server.api_url})
+    sessions = []
+    for key, payload in zip(["first", "second"], payloads):
+        crc = checksum(payload)
+        blob = bucket.blob(key)
+        if protocol == "json":
+            response = client._http.post(
+                f"{sqrzl_server.api_url}/upload/storage/v1/b/{bucket.name}/o",
+                params={"uploadType": "resumable", "name": key},
+                json={"crc32c": crc}, timeout=60,
+            )
+        else:
+            response = _native_request(
+                native_client, blob, "POST",
+                HmacSigningCredentials(sqrzl_server.gcs_hmac_access_id, sqrzl_server.gcs_hmac_secret),
+                sqrzl_server.api_url, data=b"",
+                headers={"x-goog-resumable": "start", "content-type": "application/octet-stream"},
+            )
+        assert response.status_code == (200 if protocol == "json" else 201), response.text
+        location = response.headers["location"]
+        assert urlsplit(location).netloc == urlsplit(sqrzl_server.api_url).netloc
+        assert len(parse_qs(urlsplit(location).query).get("upload_id", [])) == 1
+        sessions.append(location)
+    assert sessions[0] != sessions[1]
+    identities = [parse_qs(urlsplit(location).query)["upload_id"][0] for location in sessions]
+    assert identities[0] != identities[1]
+    for malformed in [sessions[0].replace(identities[0], identities[1], 1), sessions[0] + f"&upload%5fid={identities[0]}"]:
+        rejected = native_client._http.put(malformed, data=b"", headers={"content-range": "bytes */*"}, timeout=60)
+        assert rejected.status_code == 400
+    # Session URIs authorize the upload; do not reconstruct or re-sign them.
+    for location, payload in zip(sessions, payloads):
+        response = native_client._http.put(location, data=payload[:256 * 1024],
+                                    headers={"content-range": f"bytes 0-{256 * 1024 - 1}/{len(payload)}"}, timeout=60)
+        assert response.status_code == 308
+        assert response.headers["range"] == f"bytes=0-{256 * 1024 - 1}"
+    assert list(client.list_blobs(bucket)) == []
+    # Incomplete prefixes survive a real child-process restart and remain isolated.
+    if sqrzl_server.runtime is not None:
+        sqrzl_server.restart(kill=True)
+    for location, key, payload in zip(sessions, ["first", "second"], payloads):
+        crc = checksum(payload)
+        probe = native_client._http.put(location, data=b"", headers={"content-range": f"bytes */{len(payload)}"}, timeout=60)
+        assert probe.status_code == 308
+        assert probe.headers["range"] == f"bytes=0-{256 * 1024 - 1}"
+        headers = {"content-range": f"bytes {256 * 1024}-{len(payload) - 1}/{len(payload)}", "x-goog-hash": "crc32c=AAAAAA=="}
+        rejected = native_client._http.put(location, data=payload[256 * 1024:], headers=headers, timeout=60)
+        assert rejected.status_code == 400
+        if protocol == "xml":
+            assert ElementTree.fromstring(rejected.content).findtext("Code") == "BadDigest"
+        assert not bucket.blob(key).exists()
+        headers["x-goog-hash"] = f"crc32c={crc}"
+        completed = native_client._http.put(location, data=payload[256 * 1024:], headers=headers, timeout=60)
+        assert completed.status_code in (200, 201), completed.text
+        if protocol == "json":
+            assert completed.json()["crc32c"] == crc
+        else:
+            assert f"crc32c={crc}" in completed.headers["x-goog-hash"]
+        blob = bucket.blob(key)
+        assert blob.download_as_bytes() == payload
+        blob.reload()
+        assert blob.crc32c == crc
+        blob.delete()
+    bucket.delete()
+
+
+@pytest.mark.parametrize("protocol", ["xml", "json"])
+@pytest.mark.parametrize("mode", ["missing", "corrupt"])
+def test_gcs_resumable_checksum_receipt_faults(sqrzl_server, protocol, mode):
+    import google_crc32c
+
+    sqrzl_server.require_provider("gcs")
+    client = _client(sqrzl_server)
+    bucket = client.bucket(sqrzl_server.bucket_name("sdk-gcs-receipt-fault"))
+    bucket.create()
+    payload = b"receipt proof must describe stored bytes"
+    crc = base64.b64encode(google_crc32c.value(payload).to_bytes(4, "big")).decode()
+    blob = bucket.blob("key")
+    if protocol == "json":
+        initiated = client._http.post(f"{sqrzl_server.api_url}/upload/storage/v1/b/{bucket.name}/o", params={"uploadType": "resumable", "name": "key"}, json={"crc32c": crc}, timeout=60)
+    else:
+        native = gcs_storage.Client(project="sqrzl", credentials=google_auth.AnonymousCredentials(), client_options={"api_endpoint": sqrzl_server.api_url})
+        initiated = _native_request(native, blob, "POST", HmacSigningCredentials(sqrzl_server.gcs_hmac_access_id, sqrzl_server.gcs_hmac_secret), sqrzl_server.api_url, data=b"", headers={"x-goog-resumable": "start"})
+    assert initiated.status_code in (200, 201), initiated.text
+    completed = client._http.put(initiated.headers["location"], data=payload, headers={"x-goog-hash": f"crc32c={crc}", "x-sqrzl-failpoint": f"checksum-receipt-{mode}"}, timeout=60)
+    assert completed.status_code in (200, 201), completed.text
+    assert completed.headers["x-sqrzl-failpoint-applied"] == f"checksum-receipt-{mode}"
+    receipt = completed.json().get("crc32c") if protocol == "json" else completed.headers.get("x-goog-hash")
+    assert receipt is None if mode == "missing" else crc not in receipt
+    blob.reload()
+    assert blob.crc32c == crc
+    assert blob.download_as_bytes(if_generation_match=blob.generation) == payload
+    blob.delete()
+    bucket.delete()
+
+
 def test_gcs_core_json_workflows(sqrzl_server):
     sqrzl_server.require_provider("gcs")
     client = _client(sqrzl_server)

@@ -900,10 +900,33 @@ impl FilesystemStorage {
             .get_mut(bucket)
             .ok_or_else(|| Error::InternalError("Missing uploads cache entry".to_string()))?;
         let upload = uploads.get_mut(upload_id).ok_or(Error::NoSuchUpload)?;
+        let crc32c = if upload
+            .provider_metadata
+            .get("s3_checksum_algorithm")
+            .is_some_and(|v| v == "CRC32C")
+        {
+            let mut source = fs::File::open(self.part_path(bucket, upload_id, part_number))
+                .map_err(|e| Error::InternalError(format!("Failed to read staged part: {e}")))?;
+            let mut crc = 0;
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let read = std::io::Read::read(&mut source, &mut buffer).map_err(|e| {
+                    Error::InternalError(format!("Failed to hash staged part: {e}"))
+                })?;
+                if read == 0 {
+                    break;
+                }
+                crc = crc32c::crc32c_append(crc, &buffer[..read]);
+            }
+            Some(crc)
+        } else {
+            None
+        };
         let part = crate::models::Part {
             part_number,
             etag: etag.clone(),
             size,
+            crc32c,
             last_modified: chrono::Utc::now(),
         };
         match upload

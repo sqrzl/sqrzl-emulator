@@ -22,6 +22,8 @@ pub struct Part {
     pub part_number: u32,
     pub etag: String,
     pub size: u64,
+    #[serde(default)]
+    pub crc32c: Option<u32>,
     pub last_modified: DateTime<Utc>,
 }
 

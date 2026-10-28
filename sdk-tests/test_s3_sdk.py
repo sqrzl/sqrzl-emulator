@@ -30,6 +30,318 @@ def _client(sqrzl_server, *, native_checksums=False):
     )
 
 
+def test_s3_crc32c_full_object_multipart_contract(sqrzl_server):
+    """AWS CompleteMultipartUpload: full CRC32C, selected parts, and atomic create."""
+    import google_crc32c
+
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-crc-multipart")
+    client.create_bucket(Bucket=bucket)
+    crc = lambda data: base64.b64encode(google_crc32c.value(data).to_bytes(4, "big")).decode()
+    payloads = [b"a" * (5 * 1024 * 1024), b"last part"]
+    upload = client.create_multipart_upload(
+        Bucket=bucket, Key="checked", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT"
+    )
+    args = dict(Bucket=bucket, Key="checked", UploadId=upload["UploadId"])
+    parts = []
+    for number, payload in enumerate(payloads, 1):
+        with pytest.raises(botocore_exceptions.ClientError) as bad:
+            client.upload_part(**args, PartNumber=number, Body=payload, ChecksumCRC32C="AAAAAA==")
+        assert bad.value.response["Error"]["Code"] == "BadDigest"
+        uploaded = client.upload_part(**args, PartNumber=number, Body=payload, ChecksumCRC32C=crc(payload))
+        assert uploaded["ChecksumCRC32C"] == crc(payload)
+        parts.append(dict(PartNumber=number, ETag=uploaded["ETag"], ChecksumCRC32C=crc(payload)))
+    listed = client.list_parts(**args)
+    assert [part["ChecksumCRC32C"] for part in listed["Parts"]] == [crc(p) for p in payloads]
+    # A rejected replacement must preserve its acknowledged checksum and bytes.
+    with pytest.raises(botocore_exceptions.ClientError) as bad:
+        client.upload_part(**args, PartNumber=1, Body=b"corrupt replacement", ChecksumCRC32C=crc(payloads[0]))
+    assert bad.value.response["Error"]["Code"] == "BadDigest"
+    if sqrzl_server.runtime is not None:
+        sqrzl_server.restart(kill=True)
+    assert [p["ChecksumCRC32C"] for p in client.list_parts(**args)["Parts"]] == [crc(p) for p in payloads]
+    body = b"".join(payloads)
+    for changes, code in [
+        ({"ChecksumCRC32C": "AAAAAA=="}, "BadDigest"),
+        ({"MpuObjectSize": len(body) + 1}, "InvalidRequest"),
+        ({"ChecksumType": "COMPOSITE"}, "BadDigest"),
+        ({"MultipartUpload": {"Parts": [{**parts[0], "ChecksumCRC32C": "AAAAAA=="}, parts[1]]}}, "InvalidPart"),
+    ]:
+        complete = dict(MultipartUpload={"Parts": parts}, ChecksumCRC32C=crc(body),
+                        ChecksumType="FULL_OBJECT", MpuObjectSize=len(body), IfNoneMatch="*")
+        complete.update(changes)
+        with pytest.raises(botocore_exceptions.ClientError) as bad:
+            client.complete_multipart_upload(**args, **complete)
+        assert bad.value.response["Error"]["Code"] == code
+        with pytest.raises(botocore_exceptions.ClientError) as missing:
+            client.head_object(Bucket=bucket, Key="checked")
+        assert missing.value.response["ResponseMetadata"]["HTTPStatusCode"] == 404
+    result = client.complete_multipart_upload(
+        **args, MultipartUpload={"Parts": parts}, ChecksumCRC32C=crc(body),
+        ChecksumType="FULL_OBJECT", MpuObjectSize=len(body), IfNoneMatch="*"
+    )
+    assert result["ChecksumCRC32C"] == crc(body)
+    assert result["ChecksumType"] == "FULL_OBJECT"
+    fetched = client.get_object(Bucket=bucket, Key="checked", ChecksumMode="ENABLED")
+    assert fetched["ChecksumCRC32C"] == crc(body)
+    assert fetched["ChecksumType"] == "FULL_OBJECT"
+    assert fetched["Body"].read() == body
+    # Competing completion cannot overwrite the first object's authority.
+    rival = client.create_multipart_upload(Bucket=bucket, Key="checked", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    rival_args = {**args, "UploadId": rival["UploadId"]}
+    rival_part = client.upload_part(**rival_args, PartNumber=1, Body=b"rival")
+    assert rival_part["ChecksumCRC32C"] == crc(b"rival")
+    for condition in ({"IfNoneMatch": "*"}, {"IfMatch": '"wrong"'}):
+        with pytest.raises(botocore_exceptions.ClientError) as conflict:
+            client.complete_multipart_upload(**rival_args, MultipartUpload={"Parts": [dict(PartNumber=1, ETag=rival_part["ETag"])]}, **condition)
+        assert conflict.value.response["ResponseMetadata"]["HTTPStatusCode"] == 412
+        assert conflict.value.response["Error"]["Code"] == "PreconditionFailed"
+    assert client.get_object(Bucket=bucket, Key="checked")["Body"].read() == body
+    client.abort_multipart_upload(**rival_args)
+    # Missing caller digests are computed server-side, not fabricated or treated as corrupt.
+    generated = client.create_multipart_upload(Bucket=bucket, Key="generated", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    generated_args = dict(Bucket=bucket, Key="generated", UploadId=generated["UploadId"])
+    generated_part = client.upload_part(**generated_args, PartNumber=1, Body=b"generated")
+    result = client.complete_multipart_upload(**generated_args, MultipartUpload={"Parts": [dict(PartNumber=1, ETag=generated_part["ETag"])]})
+    assert result["ChecksumCRC32C"] == crc(b"generated")
+    assert client.get_object(Bucket=bucket, Key="generated")["Body"].read() == b"generated"
+    client.delete_object(Bucket=bucket, Key="generated")
+    client.delete_object(Bucket=bucket, Key="checked")
+    client.delete_bucket(Bucket=bucket)
+
+
+@pytest.mark.parametrize("mode", ["missing", "corrupt"])
+def test_s3_multipart_checksum_receipt_faults(sqrzl_server, mode):
+    import google_crc32c
+
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-receipt-fault")
+    client.create_bucket(Bucket=bucket)
+    payload = b"receipt proof must describe stored bytes"
+    crc = base64.b64encode(google_crc32c.value(payload).to_bytes(4, "big")).decode()
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=payload, ChecksumCRC32C=crc)
+
+    def inject(request, **_):
+        request.headers["x-sqrzl-failpoint"] = f"checksum-receipt-{mode}"
+
+    client.meta.events.register("before-sign.s3.CompleteMultipartUpload", inject)
+    completed = client.complete_multipart_upload(**args, MultipartUpload={"Parts": [dict(PartNumber=1, ETag=part["ETag"], ChecksumCRC32C=crc)]}, ChecksumCRC32C=crc, ChecksumType="FULL_OBJECT")
+    assert completed["ResponseMetadata"]["HTTPHeaders"]["x-sqrzl-failpoint-applied"] == f"checksum-receipt-{mode}"
+    receipt = completed.get("ChecksumCRC32C")
+    assert receipt is None if mode == "missing" else receipt != crc
+    # An untrusted receipt is not proof. Independent readback still sees the real object.
+    fetched = client.get_object(Bucket=bucket, Key="key", IfMatch=completed["ETag"], ChecksumMode="ENABLED")
+    assert fetched["Body"].read() == payload
+    assert fetched["ChecksumCRC32C"] == crc
+    client.delete_object(Bucket=bucket, Key="key")
+    client.delete_bucket(Bucket=bucket)
+
+
+@pytest.mark.parametrize("shape", ["wrong-root", "duplicate-etag", "nested-checksum", "nonconsecutive", "escaped-etag"])
+def test_s3_checksum_manifest_structure(sqrzl_server, shape):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-manifest")
+    client.create_bucket(Bucket=bucket)
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    number = 2 if shape == "nonconsecutive" else 1
+    part = client.upload_part(**args, PartNumber=number, Body=b"part")
+    fields = f'<PartNumber>{number}</PartNumber><ETag>{part["ETag"]}</ETag>'
+    if shape == "escaped-etag":
+        fields = fields.replace('"', '&quot;')
+        escaped_crc = part["ChecksumCRC32C"].replace('=', '&#61;')
+        fields += f"<ChecksumCRC32C>{escaped_crc}</ChecksumCRC32C>"
+    root = "WrongRoot" if shape == "wrong-root" else "CompleteMultipartUpload"
+    if shape == "duplicate-etag":
+        fields += f'<ETag>{part["ETag"]}</ETag>'
+    if shape == "nested-checksum":
+        fields += f'<Unknown><ChecksumCRC32C>{part["ChecksumCRC32C"]}</ChecksumCRC32C></Unknown>'
+    xml = f"<{root}><Part>{fields}</Part></{root}>".encode()
+
+    def replace_body(params, **_):
+        params["body"] = xml
+
+    client.meta.events.register("before-call.s3.CompleteMultipartUpload", replace_body)
+    if shape == "escaped-etag":
+        result = client.complete_multipart_upload(**args, MultipartUpload={"Parts": [dict(PartNumber=number, ETag=part["ETag"])]})
+        assert result["ChecksumCRC32C"] == part["ChecksumCRC32C"]
+        assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"part"
+        client.delete_object(Bucket=bucket, Key="key")
+        client.delete_bucket(Bucket=bucket)
+        return
+    with pytest.raises(botocore_exceptions.ClientError) as bad:
+        client.complete_multipart_upload(**args, MultipartUpload={"Parts": [dict(PartNumber=number, ETag=part["ETag"])]})
+    assert bad.value.response["Error"]["Code"] == ("InvalidPartOrder" if shape == "nonconsecutive" else "MalformedXML")
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    with pytest.raises(botocore_exceptions.ClientError) as missing:
+        client.head_object(Bucket=bucket, Key="key")
+    assert missing.value.response["ResponseMetadata"]["HTTPStatusCode"] == 404
+    client.abort_multipart_upload(**args)
+    client.delete_bucket(Bucket=bucket)
+
+
+def test_s3_crc32c_part_sdk_algorithm_header_contract(sqrzl_server):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-sdk-digest")
+    client.create_bucket(Bucket=bucket)
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+
+    def inject(request, **_):
+        request.headers["x-amz-sdk-checksum-algorithm"] = "CRC32C"
+
+    client.meta.events.register("before-sign.s3.UploadPart", inject)
+    with pytest.raises(botocore_exceptions.ClientError) as bad:
+        client.upload_part(**args, PartNumber=1, Body=b"part")
+    assert bad.value.response["ResponseMetadata"]["HTTPStatusCode"] == 400
+    assert client.list_parts(**args).get("Parts", []) == []
+    # AWS ignores the SDK algorithm selector when the individual digest is provided.
+    client.meta.events.unregister("before-sign.s3.UploadPart", inject)
+
+    def ignored_selector(request, **_):
+        request.headers["x-amz-sdk-checksum-algorithm"] = "SHA256"
+
+    client.meta.events.register("before-sign.s3.UploadPart", ignored_selector)
+    import google_crc32c
+    crc = base64.b64encode(google_crc32c.value(b"part").to_bytes(4, "big")).decode()
+    part = client.upload_part(**args, PartNumber=1, Body=b"part", ChecksumCRC32C=crc)
+    assert part["ChecksumCRC32C"] == crc
+    client.abort_multipart_upload(**args)
+    client.delete_bucket(Bucket=bucket)
+
+
+def _raw_presigned_s3(client, operation, args, payload, headers):
+    import http.client
+    from urllib.parse import urlsplit
+
+    url = urlsplit(client.generate_presigned_url(operation, Params=args))
+    connection = http.client.HTTPConnection(url.hostname, url.port, timeout=30)
+    try:
+        connection.putrequest("PUT" if operation == "upload_part" else "POST", url.path + "?" + url.query)
+        connection.putheader("content-length", str(len(payload)))
+        for name, value in headers:
+            connection.putheader(name, value)
+        connection.endheaders(payload)
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("operation", ["part", "complete"])
+@pytest.mark.parametrize("malformation", ["nonascii", "duplicate"])
+def test_s3_multipart_rejects_malformed_digest_headers(sqrzl_server, operation, malformation):
+    from xml.etree import ElementTree
+
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-malformed-digest")
+    client.create_bucket(Bucket=bucket)
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"acknowledged")
+    payload = b"replacement" if operation == "part" else f'<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{part["ETag"]}</ETag></Part></CompleteMultipartUpload>'.encode()
+    values = [b"\x80"] if malformation == "nonascii" else [part["ChecksumCRC32C"], "AAAAAA=="]
+    status, body = _raw_presigned_s3(client, "upload_part" if operation == "part" else "complete_multipart_upload", {**args, **({"PartNumber": 1} if operation == "part" else {})}, payload, [("x-amz-checksum-crc32c", value) for value in values])
+    expected = (403, "SignatureDoesNotMatch") if malformation == "duplicate" and sqrzl_server.enforce_auth else (400, "InvalidDigest")
+    assert (status, ElementTree.fromstring(body).findtext("Code")) == expected, body
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    with pytest.raises(botocore_exceptions.ClientError) as missing:
+        client.head_object(Bucket=bucket, Key="key")
+    assert missing.value.response["ResponseMetadata"]["HTTPStatusCode"] == 404
+    client.abort_multipart_upload(**args)
+    client.delete_bucket(Bucket=bucket)
+
+
+@pytest.mark.parametrize("header", ["if-none-match", "if-match", "x-amz-mp-object-size", "x-amz-checksum-type"])
+@pytest.mark.parametrize("malformation", ["nonascii", "duplicate"])
+def test_s3_multipart_rejects_malformed_publication_headers(sqrzl_server, header, malformation):
+    from xml.etree import ElementTree
+
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-malformed-condition")
+    client.create_bucket(Bucket=bucket)
+    original = client.put_object(Bucket=bucket, Key="key", Body=b"original")
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"replacement")
+    payload = f'<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{part["ETag"]}</ETag></Part></CompleteMultipartUpload>'.encode()
+    valid = {"if-none-match": "*", "if-match": original["ETag"], "x-amz-mp-object-size": "11", "x-amz-checksum-type": "FULL_OBJECT"}[header]
+    values = [b"\x80"] if malformation == "nonascii" else [valid, valid]
+    status, body = _raw_presigned_s3(client, "complete_multipart_upload", args, payload, [(header, value) for value in values])
+    expected = (403, "SignatureDoesNotMatch") if malformation == "duplicate" and header.startswith("x-amz-") and sqrzl_server.enforce_auth else (400, "InvalidRequest")
+    assert (status, ElementTree.fromstring(body).findtext("Code")) == expected, body
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"original"
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    client.abort_multipart_upload(**args)
+    client.delete_object(Bucket=bucket, Key="key")
+    client.delete_bucket(Bucket=bucket)
+
+
+def test_s3_multipart_if_match_requires_read_permission(sqrzl_server):
+    import json
+
+    sqrzl_server.require_provider("s3")
+    if not sqrzl_server.enforce_auth:
+        pytest.skip("read-permission denial requires the authenticated storage lane")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-match-read-auth")
+    client.create_bucket(Bucket=bucket)
+    original = client.put_object(Bucket=bucket, Key="key", Body=b"original")
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"replacement")
+    policy = {"Version": "2012-10-17", "Statement": [{"Effect": "Deny", "Principal": "*", "Action": "s3:GetObject", "Resource": f"arn:aws:s3:::{bucket}/*"}]}
+    client.put_bucket_policy(Bucket=bucket, Policy=json.dumps(policy))
+    with pytest.raises(botocore_exceptions.ClientError) as denied:
+        client.get_object(Bucket=bucket, Key="key")
+    assert denied.value.response["ResponseMetadata"]["HTTPStatusCode"] == 403
+    with pytest.raises(botocore_exceptions.ClientError) as denied:
+        client.complete_multipart_upload(**args, IfMatch=original["ETag"], MultipartUpload={"Parts": [dict(PartNumber=1, ETag=part["ETag"])]})
+    assert denied.value.response["ResponseMetadata"]["HTTPStatusCode"] == 403
+    client.delete_bucket_policy(Bucket=bucket)
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"original"
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    result = client.complete_multipart_upload(**args, IfMatch=original["ETag"], MultipartUpload={"Parts": [dict(PartNumber=1, ETag=part["ETag"])]})
+    assert result["ResponseMetadata"]["HTTPStatusCode"] == 200
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"replacement"
+    client.delete_object(Bucket=bucket, Key="key")
+    client.delete_bucket(Bucket=bucket)
+
+
+@pytest.mark.parametrize("state", ["missing", "deleted"])
+def test_s3_multipart_if_match_missing_current_version(sqrzl_server, state):
+    sqrzl_server.require_provider("s3")
+    client = _client(sqrzl_server)
+    bucket = sqrzl_server.bucket_name("sdk-s3-match-missing")
+    client.create_bucket(Bucket=bucket)
+    client.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
+    if state == "deleted":
+        client.put_object(Bucket=bucket, Key="key", Body=b"original")
+        assert client.delete_object(Bucket=bucket, Key="key")["DeleteMarker"]
+    upload = client.create_multipart_upload(Bucket=bucket, Key="key", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    args = dict(Bucket=bucket, Key="key", UploadId=upload["UploadId"])
+    part = client.upload_part(**args, PartNumber=1, Body=b"replacement")
+    manifest = {"Parts": [dict(PartNumber=1, ETag=part["ETag"])]}
+    with pytest.raises(botocore_exceptions.ClientError) as missing:
+        client.complete_multipart_upload(**args, IfMatch='"missing"', MultipartUpload=manifest)
+    assert missing.value.response["ResponseMetadata"]["HTTPStatusCode"] == 404
+    assert missing.value.response["Error"]["Code"] == "NoSuchKey"
+    assert client.list_parts(**args)["Parts"][0]["ETag"] == part["ETag"]
+    # The same retained upload is valid for create-only publication over a delete marker.
+    client.complete_multipart_upload(**args, IfNoneMatch="*", MultipartUpload=manifest)
+    assert client.get_object(Bucket=bucket, Key="key")["Body"].read() == b"replacement"
+    _empty_versioned_bucket(client, bucket)
+    client.delete_bucket(Bucket=bucket)
+
+
 def _empty_versioned_bucket(client, bucket: str) -> None:
     versions = client.list_object_versions(Bucket=bucket)
     for version in versions.get("Versions", []):
@@ -388,6 +700,12 @@ def test_s3_native_default_multipart_checksum_boundary(sqrzl_server):
     assert failure.value.response["Error"]["Code"] == "NotImplemented"
     assert len(client.list_parts(Bucket=bucket, Key="plain", UploadId=upload["UploadId"])["Parts"]) == 1
     client.abort_multipart_upload(Bucket=bucket, Key="plain", UploadId=upload["UploadId"])
+    checked = client.create_multipart_upload(Bucket=bucket, Key="checked", ChecksumAlgorithm="CRC32C", ChecksumType="FULL_OBJECT")
+    with pytest.raises(botocore_exceptions.ClientError) as failure:
+        client.upload_part_copy(Bucket=bucket, Key="checked", UploadId=checked["UploadId"], PartNumber=1, CopySource={"Bucket": bucket, "Key": "absent"})
+    assert failure.value.response["Error"]["Code"] == "NotImplemented"
+    assert client.list_parts(Bucket=bucket, Key="checked", UploadId=checked["UploadId"]).get("Parts", []) == []
+    client.abort_multipart_upload(Bucket=bucket, Key="checked", UploadId=checked["UploadId"])
     client.delete_bucket(Bucket=bucket)
 
 

@@ -1,0 +1,199 @@
+{
+  "issue": 79,
+  "scope": "Diagnostic TDD red evidence; not clean-head qualification. Original reproduction uses the binary built from c7b3fd6. Later lanes exercised intermediate implementations. Transport timeouts are excluded as defect evidence.",
+  "lanes": [
+    {
+      "lane": "issue79-red-corrected",
+      "binary_sha256": "09fbeafb4574f83cc5fe18e1fe70d192ed6818a66be3aa82ca3b8040bd879051",
+      "binary_source_verified": false,
+      "test_source_commit": "c7b3fd67670b1978b0023a88dff68a8c70e78e51",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E           botocore.exceptions.ClientError: An error occurred (NotImplemented) when calling the CreateMultipartUpload operation: This S3 checksum algorithm, multipart, copy, or trailer variant is not supported by this emulator subset."
+          ]
+        },
+        {
+          "test": "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E            +    where [] = <built-in method get of dict object at 0x10bbfaf00>('upload_id', [])",
+            "E            +      where <built-in method get of dict object at 0x10bbfaf00> = {}.get",
+            "E            +        where {} = <function parse_qs at 0x107d42520>('')",
+            "E            +          where '' = SplitResult(scheme='http', netloc='127.0.0.1:63107', path='/upload/resumable/04ce9d73-1a5c-40f5-adbc-1bee46184ce9', query='', fragment='').query",
+            "E            +            where SplitResult(scheme='http', netloc='127.0.0.1:63107', path='/upload/resumable/04ce9d73-1a5c-40f5-adbc-1bee46184ce9', query='', fragment='') = <functools._lru_cache_wrapper object at 0x107d0ceb0>('http://127.0.0.1:63107/upload/resumable/04ce9d73-1a5c-40f5-adbc-1bee46184ce9')"
+          ]
+        },
+        {
+          "test": "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E            +    where [] = <built-in method get of dict object at 0x10bca2dc0>('upload_id', [])",
+            "E            +      where <built-in method get of dict object at 0x10bca2dc0> = {}.get",
+            "E            +        where {} = <function parse_qs at 0x107d42520>('')",
+            "E            +          where '' = SplitResult(scheme='http', netloc='127.0.0.1:63107', path='/upload/resumable/9502b041-95a6-4b98-8e61-4a51a262baee', query='', fragment='').query",
+            "E            +            where SplitResult(scheme='http', netloc='127.0.0.1:63107', path='/upload/resumable/9502b041-95a6-4b98-8e61-4a51a262baee', query='', fragment='') = <functools._lru_cache_wrapper object at 0x107d0ceb0>('http://127.0.0.1:63107/upload/resumable/9502b041-95a6-4b98-8e61-4a51a262baee')"
+          ]
+        }
+      ]
+    },
+    {
+      "lane": "issue79-fault-red",
+      "binary_sha256": "09fbeafb4574f83cc5fe18e1fe70d192ed6818a66be3aa82ca3b8040bd879051",
+      "binary_source_verified": false,
+      "test_source_commit": "c7b3fd67670b1978b0023a88dff68a8c70e78e51",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[missing]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E           botocore.exceptions.ClientError: An error occurred (NotImplemented) when calling the CreateMultipartUpload operation: This S3 checksum algorithm, multipart, copy, or trailer variant is not supported by this emulator subset."
+          ]
+        },
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_checksum_receipt_faults[corrupt]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E           botocore.exceptions.ClientError: An error occurred (NotImplemented) when calling the CreateMultipartUpload operation: This S3 checksum algorithm, multipart, copy, or trailer variant is not supported by this emulator subset."
+          ]
+        },
+        {
+          "test": "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       KeyError: 'x-sqrzl-failpoint-applied'"
+          ]
+        },
+        {
+          "test": "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       KeyError: 'x-sqrzl-failpoint-applied'"
+          ]
+        },
+        {
+          "test": "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       KeyError: 'x-sqrzl-failpoint-applied'"
+          ]
+        },
+        {
+          "test": "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       KeyError: 'x-sqrzl-failpoint-applied'"
+          ]
+        }
+      ]
+    },
+    {
+      "lane": "issue79-manifest-red",
+      "binary_sha256": "5da81cb32471226ac129a0fa31a54470b9072e912105c39ea5f8c203fe029c97",
+      "binary_source_verified": false,
+      "test_source_commit": "c7b3fd67670b1978b0023a88dff68a8c70e78e51",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[wrong-root]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       Failed: DID NOT RAISE <class 'botocore.exceptions.ClientError'>"
+          ]
+        },
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[duplicate-etag]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       Failed: DID NOT RAISE <class 'botocore.exceptions.ClientError'>"
+          ]
+        },
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nested-checksum]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       Failed: DID NOT RAISE <class 'botocore.exceptions.ClientError'>"
+          ]
+        }
+      ]
+    },
+    {
+      "lane": "issue79-part-order-red",
+      "binary_sha256": "5da81cb32471226ac129a0fa31a54470b9072e912105c39ea5f8c203fe029c97",
+      "binary_source_verified": false,
+      "test_source_commit": "c7b3fd67670b1978b0023a88dff68a8c70e78e51",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[nonconsecutive]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       Failed: DID NOT RAISE <class 'botocore.exceptions.ClientError'>"
+          ]
+        }
+      ]
+    },
+    {
+      "lane": "issue79-sdk-header-red",
+      "binary_sha256": "5da81cb32471226ac129a0fa31a54470b9072e912105c39ea5f8c203fe029c97",
+      "binary_source_verified": false,
+      "test_source_commit": "c7b3fd67670b1978b0023a88dff68a8c70e78e51",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_crc32c_part_sdk_algorithm_header_contract",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       Failed: DID NOT RAISE <class 'botocore.exceptions.ClientError'>"
+          ]
+        }
+      ]
+    },
+    {
+      "lane": "issue79-native-error-red",
+      "binary_sha256": "28ab430b22c59461daec87ddc762e1302659cd082ff4142e85eb8f3244253abb",
+      "binary_source_verified": false,
+      "test_source_commit": "c7b3fd67670b1978b0023a88dff68a8c70e78e51",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_native_default_multipart_checksum_boundary",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       AssertionError: assert 'NoSuchKey' == 'NotImplemented'",
+            "E",
+            "E         - NotImplemented",
+            "E         + NoSuchKey"
+          ]
+        },
+        {
+          "test": "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E       xml.etree.ElementTree.ParseError: not well-formed (invalid token): line 1, column 0"
+          ]
+        }
+      ]
+    },
+    {
+      "lane": "issue79-escaped-xml-red",
+      "binary_sha256": "4ba317af72b7ca79604ded1114a5eb3a7bfb23c03a25362e4cf75fb5d80f81fa",
+      "binary_source_verified": false,
+      "test_source_commit": "34c6b4e4fc52d1a08dcb02d06e5a407d258ce2ea",
+      "exit_status": 1,
+      "results": [
+        {
+          "test": "sdk-tests/test_s3_sdk.py::test_s3_checksum_manifest_structure[escaped-etag]",
+          "outcome": "failed",
+          "failure_excerpt": [
+            "E           botocore.exceptions.ClientError: An error occurred (MalformedXML) when calling the CompleteMultipartUpload operation: Invalid completion manifest schema."
+          ]
+        }
+      ]
+    }
+  ]
+}

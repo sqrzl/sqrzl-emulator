@@ -1,0 +1,120 @@
+{
+  "reviewed_source": "926ca121c28ec9b9b830f35b917e0f9d2681cd54",
+  "scope": "Diagnostic TDD reproduction against a binary built from the clean reviewed-source worktree. Test source was dirty. Eleven new regressions fail; four duplicate x-amz controls already pass via native SigV4 rejection. This is red evidence, not clean-head qualification.",
+  "binary_sha256": "3d02b1bef8457bff2e42768a29b78dabfb3ddf44a5ef2d3fb311bc2e85d11e10",
+  "binary_source_verified": false,
+  "exit_status": 1,
+  "results": [
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[nonascii-part]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E       xml.etree.ElementTree.ParseError: no element found: line 1, column 0"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[nonascii-complete]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E",
+        "E         At index 0 diff: 200 != 400",
+        "E         Use -v to get more diff"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[duplicate-part]",
+      "outcome": "passed",
+      "failure_excerpt": []
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_digest_headers[duplicate-complete]",
+      "outcome": "passed",
+      "failure_excerpt": []
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-if-none-match]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E",
+        "E         At index 0 diff: 200 != 400",
+        "E         Use -v to get more diff"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-if-match]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E",
+        "E         At index 0 diff: 200 != 400",
+        "E         Use -v to get more diff"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-x-amz-mp-object-size]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E",
+        "E         At index 0 diff: 200 != 400",
+        "E         Use -v to get more diff"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[nonascii-x-amz-checksum-type]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E",
+        "E         At index 0 diff: 200 != 400",
+        "E         Use -v to get more diff"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-if-none-match]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E",
+        "E         At index 0 diff: 412 != 400",
+        "E         Use -v to get more diff"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-if-match]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E",
+        "E         At index 0 diff: 200 != 400",
+        "E         Use -v to get more diff"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-x-amz-mp-object-size]",
+      "outcome": "passed",
+      "failure_excerpt": []
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_rejects_malformed_publication_headers[duplicate-x-amz-checksum-type]",
+      "outcome": "passed",
+      "failure_excerpt": []
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_requires_read_permission",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E       Failed: DID NOT RAISE <class 'botocore.exceptions.ClientError'>"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_missing_current_version[missing]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E       assert 412 == 404"
+      ]
+    },
+    {
+      "test": "sdk-tests/test_s3_sdk.py::test_s3_multipart_if_match_missing_current_version[deleted]",
+      "outcome": "failed",
+      "failure_excerpt": [
+        "E       assert 412 == 404"
+      ]
+    }
+  ]
+}

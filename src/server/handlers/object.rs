@@ -18,6 +18,7 @@ use std::sync::Arc;
 mod bounded;
 mod checksums;
 mod helpers;
+mod multipart_checksums;
 
 use self::helpers::{
     add_version_header, apply_s3_request_contracts, check_copy_conditionals,
@@ -576,9 +577,7 @@ pub async fn object_put(
         return Ok(s3_foreign_history_conflict_response(&req_id));
     }
 
-    if checksums::requested(req)
-        && (req.has_query_param("uploadId") || req.header("x-amz-copy-source").is_some())
-    {
+    if checksums::requested(req) && req.header("x-amz-copy-source").is_some() {
         return Ok(checksums::unsupported(&req_id));
     }
 
@@ -911,7 +910,9 @@ fn upload_multipart_part(
         return upload_key_mismatch_response(req_id);
     }
 
-    if let Some(response) = validate_content_md5(req, req_id) {
+    if let Some(response) = multipart_checksums::validate_part(req, &upload, req_id)
+        .or_else(|| validate_content_md5(req, req_id))
+    {
         return response;
     }
 
@@ -938,6 +939,7 @@ fn upload_multipart_part(
                 .header("ETag", &quoted_etag(&etag))
                 .header("x-amz-request-id", req_id)
                 .header("x-amz-id-2", &header_utils::generate_request_id());
+            let builder = multipart_checksums::part_headers(builder, req, &upload);
             cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder).empty()
         }
         Err(err) => storage_error_response(&err, req_id),
@@ -965,6 +967,10 @@ fn upload_part_copy(
     };
     if upload.key != key {
         return upload_key_mismatch_response(req_id);
+    }
+
+    if multipart_checksums::enabled(&upload) {
+        return checksums::unsupported(req_id);
     }
 
     let (source_bucket, source_key, source_version_id) =
@@ -2616,14 +2622,6 @@ fn complete_multipart_upload_request(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
-    if req.header("if-match").is_some() || req.header("if-none-match").is_some() {
-        return xml_error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "NotImplemented",
-            "Conditional CompleteMultipartUpload is not supported by this emulator subset.",
-            req_id,
-        );
-    }
     let upload_id = req.query_param("uploadId").unwrap_or("");
     let upload = match tokio::task::block_in_place(|| {
         object_service::get_multipart_upload(storage.as_ref(), bucket, upload_id)
@@ -2659,13 +2657,23 @@ fn complete_multipart_upload_request(
         return response;
     }
 
+    if req.headers.contains_key("if-match") {
+        if let Err(response) = check_authorization(
+            req,
+            auth_config,
+            storage,
+            bucket,
+            Some(upload.key.as_str()),
+            "s3:GetObject",
+        ) {
+            return response;
+        }
+    }
+
     if s3_foreign_history_conflict(storage.as_ref(), bucket) {
         return s3_foreign_history_conflict_response(req_id);
     }
 
-    if checksums::requested(req) || checksums::manifest_requests_checksum(&req.body) {
-        return checksums::unsupported(req_id);
-    }
     let manifest = match std::str::from_utf8(&req.body)
         .map_err(|error| error.to_string())
         .and_then(xml_utils::parse_complete_multipart_upload_xml)
@@ -2696,13 +2704,12 @@ fn complete_multipart_upload_request(
             req_id,
         );
     }
+    let completion = match multipart_checksums::completion(req, &upload, &manifest, req_id) {
+        Ok(completion) => completion,
+        Err(response) => return *response,
+    };
     match tokio::task::block_in_place(|| {
-        object_service::complete_multipart_upload_with_parts(
-            storage.as_ref(),
-            bucket,
-            upload_id,
-            &manifest,
-        )
+        storage.complete_multipart_upload_checked(bucket, upload_id, &manifest, &completion)
     }) {
         Ok(etag) => complete_multipart_upload_response(storage, bucket, key, req, req_id, &etag),
         Err(err) => storage_error_response(&err, req_id),
@@ -2717,7 +2724,12 @@ fn complete_multipart_upload_response(
     req_id: &str,
     etag: &str,
 ) -> Response<Body> {
-    let xml = xml_utils::complete_multipart_upload_xml(bucket, key, etag);
+    let mut xml = xml_utils::complete_multipart_upload_xml(bucket, key, etag);
+    if let Ok(stored) = storage.get_object_metadata(bucket, key) {
+        if let Some(crc) = stored.provider_metadata.get("s3_checksum_crc32c") {
+            xml = xml.replace("</CompleteMultipartUploadResult>", &format!("<ChecksumCRC32C>{crc}</ChecksumCRC32C><ChecksumType>FULL_OBJECT</ChecksumType></CompleteMultipartUploadResult>"));
+        }
+    }
     let stored_version_id = tokio::task::block_in_place(|| {
         object_service::get_object_metadata(storage.as_ref(), bucket, key)
     })
@@ -2742,9 +2754,10 @@ fn initiate_multipart_upload_request(
     req: &crate::server::http::Request,
     req_id: &str,
 ) -> Response<Body> {
-    if checksums::requested(req) {
-        return checksums::unsupported(req_id);
-    }
+    let checksum_enabled = match multipart_checksums::initiate(req, req_id) {
+        Ok(enabled) => enabled,
+        Err(response) => return *response,
+    };
     if object_lock_headers_requested(req) {
         return xml_error_response(
             StatusCode::NOT_IMPLEMENTED,
@@ -2770,6 +2783,14 @@ fn initiate_multipart_upload_request(
             .unwrap_or_else(|| "application/octet-stream".to_string()),
         metadata.clone(),
     );
+    if checksum_enabled {
+        template
+            .provider_metadata
+            .insert("s3_checksum_algorithm".to_string(), "CRC32C".to_string());
+        template
+            .provider_metadata
+            .insert("s3_checksum_type".to_string(), "FULL_OBJECT".to_string());
+    }
     helpers::replace_content_properties(req, &mut template);
     if let Err(response) = apply_s3_request_contracts(req, &mut template, req_id) {
         return response;
@@ -2802,6 +2823,13 @@ fn initiate_multipart_upload_request(
                 .content_type("application/xml; charset=utf-8")
                 .header("x-amz-request-id", req_id)
                 .header("x-amz-id-2", &header_utils::generate_request_id());
+            let builder = if checksum_enabled {
+                builder
+                    .header("x-amz-checksum-algorithm", "CRC32C")
+                    .header("x-amz-checksum-type", "FULL_OBJECT")
+            } else {
+                builder
+            };
             cors::apply_actual_request_headers(storage.as_ref(), bucket, req, builder)
                 .body(xml.into_bytes())
                 .build()
@@ -3037,7 +3065,8 @@ mod s3_contract_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn should_explicitly_reject_s3_multipart_checksums_without_mutating_uploads() {
+    async fn should_explicitly_reject_unsupported_s3_multipart_checksum_variants_without_mutating_uploads(
+    ) {
         let storage = temp_storage();
         storage.create_bucket("bucket".to_string()).unwrap();
         let response = object_post(
@@ -5512,7 +5541,7 @@ mod s3_contract_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn should_reject_unsupported_conditional_multipart_completion_without_consuming_upload() {
+    async fn should_reject_failed_conditional_multipart_completion_without_consuming_upload() {
         // Arrange
         let storage = temp_storage();
         storage.create_bucket("bucket".to_string()).unwrap();
@@ -5531,7 +5560,7 @@ mod s3_contract_tests {
                 "http://localhost/bucket/object.txt?uploadId={}",
                 upload.upload_id
             ),
-            &[("if-none-match", "*")],
+            &[("if-match", "\"absent\"")],
             body.as_bytes(),
         )
         .await;
@@ -5549,7 +5578,7 @@ mod s3_contract_tests {
         .expect("conditional completion should respond");
 
         // Assert
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert!(storage
             .get_multipart_upload("bucket", &upload.upload_id)
             .is_ok());

@@ -247,6 +247,17 @@ impl MultipartStore for IndexedStorage {
             .complete_multipart_upload_with_parts(bucket, upload_id, parts)
     }
 
+    fn complete_multipart_upload_checked(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+        parts: &[(u32, String)],
+        completion: &super::MultipartCompletion,
+    ) -> Result<String> {
+        self.inner
+            .complete_multipart_upload_checked(bucket, upload_id, parts, completion)
+    }
+
     fn abort_multipart_upload(&self, bucket: &str, upload_id: &str) -> Result<()> {
         self.inner.abort_multipart_upload(bucket, upload_id)
     }

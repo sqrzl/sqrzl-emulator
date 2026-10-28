@@ -271,7 +271,7 @@ mod tests {
             "server::handlers::object::s3_contract_tests::should_explicitly_reject_unsupported_governance_bypass_without_deleting_version",
             "server::handlers::object::s3_contract_tests::should_reject_copying_delete_marker_version_without_destination_mutation",
             "server::handlers::object::s3_contract_tests::should_reject_object_lock_multipart_initiation_without_creating_a_session",
-            "server::handlers::object::s3_contract_tests::should_reject_unsupported_conditional_multipart_completion_without_consuming_upload",
+            "server::handlers::object::s3_contract_tests::should_reject_failed_conditional_multipart_completion_without_consuming_upload",
             "server::handlers::object::s3_contract_tests::should_preserve_locked_current_version_tags_when_tag_mutations_fail",
             "server::handlers::object::s3_contract_tests::should_reject_version_scoped_tagging_without_mutating_the_version",
             "server::handlers::object::s3_contract_tests::should_reject_orphan_or_nonfuture_object_lock_retention_headers_before_mutation",
@@ -294,6 +294,9 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",
             "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
             "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
             "sdk-tests/test_s3_sdk.py::test_s3_multipart_part_content_md5_preserves_acknowledged_bytes",
@@ -611,7 +614,10 @@ mod tests {
             let function = verifier
                 .rsplit("::")
                 .next()
-                .expect("SDK verifier should include a function name");
+                .expect("SDK verifier should include a function name")
+                .split('[')
+                .next()
+                .expect("parameterized SDK verifier has a function name");
             assert!(
                 python_source.contains(&format!("def {function}(")),
                 "SDK verifier '{verifier}' does not name an existing test function"
