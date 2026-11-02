@@ -26,18 +26,17 @@ pub fn parse_complete_multipart_upload_xml(body: &str) -> Result<Vec<(u32, Strin
     loop {
         match reader.read_event() {
             Ok(Event::Start(event)) => {
-                current_tag = Some(event.name().as_ref().to_vec());
+                current_tag = Some(event.name().as_ref().as_bytes().to_vec());
                 text.clear();
             }
             Ok(Event::Text(event)) => {
-                let decoded = event.decode().map_err(|error| error.to_string())?;
-                text.push_str(&unescape(&decoded).map_err(|error| error.to_string())?);
+                text.push_str(&unescape(event.as_ref()).map_err(|error| error.to_string())?);
             }
             Ok(Event::CData(event)) => {
-                text.push_str(&event.decode().map_err(|error| error.to_string())?);
+                text.push_str(event.as_ref());
             }
             Ok(Event::GeneralRef(event)) => {
-                let reference = event.decode().map_err(|error| error.to_string())?;
+                let reference = event.as_ref();
                 let encoded = format!("&{reference};");
                 text.push_str(&unescape(&encoded).map_err(|error| error.to_string())?);
             }
@@ -52,7 +51,7 @@ pub fn parse_complete_multipart_upload_xml(body: &str) -> Result<Vec<(u32, Strin
                     Some(b"ETag") => etag = Some(text.trim_matches('"').to_string()),
                     _ => {}
                 }
-                if event.name().as_ref() == b"Part" {
+                if event.name().as_ref() == "Part" {
                     parts.push((
                         part_number
                             .take()
@@ -87,15 +86,14 @@ pub fn parse_versioning_xml(body: &str) -> Result<bool, String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if e.name().as_ref() == b"Status" => {
+            Ok(Event::Start(e)) if e.name().as_ref() == "Status" => {
                 in_status = true;
             }
-            Ok(Event::End(e)) if e.name().as_ref() == b"Status" => {
+            Ok(Event::End(e)) if e.name().as_ref() == "Status" => {
                 in_status = false;
             }
             Ok(Event::Text(e)) if in_status => {
-                let decoded = e.decode().map_err(|err| err.to_string())?;
-                let text = unescape(&decoded)
+                let text = unescape(e.as_ref())
                     .map_err(|err| err.to_string())?
                     .to_string();
                 enabled = text == "Enabled";
@@ -126,18 +124,17 @@ pub fn parse_tagging_xml(body: &str) -> Result<HashMap<String, String>, String> 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"Key" => in_key = true,
-                b"Value" => in_value = true,
+                "Key" => in_key = true,
+                "Value" => in_value = true,
                 _ => {}
             },
             Ok(Event::End(e)) => match e.name().as_ref() {
-                b"Key" => in_key = false,
-                b"Value" => in_value = false,
+                "Key" => in_key = false,
+                "Value" => in_value = false,
                 _ => {}
             },
             Ok(Event::Text(e)) => {
-                let decoded = e.decode().map_err(|err| err.to_string())?;
-                let text = unescape(&decoded)
+                let text = unescape(e.as_ref())
                     .map_err(|err| err.to_string())?
                     .to_string();
                 if in_key {
@@ -195,7 +192,7 @@ pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let name = e.name().as_ref().to_vec();
+                let name = e.name().as_ref().as_bytes().to_vec();
                 if name.as_slice() == b"Grant" {
                     in_grant = true;
                     current_id = None;
@@ -206,7 +203,7 @@ pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
                 current_tag = Some(name);
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"Grant" {
+                if e.name().as_ref() == "Grant" {
                     let permission = current_permission
                         .take()
                         .ok_or_else(|| "Missing ACL permission".to_string())?;
@@ -234,8 +231,7 @@ pub fn parse_acl_xml(body: &str) -> Result<Acl, String> {
                     continue;
                 }
 
-                let decoded = e.decode().map_err(|err| err.to_string())?;
-                let text = unescape(&decoded)
+                let text = unescape(e.as_ref())
                     .map_err(|err| err.to_string())?
                     .to_string();
                 match current_tag.as_deref() {
@@ -282,16 +278,13 @@ pub fn parse_lifecycle_xml(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                state.start(&name);
+                state.start(e.name().as_ref());
             }
             Ok(Event::Text(e)) => {
-                let decoded = e.decode().unwrap_or_default();
-                state.set_text(unescape(&decoded).unwrap_or_default().to_string());
+                state.set_text(unescape(e.as_ref()).unwrap_or_default().to_string());
             }
             Ok(Event::End(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                state.end(&name);
+                state.end(e.name().as_ref());
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(format!("XML parse error: {e}")),

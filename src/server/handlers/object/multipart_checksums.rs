@@ -156,6 +156,48 @@ fn error(code: &str, message: &str, req_id: &str) -> Box<Response<Body>> {
     ))
 }
 
+fn validate_manifest_part(
+    upload: &MultipartUpload,
+    manifest: &[(u32, String)],
+    req_id: &str,
+    index: &mut usize,
+    fields: &mut std::collections::HashSet<Vec<u8>>,
+    checksum: &mut String,
+) -> Result<(), Box<Response<Body>>> {
+    let malformed = || {
+        error(
+            "MalformedXML",
+            "Invalid completion manifest schema.",
+            req_id,
+        )
+    };
+    let Some((number, _)) = manifest.get(*index) else {
+        return Err(malformed());
+    };
+    if !fields.contains(b"PartNumber".as_slice()) || !fields.contains(b"ETag".as_slice()) {
+        return Err(malformed());
+    }
+    if fields.contains(b"ChecksumCRC32C".as_slice()) {
+        let expected = decode(checksum);
+        let stored = upload
+            .parts
+            .iter()
+            .find(|part| part.part_number == *number)
+            .and_then(|part| part.crc32c);
+        if expected.is_none() || expected != stored {
+            return Err(error(
+                "InvalidPart",
+                "The part checksum differs from the stored part.",
+                req_id,
+            ));
+        }
+    }
+    *index += 1;
+    fields.clear();
+    checksum.clear();
+    Ok(())
+}
+
 pub(super) fn completion(
     req: &Request,
     upload: &MultipartUpload,
@@ -265,7 +307,7 @@ fn validate_manifest(
     loop {
         match reader.read_event() {
             Ok(Event::Start(tag)) => {
-                let name = tag.local_name().as_ref().to_vec();
+                let name = tag.local_name().as_ref().as_bytes().to_vec();
                 let valid = match path.len() {
                     0 => !root_seen && name == b"CompleteMultipartUpload",
                     1 => name == b"Part",
@@ -286,15 +328,20 @@ fn validate_manifest(
             }
             Ok(Event::Text(value)) => {
                 if path.last().is_some_and(|name| name == b"ChecksumCRC32C") {
-                    let decoded = value.decode().map_err(|_| malformed())?;
-                    checksum
-                        .push_str(&quick_xml::escape::unescape(&decoded).map_err(|_| malformed())?);
-                } else if path.len() < 3 && !value.as_ref().iter().all(u8::is_ascii_whitespace) {
+                    checksum.push_str(
+                        &quick_xml::escape::unescape(value.as_ref()).map_err(|_| malformed())?,
+                    );
+                } else if path.len() < 3
+                    && !value
+                        .as_ref()
+                        .bytes()
+                        .all(|byte| byte.is_ascii_whitespace())
+                {
                     return Err(malformed());
                 }
             }
             Ok(Event::GeneralRef(value)) if path.len() == 3 => {
-                let reference = value.decode().map_err(|_| malformed())?;
+                let reference = value.as_ref();
                 let encoded = format!("&{reference};");
                 let decoded = quick_xml::escape::unescape(&encoded).map_err(|_| malformed())?;
                 if path.last().is_some_and(|name| name == b"ChecksumCRC32C") {
@@ -303,40 +350,22 @@ fn validate_manifest(
             }
             Ok(Event::CData(value)) if path.len() == 3 => {
                 if path.last().is_some_and(|name| name == b"ChecksumCRC32C") {
-                    checksum.push_str(&value.decode().map_err(|_| malformed())?);
+                    checksum.push_str(value.as_ref());
                 }
             }
             Ok(Event::End(tag)) => {
-                if path.pop().as_deref() != Some(tag.local_name().as_ref()) {
+                if path.pop().as_deref() != Some(tag.local_name().as_ref().as_bytes()) {
                     return Err(malformed());
                 }
-                if tag.local_name().as_ref() == b"Part" {
-                    let Some((number, _)) = manifest.get(index) else {
-                        return Err(malformed());
-                    };
-                    if !fields.contains(b"PartNumber".as_slice())
-                        || !fields.contains(b"ETag".as_slice())
-                    {
-                        return Err(malformed());
-                    }
-                    if fields.contains(b"ChecksumCRC32C".as_slice()) {
-                        let expected = decode(&checksum);
-                        let stored = upload
-                            .parts
-                            .iter()
-                            .find(|p| p.part_number == *number)
-                            .and_then(|p| p.crc32c);
-                        if expected.is_none() || expected != stored {
-                            return Err(error(
-                                "InvalidPart",
-                                "The part checksum differs from the stored part.",
-                                req_id,
-                            ));
-                        }
-                    }
-                    index += 1;
-                    fields.clear();
-                    checksum.clear();
+                if tag.local_name().as_ref() == "Part" {
+                    validate_manifest_part(
+                        upload,
+                        manifest,
+                        req_id,
+                        &mut index,
+                        &mut fields,
+                        &mut checksum,
+                    )?;
                 }
             }
             Ok(Event::Eof) if root_seen && path.is_empty() && index == manifest.len() => {
