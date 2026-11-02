@@ -1,14 +1,47 @@
+const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, {
+  numeric: 'auto',
+});
+
 export function formatRelativeTime(value: string): string {
   const date = new Date(value);
-  const diffMs = Date.now() - date.getTime();
-  const diffMinutes = Math.max(1, Math.round(diffMs / 60000));
+  const diffSeconds = (date.getTime() - Date.now()) / 1000;
+  const absoluteSeconds = Math.abs(diffSeconds);
 
-  if (diffMinutes < 60) {
-    return `${diffMinutes}m ago`;
+  if (!Number.isFinite(diffSeconds)) {
+    return 'Unknown';
   }
 
-  const diffHours = Math.round(diffMinutes / 60);
-  return `${diffHours}h ago`;
+  if (absoluteSeconds < 45) {
+    return 'just now';
+  }
+
+  let unit: Intl.RelativeTimeFormatUnit;
+  let unitSeconds: number;
+
+  if (absoluteSeconds < 45 * 60) {
+    unit = 'minute';
+    unitSeconds = 60;
+  } else if (absoluteSeconds < 22 * 60 * 60) {
+    unit = 'hour';
+    unitSeconds = 60 * 60;
+  } else if (absoluteSeconds < 7 * 24 * 60 * 60) {
+    unit = 'day';
+    unitSeconds = 24 * 60 * 60;
+  } else if (absoluteSeconds < 30 * 24 * 60 * 60) {
+    unit = 'week';
+    unitSeconds = 7 * 24 * 60 * 60;
+  } else if (absoluteSeconds < 365 * 24 * 60 * 60) {
+    unit = 'month';
+    unitSeconds = 30 * 24 * 60 * 60;
+  } else {
+    unit = 'year';
+    unitSeconds = 365 * 24 * 60 * 60;
+  }
+
+  return relativeTimeFormatter.format(
+    Math.round(diffSeconds / unitSeconds),
+    unit
+  );
 }
 
 export function formatBytes(size: number): string {

@@ -47,25 +47,29 @@ npm run preview  # Preview production build
 npm test         # Run tests with Vitest
 ```
 
-Node 24 or newer is required.
+Node 24 or newer is required. CI and the container build use Node 26.
 
-## Askr 0.5 package baseline
+## Dependencies
 
-The UI is pinned to the coordinated stable Askr 0.5 package set. `vite-plus`
-1.3.0 satisfies the optional peer range declared by `@askrjs/vite` 0.5.0.
+The UI uses the Askr component, theme, and router packages, with `@fgrzl/fetch`
+as its HTTP transport. Keep `package.json` and `package-lock.json` in sync;
+`npm ci` installs the exact dependency tree recorded in the lockfile.
 
-| Package | Version |
-| --- | ---: |
-| `@askrjs/askr` | 0.5.0 |
-| `@askrjs/auth` | 0.5.0 |
-| `@askrjs/charts` | 0.5.0 |
-| `@askrjs/lucide` | 0.5.0 |
-| `@askrjs/themes` | 0.5.0 |
-| `@askrjs/ui` | 0.5.0 |
-| `@askrjs/vite` | 0.5.0 |
-| `vite-plus` | 1.3.0 |
-
-Migration was checked against the [Core 0.5.0 guide](https://github.com/askrjs/askr/blob/v0.5.0/docs/migration/0.5.0.md), the [coordinated package guide](https://github.com/askrjs/askr/blob/v0.5.0/docs/migration/0.5.0-packages.md), and the Themes, UI, and Vite 0.5.0 guides. The app already uses the registry-based router and named `askr()` Vite plugin; `@askrjs/auth` is declared directly because the route registry imports `requireUser`. The shared root layout now sets its vertical direction explicitly, and the responsive navbar utility group stays on the top row above `md` with a scoped override for the 0.5.0 collapsed-content direction. Logout reads its error state during render under Askr's development checks. The migration does not change the OpenAPI contract, generated client, or `@fgrzl/fetch` transport boundary.
+| Package          | Declared version |
+| ---------------- | ---------------: |
+| `@askrjs/askr`   |          `0.5.1` |
+| `@askrjs/auth`   |          `0.5.1` |
+| `@askrjs/charts` |          `0.5.0` |
+| `@askrjs/lucide` |          `0.5.1` |
+| `@askrjs/themes` |          `0.5.1` |
+| `@askrjs/ui`     |          `0.5.0` |
+| `@askrjs/vite`   |          `0.5.0` |
+| `@fgrzl/fetch`   |         `^2.0.0` |
+| `@types/node`    |        `^26.6.6` |
+| `jiti`           |         `^2.7.0` |
+| `jsdom`          |        `^30.1.3` |
+| `typescript`     |         `^7.0.2` |
+| `vite-plus`      |          `1.4.0` |
 
 ## Routes
 

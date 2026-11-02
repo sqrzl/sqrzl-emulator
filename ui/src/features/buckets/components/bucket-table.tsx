@@ -1,7 +1,7 @@
 import { For } from '@askrjs/askr/control';
 import { Link } from '@askrjs/askr/router';
 import { DatabaseIcon, TrashIcon } from '@askrjs/lucide';
-import { Button, Block } from '@askrjs/themes/components';
+import { Badge, Block, Button } from '@askrjs/themes/components';
 import {
   Table,
   TableBody,
@@ -86,6 +86,7 @@ export default function BucketTable() {
           <TableHead>
             <TableRow>
               <TableHeaderCell>Bucket</TableHeaderCell>
+              <TableHeaderCell>Versioning</TableHeaderCell>
               <TableHeaderCell>Created</TableHeaderCell>
               <TableHeaderCell>
                 <Block direction="row" justify="end">
@@ -108,6 +109,15 @@ export default function BucketTable() {
                       <DatabaseIcon aria-hidden="true" />
                       <Link href={bucketPath(bucket.name)}>{bucket.name}</Link>
                     </Block>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={
+                        bucket.versioningEnabled ? 'secondary' : 'outline'
+                      }
+                    >
+                      {bucket.versioningEnabled ? 'Enabled' : 'Disabled'}
+                    </Badge>
                   </TableCell>
                   <TableCell>{formatRelativeTime(bucket.createdAt)}</TableCell>
                   <TableCell>

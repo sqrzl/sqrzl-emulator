@@ -1,16 +1,24 @@
 @import '@askrjs/themes/default';
 
-/* Askr 0.5.0 keeps collapsed navbar content vertical above its md breakpoint. */
+/* Keep the expanded nav content horizontal at its md breakpoint. */
 @media (min-width: 48rem) {
   :where([data-sqrzl-slot='application-navbar'][data-collapse-at='md'])
     :where([data-slot='navbar-content']) {
     flex-direction: row;
   }
-}
 
-:where([data-sqrzl-slot='application-brand-mark']) {
-  background: transparent;
-  box-shadow: none;
+  :where([data-sqrzl-slot='application-navbar']) {
+    position: relative;
+  }
+
+  /* The expanded collapse column starts at the navbar's center grid line. */
+  :where([data-sqrzl-slot='application-navbar'])
+    :where([data-slot='navbar-content'])
+    > :where([data-slot='nav-group']:not([data-align='end'])) {
+    position: absolute;
+    inset-inline-start: 0;
+    transform: translateX(-50%);
+  }
 }
 
 :where([data-sqrzl-slot='application-brand-logo']) {
@@ -18,11 +26,17 @@
   inline-size: 2rem;
   block-size: 2rem;
   object-fit: contain;
+  filter: invert(1);
 }
 
-[data-theme='dark']
-  :where([data-sqrzl-slot='application-brand-logo']) {
-  filter: invert(1);
+[data-theme='dark'] :where([data-sqrzl-slot='application-brand-logo']) {
+  filter: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) :where([data-sqrzl-slot='application-brand-logo']) {
+    filter: none;
+  }
 }
 
 :where([data-sqrzl-slot='inline-message-details']) {
@@ -44,8 +58,7 @@
   min-inline-size: 0;
 }
 
-:where([data-sqrzl-slot='storage-search-field'])
-  > :where([data-slot='field']) {
+:where([data-sqrzl-slot='storage-search-field']) > :where([data-slot='field']) {
   width: 100%;
 }
 
@@ -80,6 +93,11 @@
 
 :where([data-sqrzl-slot='storage-table-scroll']) :where([data-slot='button']) {
   white-space: nowrap;
+}
+
+:where([data-sqrzl-slot='application-main']) {
+  flex: 1 1 auto;
+  min-inline-size: 0;
 }
 
 :where([data-sqrzl-slot='text-payload']) {

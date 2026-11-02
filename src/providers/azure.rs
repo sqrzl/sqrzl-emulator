@@ -15,7 +15,6 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use hyper::Response;
-use quick_xml::encoding::Decoder;
 use quick_xml::escape::unescape;
 use quick_xml::events::{BytesDecl, BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
@@ -1821,10 +1820,7 @@ impl AzureBlobAdapter {
             | '\u{f900}'..='\u{fdcf}' | '\u{fdf0}'..='\u{fffd}' | '\u{10000}'..='\u{effff}')
     }
 
-    fn valid_xml_name(bytes: &[u8]) -> bool {
-        let Ok(name) = std::str::from_utf8(bytes) else {
-            return false;
-        };
+    fn valid_xml_name(name: &str) -> bool {
         let mut characters = name.chars();
         characters.next().is_some_and(Self::xml_name_start)
             && characters.all(|character| {
@@ -1834,8 +1830,8 @@ impl AzureBlobAdapter {
             })
     }
 
-    fn valid_xml_attributes(event: &BytesStart<'_>, decoder: Decoder) -> bool {
-        let raw = event.attributes_raw();
+    fn valid_xml_attributes(event: &BytesStart<'_>) -> bool {
+        let raw = event.attributes_raw().as_bytes();
         let mut quote = None;
         for (index, byte) in raw.iter().copied().enumerate() {
             if let Some(delimiter) = quote {
@@ -1856,20 +1852,17 @@ impl AzureBlobAdapter {
             && event.attributes().all(|attribute| {
                 attribute.is_ok_and(|attribute| {
                     Self::valid_xml_name(attribute.key.as_ref())
-                        && !attribute.value.contains(&b'<')
+                        && !attribute.value.contains('<')
                         && attribute
-                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                            .normalized_value(XmlVersion::Implicit1_0)
                             .is_ok_and(|value| Self::valid_xml_characters(&value))
                 })
             })
     }
 
-    fn valid_xml_declaration(event: &BytesDecl<'_>, decoder: Decoder) -> bool {
-        let Ok(content) = std::str::from_utf8(event) else {
-            return false;
-        };
-        let declaration = BytesStart::from_content(content, 3);
-        if !Self::valid_xml_attributes(&declaration, decoder) {
+    fn valid_xml_declaration(event: &BytesDecl<'_>) -> bool {
+        let declaration = BytesStart::from_content(event.as_ref(), 3);
+        if !Self::valid_xml_attributes(&declaration) {
             return false;
         }
         let mut position = 0;
@@ -1879,35 +1872,40 @@ impl AzureBlobAdapter {
             };
             let value = attribute.value.as_ref();
             position = match attribute.key.as_ref() {
-                b"version"
+                "version"
                     if position == 0
-                        && value.strip_prefix(b"1.").is_some_and(|digits| {
-                            !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
+                        && value.strip_prefix("1.").is_some_and(|digits| {
+                            !digits.is_empty()
+                                && digits.chars().all(|character| character.is_ascii_digit())
                         }) =>
                 {
                     1
                 }
-                b"encoding"
+                "encoding"
                     if position == 1
-                        && value.first().is_some_and(u8::is_ascii_alphabetic)
-                        && value.iter().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                        && value
+                            .chars()
+                            .next()
+                            .is_some_and(|character| character.is_ascii_alphabetic())
+                        && value.chars().all(|character| {
+                            character.is_ascii_alphanumeric()
+                                || matches!(character, '.' | '_' | '-')
                         }) =>
                 {
                     2
                 }
-                b"standalone" if matches!(position, 1 | 2) && matches!(value, b"yes" | b"no") => 3,
+                "standalone" if matches!(position, 1 | 2) && matches!(value, "yes" | "no") => 3,
                 _ => return false,
             };
         }
         position != 0
     }
 
-    fn block_selector(name: &[u8]) -> Result<AzureBlockSelector, AzureBlockListError> {
+    fn block_selector(name: &str) -> Result<AzureBlockSelector, AzureBlockListError> {
         match name {
-            b"Latest" => Ok(AzureBlockSelector::Latest),
-            b"Committed" => Ok(AzureBlockSelector::Committed),
-            b"Uncommitted" => Ok(AzureBlockSelector::Uncommitted),
+            "Latest" => Ok(AzureBlockSelector::Latest),
+            "Committed" => Ok(AzureBlockSelector::Committed),
+            "Uncommitted" => Ok(AzureBlockSelector::Uncommitted),
             _ => Err(AzureBlockListError::InvalidBlockList),
         }
     }
@@ -1946,7 +1944,7 @@ impl AzureBlobAdapter {
         let mut buf = Vec::new();
         let mut root_seen = false;
         let mut root_closed = false;
-        let mut current_element: Option<Vec<u8>> = None;
+        let mut current_element: Option<String> = None;
         let mut current_block_id = String::new();
         let mut block_references = Vec::new();
         let mut declaration_allowed = true;
@@ -1954,13 +1952,13 @@ impl AzureBlobAdapter {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(event) | Event::Empty(event))
-                    if !Self::valid_xml_attributes(&event, reader.decoder()) =>
+                    if !Self::valid_xml_attributes(&event) =>
                 {
                     return Err(AzureBlockListError::InvalidXmlDocument);
                 }
                 Ok(Event::Start(event)) => {
-                    let name = event.name().as_ref().to_vec();
-                    if !root_seen && name == b"BlockList" {
+                    let name = event.name().as_ref().to_owned();
+                    if !root_seen && name == "BlockList" {
                         root_seen = true;
                     } else if root_seen
                         && !root_closed
@@ -1973,13 +1971,13 @@ impl AzureBlobAdapter {
                         return Err(AzureBlockListError::InvalidBlockList);
                     }
                 }
-                Ok(Event::Empty(event)) if !root_seen && event.name().as_ref() == b"BlockList" => {
+                Ok(Event::Empty(event)) if !root_seen && event.name().as_ref() == "BlockList" => {
                     root_seen = true;
                     root_closed = true;
                 }
                 Ok(Event::End(event)) => {
-                    let name = event.name().as_ref().to_vec();
-                    if current_element.as_deref() == Some(name.as_slice()) {
+                    let name = event.name().as_ref().to_owned();
+                    if current_element.as_deref() == Some(name.as_str()) {
                         if current_block_id.is_empty() {
                             return Err(AzureBlockListError::InvalidBlockList);
                         }
@@ -1992,7 +1990,7 @@ impl AzureBlobAdapter {
                     } else if root_seen
                         && !root_closed
                         && current_element.is_none()
-                        && name == b"BlockList"
+                        && name == "BlockList"
                     {
                         root_closed = true;
                     } else {
@@ -2000,17 +1998,15 @@ impl AzureBlobAdapter {
                     }
                 }
                 Ok(Event::Text(text)) => {
-                    let decoded = text
-                        .decode()
-                        .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
+                    let decoded = text.as_ref();
                     if !root_seen || root_closed {
                         // Outside the root, XML Misc admits literal S only;
                         // character references and Unicode trim characters are not S.
-                        if !Self::xml_space(&decoded) {
+                        if !Self::xml_space(decoded) {
                             return Err(AzureBlockListError::InvalidXmlDocument);
                         }
                     } else {
-                        let value = unescape(&decoded)
+                        let value = unescape(decoded)
                             .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
                         Self::append_block_text(
                             &value,
@@ -2029,11 +2025,11 @@ impl AzureBlobAdapter {
                     {
                         Some(character) => character,
                         None => match reference.as_ref() {
-                            b"lt" => '<',
-                            b"gt" => '>',
-                            b"amp" => '&',
-                            b"apos" => '\'',
-                            b"quot" => '"',
+                            "lt" => '<',
+                            "gt" => '>',
+                            "amp" => '&',
+                            "apos" => '\'',
+                            "quot" => '"',
                             _ => return Err(AzureBlockListError::InvalidXmlDocument),
                         },
                     };
@@ -2045,21 +2041,18 @@ impl AzureBlobAdapter {
                     )?;
                 }
                 Ok(Event::CData(text)) if current_element.is_some() => {
-                    let decoded = text
-                        .decode()
-                        .map_err(|_| AzureBlockListError::InvalidXmlDocument)?;
-                    current_block_id.push_str(&decoded);
+                    current_block_id.push_str(text.as_ref());
                 }
                 Ok(Event::Eof) => break,
                 // A declaration must occur once, at the start, before any other node.
                 Ok(Event::Decl(event))
                     if declaration_allowed
                         && xml.starts_with("<?xml")
-                        && Self::valid_xml_declaration(&event, reader.decoder()) => {}
+                        && Self::valid_xml_declaration(&event) => {}
                 Err(_) | Ok(Event::Decl(_)) => return Err(AzureBlockListError::InvalidXmlDocument),
                 Ok(Event::PI(event))
                     if !Self::valid_xml_name(event.target())
-                        || event.target().eq_ignore_ascii_case(b"xml") =>
+                        || event.target().eq_ignore_ascii_case("xml") =>
                 {
                     return Err(AzureBlockListError::InvalidXmlDocument);
                 }

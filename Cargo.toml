@@ -24,29 +24,29 @@ crc64fast-nvme = "1.2.1"
 hex = "0.4"
 hmac = "0.13"
 http = "1.5"
-hyper = { version = "1.11.0", features = ["full"] }
-hyper-util = { version = "0.1.20", features = ["client", "client-legacy", "http1", "http2"] }
-jsonwebtoken = { version = "11.0.0", features = ["rust_crypto"] }
+hyper = { version = "1.12.0", features = ["full"] }
+hyper-util = { version = "0.1.21", features = ["client", "client-legacy", "http1", "http2"] }
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 md5 = "0.8"
 mime_guess = "2"
-quick-xml = "0.41.0"
-rand = "0.10.2"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "=3.6.0", features = ["transport-streamable-http-server"] }
+quick-xml = "0.42.0"
+rand = "0.10.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "=3.8.0", features = ["transport-streamable-http-server"] }
 rsa = { version = "0.9.10", features = ["getrandom", "sha2"] }
 sha1 = "0.11.0"
-sha2 = "0.11.0"
+sha2 = "0.11.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 getrandom = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util", "fs", "process"] }
 tower = "0.5.3"
-tower-http = { version = "0.7.0", features = ["fs"] }
+tower-http = { version = "0.7.1", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 urlencoding = "2"
-uuid = { version = "1.24", features = ["v4", "serde"] }
+uuid = { version = "1.29", features = ["v4", "serde"] }
 http-body-util = "0.1"
 
 [target.'cfg(unix)'.dependencies]

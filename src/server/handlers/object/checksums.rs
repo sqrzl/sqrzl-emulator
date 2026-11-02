@@ -199,7 +199,7 @@ pub(super) fn manifest_requests_checksum(body: &[u8]) -> bool {
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(tag) | quick_xml::events::Event::Empty(tag))
-                if tag.local_name().as_ref().starts_with(b"Checksum") =>
+                if tag.local_name().as_ref().starts_with("Checksum") =>
             {
                 return true
             }

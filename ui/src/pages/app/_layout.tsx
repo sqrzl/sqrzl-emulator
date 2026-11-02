@@ -72,11 +72,7 @@ export default function AppLayout({ children }: { children?: unknown }) {
               />
 
               {showLogout ? (
-                <NavLink
-                  href={logoutPath()}
-                  match="exact"
-                  aria-label="Log out"
-                >
+                <NavLink href={logoutPath()} match="exact" aria-label="Log out">
                   <LogOutIcon size={16} aria-hidden="true" />
                 </NavLink>
               ) : null}
@@ -84,7 +80,7 @@ export default function AppLayout({ children }: { children?: unknown }) {
           </Navbar>
         </Container>
       </Header>
-      {children}
+      <main data-sqrzl-slot="application-main">{children}</main>
     </>
   );
 }

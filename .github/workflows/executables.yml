@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Build linux x86_64
         run: docker run --rm -v "$GITHUB_WORKSPACE:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild cargo zigbuild --release --locked --bin sqrzl-emulator --target x86_64-unknown-linux-gnu && mkdir -p dist/executables/x86_64-unknown-linux-gnu && cp target/x86_64-unknown-linux-gnu/release/sqrzl-emulator dist/executables/x86_64-unknown-linux-gnu/
@@ -23,7 +23,7 @@ jobs:
         run: docker run --rm -v "$GITHUB_WORKSPACE:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild cargo zigbuild --release --locked --bin sqrzl-emulator --target aarch64-unknown-linux-gnu && mkdir -p dist/executables/aarch64-unknown-linux-gnu && cp target/aarch64-unknown-linux-gnu/release/sqrzl-emulator dist/executables/aarch64-unknown-linux-gnu/
 
       - name: Upload executable artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sqrzl-emulator-linux-executables
           path: dist/executables

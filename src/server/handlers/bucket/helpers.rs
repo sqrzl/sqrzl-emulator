@@ -49,12 +49,12 @@ pub(super) fn parse_delete_keys(xml: &str) -> Result<Vec<DeleteObjectEntry>, Str
                 return Err("Unexpected XML after the Delete document".to_string());
             }
             Ok(Event::Start(e)) => {
-                let name = e.name().as_ref().to_vec();
+                let name = e.name().as_ref().as_bytes().to_vec();
                 let attributes_are_valid = e.attributes().all(|attribute| {
                     attribute.is_ok_and(|attribute| {
                         stack.is_empty()
                             && name == b"Delete"
-                            && attribute.key.as_ref().starts_with(b"xmlns")
+                            && attribute.key.as_ref().starts_with("xmlns")
                     })
                 });
                 if !attributes_are_valid {
@@ -107,8 +107,7 @@ pub(super) fn parse_delete_keys(xml: &str) -> Result<Vec<DeleteObjectEntry>, Str
                 return Err("Delete request elements must not be empty".to_string());
             }
             Ok(Event::Text(t)) => {
-                let decoded = t.decode().map_err(|error| error.to_string())?;
-                let value = unescape(&decoded).map_err(|error| error.to_string())?;
+                let value = unescape(t.as_ref()).map_err(|error| error.to_string())?;
                 match stack.last().map(Vec::as_slice) {
                     Some(b"Key") => current_key
                         .as_mut()
@@ -131,30 +130,30 @@ pub(super) fn parse_delete_keys(xml: &str) -> Result<Vec<DeleteObjectEntry>, Str
                 }
             }
             Ok(Event::CData(t)) => {
-                let value = t.decode().map_err(|error| error.to_string())?;
+                let value = t.as_ref();
                 match stack.last().map(Vec::as_slice) {
                     Some(b"Key") => current_key
                         .as_mut()
                         .ok_or_else(|| "Malformed Delete request Key".to_string())?
-                        .push_str(&value),
+                        .push_str(value),
                     Some(b"VersionId") => current_version
                         .as_mut()
                         .ok_or_else(|| "Malformed Delete request VersionId".to_string())?
-                        .push_str(&value),
+                        .push_str(value),
                     Some(b"ETag") => current_etag
                         .as_mut()
                         .ok_or_else(|| "Malformed Delete request ETag".to_string())?
-                        .push_str(&value),
+                        .push_str(value),
                     Some(b"Quiet") => current_quiet
                         .as_mut()
                         .ok_or_else(|| "Malformed Delete request Quiet".to_string())?
-                        .push_str(&value),
+                        .push_str(value),
                     _ if value.trim().is_empty() => {}
                     _ => return Err("Unexpected CDATA in Delete request".to_string()),
                 }
             }
             Ok(Event::End(e)) => {
-                let name = e.name().as_ref().to_vec();
+                let name = e.name().as_ref().as_bytes().to_vec();
                 if stack.last() != Some(&name) {
                     return Err("Delete request elements are not properly nested".to_string());
                 }
@@ -248,11 +247,10 @@ pub(super) fn metadata_value(xml: &str, tag: &[u8]) -> Option<String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if e.name().as_ref() == tag => in_tag = true,
-            Ok(Event::End(e)) if e.name().as_ref() == tag => in_tag = false,
+            Ok(Event::Start(e)) if e.name().as_ref().as_bytes() == tag => in_tag = true,
+            Ok(Event::End(e)) if e.name().as_ref().as_bytes() == tag => in_tag = false,
             Ok(Event::Text(t)) if in_tag => {
-                let decoded = t.decode().unwrap_or_default();
-                return Some(unescape(&decoded).unwrap_or_default().to_string());
+                return Some(unescape(t.as_ref()).unwrap_or_default().to_string());
             }
             Ok(Event::Eof) | Err(_) => break,
             _ => {}

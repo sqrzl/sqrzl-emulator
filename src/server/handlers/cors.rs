@@ -256,22 +256,22 @@ fn parse_cors_rules(xml: &str) -> Result<Vec<CorsRule>, crate::error::Error> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(event)) => match event.name().as_ref() {
-                b"CORSRule" => current_rule = Some(CorsRule::default()),
-                b"AllowedOrigin" => current_field = Some(CorsField::AllowedOrigin),
-                b"AllowedMethod" => current_field = Some(CorsField::AllowedMethod),
-                b"AllowedHeader" => current_field = Some(CorsField::AllowedHeader),
-                b"ExposeHeader" => current_field = Some(CorsField::ExposeHeader),
-                b"MaxAgeSeconds" => current_field = Some(CorsField::MaxAgeSeconds),
+                "CORSRule" => current_rule = Some(CorsRule::default()),
+                "AllowedOrigin" => current_field = Some(CorsField::AllowedOrigin),
+                "AllowedMethod" => current_field = Some(CorsField::AllowedMethod),
+                "AllowedHeader" => current_field = Some(CorsField::AllowedHeader),
+                "ExposeHeader" => current_field = Some(CorsField::ExposeHeader),
+                "MaxAgeSeconds" => current_field = Some(CorsField::MaxAgeSeconds),
                 _ => {}
             },
             Ok(Event::End(event)) => match event.name().as_ref() {
-                b"CORSRule" => {
+                "CORSRule" => {
                     if let Some(rule) = current_rule.take() {
                         rules.push(rule);
                     }
                 }
-                b"AllowedOrigin" | b"AllowedMethod" | b"AllowedHeader" | b"ExposeHeader"
-                | b"MaxAgeSeconds" => current_field = None,
+                "AllowedOrigin" | "AllowedMethod" | "AllowedHeader" | "ExposeHeader"
+                | "MaxAgeSeconds" => current_field = None,
                 _ => {}
             },
             Ok(Event::Text(text)) => {
@@ -279,10 +279,7 @@ fn parse_cors_rules(xml: &str) -> Result<Vec<CorsRule>, crate::error::Error> {
                     buf.clear();
                     continue;
                 };
-                let decoded = text
-                    .decode()
-                    .map_err(|err| crate::error::Error::InvalidRequest(err.to_string()))?;
-                let value = unescape(&decoded)
+                let value = unescape(text.as_ref())
                     .map_err(|err| crate::error::Error::InvalidRequest(err.to_string()))?
                     .to_string();
                 match current_field {
