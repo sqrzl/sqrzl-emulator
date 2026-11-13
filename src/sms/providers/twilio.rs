@@ -457,13 +457,31 @@ mod tests {
 
     #[test]
     fn should_accept_auth_token_or_api_key_and_reject_mixed_credentials() {
+        // Arrange
         let key = || Some((KEY_SID.to_string(), "key-secret".to_string()));
         let token_pair = format!("{ACCOUNT}:token");
         let key_pair = format!("{KEY_SID}:key-secret");
 
-        assert!(basic_credentials_match(token_pair.as_bytes(), ACCOUNT, "token", key()));
-        assert!(basic_credentials_match(key_pair.as_bytes(), ACCOUNT, "token", key()));
-        assert!(!basic_credentials_match(key_pair.as_bytes(), ACCOUNT, "token", None));
+        // Act
+        // Assert
+        assert!(basic_credentials_match(
+            token_pair.as_bytes(),
+            ACCOUNT,
+            "token",
+            key()
+        ));
+        assert!(basic_credentials_match(
+            key_pair.as_bytes(),
+            ACCOUNT,
+            "token",
+            key()
+        ));
+        assert!(!basic_credentials_match(
+            key_pair.as_bytes(),
+            ACCOUNT,
+            "token",
+            None
+        ));
         assert!(!basic_credentials_match(
             format!("{KEY_SID}:token").as_bytes(),
             ACCOUNT,

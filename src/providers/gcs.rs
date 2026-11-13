@@ -2018,6 +2018,96 @@ mod tests {
         }
     }
 
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings() {
+        // Arrange
+        let storage = temp_storage();
+        let document = serde_json::to_vec(&serde_json::json!({"name": "gzip-bucket"})).unwrap();
+        let compressed = gzip(&document);
+        let rejected = serde_json::to_vec(&serde_json::json!({"name": "rejected-coding"})).unwrap();
+        let rejected_gzip = gzip(&rejected);
+
+        // Act
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("content-encoding", "gzip")],
+            &compressed,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(storage.bucket_exists("gzip-bucket").unwrap());
+
+        let patch = gzip(br#"{"retentionPolicy":{"retentionPeriod":"3600"}}"#);
+        let request = parsed_request(
+            "PATCH",
+            "http://localhost/storage/v1/b/gzip-bucket",
+            &[
+                ("content-encoding", "gzip"),
+                ("content-type", "application/json"),
+            ],
+            &patch,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        for (encoding, body, status) in [
+            ("br", rejected.clone(), StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            (
+                "gzip, br",
+                rejected_gzip,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            ("gzip", rejected, StatusCode::BAD_REQUEST),
+        ] {
+            let request = parsed_request(
+                "POST",
+                "http://localhost/storage/v1/b?project=test-project",
+                &[("content-encoding", encoding)],
+                &body,
+            )
+            .await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_eq!(response.status(), status, "{encoding}");
+            let json: serde_json::Value =
+                serde_json::from_slice(&read_test_body(response).await).unwrap();
+            assert!(json["error"]["message"].is_string());
+        }
+        assert!(!storage.bucket_exists("rejected-coding").unwrap());
+
+        let oversized = gzip(&vec![b' '; 4096]);
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("content-encoding", "gzip")],
+            &oversized,
+        )
+        .await;
+        let mut config = (*auth_disabled()).clone();
+        config.max_request_bytes = 1024;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &Arc::new(config), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
     #[tokio::test]
     async fn should_reject_unimplemented_gcs_xml_bucket_create_controls_without_mutation() {
         let storage = temp_storage();
@@ -6455,6 +6545,19 @@ impl GcsAdapter {
         auth_config: &Arc<AuthConfig>,
         req: &Request,
     ) -> Result<Response<Body>, String> {
+        let decoded;
+        let req = if Self::is_json_api_request(req) {
+            match Self::decode_json_content_encoding(req, auth_config.max_request_bytes) {
+                Ok(Some(request)) => {
+                    decoded = request;
+                    &decoded
+                }
+                Ok(None) => req,
+                Err(response) => return Ok(*response),
+            }
+        } else {
+            req
+        };
         if Self::is_json_api_request(req)
             && (req.path().starts_with("/storage/v1/")
                 || req.path().starts_with("/download/storage/v1/"))
@@ -6498,6 +6601,75 @@ impl GcsAdapter {
         } else {
             Ok(Self::handle_xml_bucket_request(storage, req, &bucket))
         }
+    }
+
+    /// Honour `Content-Encoding` on JSON API request bodies. The Google .NET client
+    /// gzips metadata documents by default, so a gzip body is decoded (bounded by
+    /// `SQRZL_MAX_REQUEST_BYTES` after decompression) before routing. Any other
+    /// coding is rejected rather than parsed as identity bytes.
+    fn decode_json_content_encoding(
+        req: &Request,
+        max_request_bytes: usize,
+    ) -> Result<Option<Request>, Box<Response<Body>>> {
+        let codings = req
+            .headers
+            .get_all(http::header::CONTENT_ENCODING)
+            .iter()
+            .map(|value| value.to_str().unwrap_or("\u{fffd}"))
+            .flat_map(|value| value.split(','))
+            .map(|coding| coding.trim().to_ascii_lowercase())
+            .filter(|coding| !coding.is_empty() && coding != "identity")
+            .collect::<Vec<_>>();
+        if codings.is_empty() {
+            return Ok(None);
+        }
+        if !matches!(codings.as_slice(), [coding] if coding == "gzip" || coding == "x-gzip") {
+            return Err(Box::new(Self::json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupportedMediaType",
+                &format!(
+                    "Content-Encoding {} is not supported; only gzip request bodies are decoded",
+                    codings.join(", ")
+                ),
+            )));
+        }
+        if req.spooled_body.is_some() {
+            // Media and multipart object bodies are streamed to disk; their bytes are
+            // object data, so a transfer coding there is refused rather than stored.
+            return Err(Box::new(Self::json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupportedMediaType",
+                "Content-Encoding gzip is supported on JSON API metadata requests, not on object media bodies",
+            )));
+        }
+        let mut decoded = Vec::new();
+        let limit = u64::try_from(max_request_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        if let Err(error) = flate2::read::GzDecoder::new(req.body.as_ref())
+            .take(limit)
+            .read_to_end(&mut decoded)
+        {
+            return Err(Box::new(Self::json_error(
+                StatusCode::BAD_REQUEST,
+                "invalidArgument",
+                &format!("Request body is not valid gzip: {error}"),
+            )));
+        }
+        if decoded.len() > max_request_bytes {
+            return Err(Box::new(Self::payload_too_large_response(
+                true,
+                max_request_bytes,
+            )));
+        }
+        let mut request = req.clone();
+        request.headers.remove(http::header::CONTENT_ENCODING);
+        request.headers.insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from(decoded.len()),
+        );
+        request.body = decoded.into();
+        Ok(Some(request))
     }
 
     fn handle_xml_root_request(storage: &Arc<dyn Storage>, req: &Request) -> Response<Body> {

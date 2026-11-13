@@ -330,7 +330,11 @@ JSON/XML upload paths also require `Content-Length`; GCS accepts
 surface's `411` error shape. Azure committed and uncommitted block bytes remain
 distinct, including `Committed`, `Uncommitted`, and `Latest` block-list
 selection. Declared body length mismatches are rejected before a provider
-mutation is dispatched. GCS JSON object metadata reports stored
+mutation is dispatched. GCS JSON API request bodies honour
+`Content-Encoding: gzip` (the Google .NET client default) for metadata documents
+and resumable-session metadata, bounded by `SQRZL_MAX_REQUEST_BYTES` after
+decompression; other codings, and any coding on streamed media bodies, return
+`415 unsupportedMediaType` instead of being parsed as identity bytes. GCS JSON object metadata reports stored
 bytes in its JSON `size` field while the HTTP `Content-Length` describes the
 JSON document. GCS JSON metadata updates preserve the object's generation,
 increment metageneration, and issue new `etag` and `updated` identity values.

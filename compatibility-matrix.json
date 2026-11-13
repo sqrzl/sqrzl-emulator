@@ -489,7 +489,8 @@
           "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
           "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
           "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
-          "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
+          "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
+          "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -631,7 +632,8 @@
           "providers::gcs::tests::should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url",
           "providers::tests::should_route_local_gcs_resumable_session_uris_back_to_gcs",
           "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
-          "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
+          "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing",
+          "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -6042,7 +6044,9 @@
             "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
             "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
             "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
-            "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
+            "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
+            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
+            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api"
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
@@ -6122,7 +6126,8 @@
             "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
             "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
+            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings"
           ],
           "sdk": []
         },
@@ -6526,7 +6531,8 @@
             "providers::gcs::tests::should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url",
             "providers::tests::should_route_local_gcs_resumable_session_uris_back_to_gcs",
             "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
-            "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
+            "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing",
+            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api"
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",

@@ -54,6 +54,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api",
+            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
             "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_and_reject_mixed_credentials",
             "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes",
             "storage_provider_parity::should_validate_s3_part_md5_before_replacing_an_acknowledged_part",
