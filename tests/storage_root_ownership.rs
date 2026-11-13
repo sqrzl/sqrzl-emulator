@@ -31,6 +31,8 @@ impl Runtime {
             .env_remove("SQRZL_ACS_CONNECTION_STRING")
             .env_remove("SQRZL_TWILIO_ACCOUNT_SID")
             .env_remove("SQRZL_TWILIO_AUTH_TOKEN")
+            .env_remove("SQRZL_TWILIO_API_KEY_SID")
+            .env_remove("SQRZL_TWILIO_API_KEY_SECRET")
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()

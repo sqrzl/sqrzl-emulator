@@ -54,6 +54,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_and_reject_mixed_credentials",
             "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes",
             "storage_provider_parity::should_validate_s3_part_md5_before_replacing_an_acknowledged_part",
             "storage_provider_parity::should_validate_gcs_xml_integrity_headers_before_publishing_an_object",
@@ -294,6 +295,7 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key",
             "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
             "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",

@@ -8,7 +8,13 @@ import urllib.request
 
 import pytest
 
-from conftest import ACS_ACCESS_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+from conftest import (
+    ACS_ACCESS_KEY,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_API_KEY_SECRET,
+    TWILIO_API_KEY_SID,
+    TWILIO_AUTH_TOKEN,
+)
 from test_email_sdk import _admin_json_request
 
 
@@ -58,6 +64,34 @@ def test_twilio_messages_sdk(sqrzl_server):
     with pytest.raises(urllib.error.HTTPError) as rejected:
         urllib.request.urlopen(request)
     assert rejected.value.code == 401
+
+
+def test_twilio_messages_sdk_with_api_key(sqrzl_server):
+    sqrzl_server.require_provider("twilio")
+    twilio = pytest.importorskip("twilio.rest")
+    client = twilio.Client(
+        TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, account_sid=TWILIO_ACCOUNT_SID
+    )
+    client.api.base_url = sqrzl_server.api_url
+
+    peer = "+15550001011"
+    message = client.messages.create(
+        to=peer, from_="+15550001000", body="Twilio API key SMS"
+    )
+
+    assert message.sid.startswith("SM")
+    stored = _messages_for_peer(sqrzl_server, peer)
+    assert any(item["provider_message_id"] == message.sid for item in stored)
+
+    wrong_secret = twilio.Client(
+        TWILIO_API_KEY_SID, "wrong-secret", account_sid=TWILIO_ACCOUNT_SID
+    )
+    wrong_secret.api.base_url = sqrzl_server.api_url
+    exceptions = pytest.importorskip("twilio.base.exceptions")
+    with pytest.raises(exceptions.TwilioRestException) as rejected:
+        wrong_secret.messages.create(to=peer, from_="+15550001000", body="denied")
+    assert rejected.value.status == 401
+    assert rejected.value.code == 20003
 
 
 def test_boto3_sns_direct_publish(sqrzl_server):

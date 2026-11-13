@@ -167,6 +167,8 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
 | `SQRZL_TWILIO_ACCOUNT_SID` | Twilio account SID; set with `SQRZL_TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication only when both Twilio values are present. |
 | `SQRZL_TWILIO_AUTH_TOKEN` | Twilio auth token; set with `SQRZL_TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
+| `SQRZL_TWILIO_API_KEY_SID` | Twilio API key SID (`SK...`); set with `SQRZL_TWILIO_API_KEY_SECRET` | Unset | Additional Basic credential accepted for the configured account when Twilio authentication is enabled. Callbacks stay signed with the auth token. |
+| `SQRZL_TWILIO_API_KEY_SECRET` | Twilio API key secret; set with `SQRZL_TWILIO_API_KEY_SID` | Unset | Password paired with `SQRZL_TWILIO_API_KEY_SID`. |
 | `SQRZL_ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
 | `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
 | `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each inbound or delivery callback attempt. |

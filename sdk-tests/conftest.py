@@ -33,6 +33,8 @@ AZURE_ACCOUNT = "devstoreaccount1"
 ACS_ACCESS_KEY = base64.b64encode(b"shared-secret").decode("ascii")
 TWILIO_ACCOUNT_SID = "AC00000000000000000000000000000001"
 TWILIO_AUTH_TOKEN = "sqrzl-twilio-token"
+TWILIO_API_KEY_SID = "SK00000000000000000000000000000001"
+TWILIO_API_KEY_SECRET = "sqrzl-twilio-api-key-secret"
 SENDGRID_API_KEY = "SG.sqrzl-sdk-qualification"
 
 
@@ -445,6 +447,8 @@ def sqrzl_server() -> SqrzlSettings:
         "SQRZL_ACS_CONNECTION_STRING",
         "SQRZL_TWILIO_ACCOUNT_SID",
         "SQRZL_TWILIO_AUTH_TOKEN",
+        "SQRZL_TWILIO_API_KEY_SID",
+        "SQRZL_TWILIO_API_KEY_SECRET",
         "SQRZL_SENDGRID_API_KEY",
     ]:
         env.pop(name, None)
@@ -465,6 +469,8 @@ def sqrzl_server() -> SqrzlSettings:
     if "twilio" in enabled_providers:
         env["SQRZL_TWILIO_ACCOUNT_SID"] = TWILIO_ACCOUNT_SID
         env["SQRZL_TWILIO_AUTH_TOKEN"] = TWILIO_AUTH_TOKEN
+        env["SQRZL_TWILIO_API_KEY_SID"] = TWILIO_API_KEY_SID
+        env["SQRZL_TWILIO_API_KEY_SECRET"] = TWILIO_API_KEY_SECRET
     if "sendgrid" in enabled_providers:
         env["SQRZL_SENDGRID_API_KEY"] = SENDGRID_API_KEY
     if enforce_auth:

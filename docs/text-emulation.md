@@ -47,7 +47,10 @@ delivery state. Callback redirects are not followed. Callback hosts default to
 to 5000.
 
 Set both `SQRZL_TWILIO_ACCOUNT_SID` and `SQRZL_TWILIO_AUTH_TOKEN` to require
-Twilio Basic authentication and sign inbound/status callback forms. AWS adapters
+Twilio Basic authentication and sign inbound/status callback forms. Optionally
+set `SQRZL_TWILIO_API_KEY_SID` and `SQRZL_TWILIO_API_KEY_SECRET` to also accept
+an API key (`SK...` SID as the user name) for the configured account; callbacks
+are still signed with the auth token, as on Twilio. AWS adapters
 reuse `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`. ACS SMS reuses
 `SQRZL_ACS_CONNECTION_STRING`.
 

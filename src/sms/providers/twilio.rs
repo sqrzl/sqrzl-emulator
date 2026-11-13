@@ -123,7 +123,13 @@ impl TwilioSmsAdapter {
         let Ok(decoded) = BASE64.decode(value) else {
             return false;
         };
-        decoded == format!("{account}:{token}").as_bytes()
+        basic_credentials_match(&decoded, &account, &token, Self::api_key())
+    }
+
+    fn api_key() -> Option<(String, String)> {
+        let sid = std::env::var("SQRZL_TWILIO_API_KEY_SID").ok()?;
+        let secret = std::env::var("SQRZL_TWILIO_API_KEY_SECRET").ok()?;
+        (!sid.is_empty() && !secret.is_empty()).then_some((sid, secret))
     }
 
     fn error(status: StatusCode, code: u16, message: &str) -> Response<Body> {
@@ -318,6 +324,18 @@ impl TwilioSmsAdapter {
     }
 }
 
+/// Twilio accepts `AccountSid:AuthToken` or an API key (`SK` SID + secret) scoped to
+/// the account. Callbacks remain signed with the auth token, so the secrets stay distinct.
+fn basic_credentials_match(
+    decoded: &[u8],
+    account: &str,
+    token: &str,
+    api_key: Option<(String, String)>,
+) -> bool {
+    decoded == format!("{account}:{token}").as_bytes()
+        || api_key.is_some_and(|(sid, secret)| decoded == format!("{sid}:{secret}").as_bytes())
+}
+
 fn valid_twilio_sid(value: &str, prefix: &str) -> bool {
     value.len() == 34
         && value.starts_with(prefix)
@@ -428,4 +446,35 @@ fn validate_send_fields(fields: &[(String, String)]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::basic_credentials_match;
+
+    const ACCOUNT: &str = "AC00000000000000000000000000000001";
+    const KEY_SID: &str = "SK00000000000000000000000000000001";
+
+    #[test]
+    fn should_accept_auth_token_or_api_key_and_reject_mixed_credentials() {
+        let key = || Some((KEY_SID.to_string(), "key-secret".to_string()));
+        let token_pair = format!("{ACCOUNT}:token");
+        let key_pair = format!("{KEY_SID}:key-secret");
+
+        assert!(basic_credentials_match(token_pair.as_bytes(), ACCOUNT, "token", key()));
+        assert!(basic_credentials_match(key_pair.as_bytes(), ACCOUNT, "token", key()));
+        assert!(!basic_credentials_match(key_pair.as_bytes(), ACCOUNT, "token", None));
+        assert!(!basic_credentials_match(
+            format!("{KEY_SID}:token").as_bytes(),
+            ACCOUNT,
+            "token",
+            key()
+        ));
+        assert!(!basic_credentials_match(
+            format!("{ACCOUNT}:key-secret").as_bytes(),
+            ACCOUNT,
+            "token",
+            key()
+        ));
+    }
 }

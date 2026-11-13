@@ -5511,6 +5511,38 @@
           "native-error"
         ]
       }
+    },
+    "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key": {
+      "provider": "twilio",
+      "operations": [
+        "CreateMessage"
+      ],
+      "checks": [
+        "positive",
+        "native-auth"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateMessage": [
+          "positive",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "twilio.CreateMessage.post.form"
+      ],
+      "operation_id_aliases": {
+        "CreateMessage": [
+          "twilio.CreateMessage.post.form"
+        ]
+      },
+      "operation_id_checks": {
+        "twilio.CreateMessage.post.form": [
+          "positive",
+          "native-auth"
+        ]
+      }
     }
   }
 }

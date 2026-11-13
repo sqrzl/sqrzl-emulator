@@ -853,14 +853,16 @@
           "sms::providers::tests::should_reject_invalid_twilio_sids_media_and_unsupported_fields_without_capture",
           "sms::providers::tests::should_render_provider_shaped_incomplete_body_responses",
           "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
-          "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
+          "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api",
+          "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_and_reject_mixed_credentials"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
+          "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk",
+          "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key"
         ],
         "limitations": [
-          "Outbound creation accepts only To, From or MessagingServiceSid, optional Body, up to 10 absolute HTTP(S) MediaUrl values, and a safety-allowlisted StatusCallback. Account/Messaging Service SIDs, E.164 values, media, 1600-character body limit, initial accepted/queued status, and Twilio error envelopes are validated before capture. Other create parameters, TwiML execution, remote media fetching, WhatsApp, RCS, voice, scheduling, automatic delivery timing, and provider management APIs are unsupported."
+          "Outbound creation accepts only To, From or MessagingServiceSid, optional Body, up to 10 absolute HTTP(S) MediaUrl values, and a safety-allowlisted StatusCallback. Account/Messaging Service SIDs, E.164 values, media, 1600-character body limit, initial accepted/queued status, and Twilio error envelopes are validated before capture. When authentication is enabled, Basic credentials may be the account auth token or an optional configured API key (SK SID and secret); status callbacks stay signed with the auth token. Other create parameters, TwiML execution, remote media fetching, WhatsApp, RCS, voice, scheduling, automatic delivery timing, and provider management APIs are unsupported."
         ]
       }
     },
@@ -8291,7 +8293,7 @@
         "path": "/2010-04-01/Accounts/{sid}/Messages.json",
         "variant": "form",
         "support_tier": "partial",
-        "boundary": "Selected SMS/MMS fields and token authentication; remote media is not fetched.",
+        "boundary": "Selected SMS/MMS fields with auth-token or API-key Basic authentication; remote media is not fetched.",
         "evidence_candidates": {
           "rust": [
             "sms::providers::tests::should_capture_twilio_repeated_media_and_return_sdk_resource",
@@ -8299,11 +8301,13 @@
             "sms::providers::tests::should_reject_invalid_twilio_sids_media_and_unsupported_fields_without_capture",
             "sms::providers::tests::should_render_provider_shaped_incomplete_body_responses",
             "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
-            "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
+            "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api",
+            "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_and_reject_mixed_credentials"
           ],
           "sdk": [
             "sdk-tests/test_messaging_acceptance.py::test_twilio_native_auth_and_body_boundary",
-            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
+            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk",
+            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key"
           ]
         },
         "acceptance_gates": {
