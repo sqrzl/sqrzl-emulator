@@ -278,7 +278,7 @@ impl AcsSmsAdapter {
     }
 
     fn connection_key() -> Option<String> {
-        std::env::var("SQRZL_ACS_CONNECTION_STRING")
+        std::env::var("ACS_CONNECTION_STRING")
             .ok()
             .and_then(|value| parse_connection_string(&value))
             .map(|connection| connection.access_key)

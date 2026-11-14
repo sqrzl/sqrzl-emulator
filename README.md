@@ -133,7 +133,10 @@ docker run --rm \
 
 ## Environment variables
 
-The table below is the complete runtime configuration surface.
+The table below is the complete runtime configuration surface. `SQRZL_*` is
+reserved for emulator settings, including shared authentication and callback
+policy. Vendor credentials and resource settings use their provider prefix
+(`AZURE_*`, `GCS_*`, `OCI_*`, `TWILIO_*`, `SENDGRID_*`, `ACS_*`, or `SES_*`).
 
 | Variable | Accepted values | Default | Description |
 | --- | --- | --- | --- |
@@ -141,7 +144,7 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | S3 signing secret and admin password. Also supplies the Azure account key or GCS HMAC secret when that provider's native override is unset. |
 | `AZURE_ACCOUNT` | Azure storage account name; set with `AZURE_ACCOUNT_KEY` | Generic access key, otherwise unset | Azure Shared Key and SAS account override. These vendor-native variables intentionally have no `SQRZL_` prefix. |
 | `AZURE_ACCOUNT_KEY` | Azure storage account key; set with `AZURE_ACCOUNT` | Generic secret, otherwise unset | Azure Shared Key and SAS signing key. Valid Base64 is decoded as Azure key material; other values are used literally. Also the local bearer token accepted by Get User Delegation Key. |
-| `SQRZL_AZURE_ENCRYPTION_SCOPES` | Comma-separated Azure encryption scope names | Unset (no scopes exist) | Scopes that `x-ms-encryption-scope` and SAS `ses` may name. Any other scope returns `403 AuthorizationFailure`. |
+| `AZURE_ENCRYPTION_SCOPES` | Comma-separated Azure encryption scope names | Unset (no scopes exist) | Scopes that `x-ms-encryption-scope` and SAS `ses` may name. Any other scope returns `403 AuthorizationFailure`. |
 | `GCS_HMAC_ACCESS_ID` | GCS interoperability HMAC access ID; set with `GCS_HMAC_SECRET` | Generic access key, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signed-URL identity. |
 | `GCS_HMAC_SECRET` | GCS interoperability HMAC secret; set with `GCS_HMAC_ACCESS_ID` | Generic secret, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signing secret. |
 | `OCI_TENANCY_OCID` | OCI tenancy OCID | Unset | First component of the accepted OCI request-signing key ID. Configure all four OCI variables together. |
@@ -165,15 +168,15 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names use the Amazon S3 general-purpose rules: 3–63 lowercase letters, digits, periods, or hyphens; an alphanumeric first and last character; no adjacent periods, IP-address form, or AWS-reserved affix. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
 | `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
-| `SQRZL_SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
-| `SQRZL_TWILIO_ACCOUNT_SID` | Twilio account SID; set with `SQRZL_TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication only when both Twilio values are present. |
-| `SQRZL_TWILIO_AUTH_TOKEN` | Twilio auth token; set with `SQRZL_TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
-| `SQRZL_TWILIO_API_KEY_SID` | Twilio API key SID (`SK...`); set with `SQRZL_TWILIO_API_KEY_SECRET` | Unset | Additional Basic credential accepted for the configured account when Twilio authentication is enabled. Callbacks stay signed with the auth token. |
-| `SQRZL_TWILIO_API_KEY_SECRET` | Twilio API key secret; set with `SQRZL_TWILIO_API_KEY_SID` | Unset | Password paired with `SQRZL_TWILIO_API_KEY_SID`. |
-| `SQRZL_ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
+| `SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID; set with `TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication only when both Twilio values are present. |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token; set with `TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
+| `TWILIO_API_KEY_SID` | Twilio API key SID (`SK...`); set with `TWILIO_API_KEY_SECRET` | Unset | Additional Basic credential accepted for the configured account when Twilio authentication is enabled. Callbacks stay signed with the auth token. |
+| `TWILIO_API_KEY_SECRET` | Twilio API key secret; set with `TWILIO_API_KEY_SID` | Unset | Password paired with `TWILIO_API_KEY_SID`. |
+| `ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
 | `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
 | `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each inbound or delivery callback attempt. |
-| `SQRZL_SES_CONFIGURATION_SETS` | Comma-separated SES configuration set names | Unset | When set, SES `SendEmail` with an unlisted `ConfigurationSetName` returns `NotFoundException`. When unset, any valid name is accepted. |
+| `SES_CONFIGURATION_SETS` | Comma-separated SES configuration set names | Unset | When set, SES `SendEmail` with an unlisted `ConfigurationSetName` returns `NotFoundException`. When unset, any valid name is accepted. |
 | `SQRZL_MAIL_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds SES event callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
 | `SQRZL_MAIL_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each simulated SES event callback. |
 
@@ -277,7 +280,7 @@ All provider APIs use the storage listener, normally
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
 | OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/sqrzl-emulator/b/<bucket>/...`; namespace discovery returns `sqrzl-emulator`. Authenticated requests use the four `OCI_*` identity/public-key variables and OCI RSA-SHA256 request signing. |
 | SMTP | SMTP server `localhost:2525` | Plaintext local capture with strict envelope paths and null reverse-path support; SMTP AUTH and STARTTLS are intentionally unsupported. |
-| SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
+| SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SENDGRID_API_KEY` bearer authentication. |
 | Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4, including validated `EmailTags` and `ConfigurationSetName`; Raw, Template, and attachments are rejected. Admin-driven event publishing emits SES records (see below). |
 | ACS Email | Connection-string endpoint `http://localhost:9000` | Supports the matrix-listed `POST /emails:send` subset, operation polling, caller operation IDs, repeatability, and ACS HMAC authentication. |
 | Twilio Messages | API base `http://localhost:9000` | Supports outbound SMS/MMS references plus admin-driven inbound and delivery simulation. |
@@ -531,7 +534,7 @@ This example expects Sqrzl authentication to be disabled.
 ### Azure encryption scopes, server-side copy, and user delegation SAS
 
 - **Encryption scopes.** Declare the scope names your tests use in
-  `SQRZL_AZURE_ENCRYPTION_SCOPES`. Put Blob, Put Block, Put Block List, and
+  `AZURE_ENCRYPTION_SCOPES`. Put Blob, Put Block, Put Block List, and
   Copy Blob From URL record the scope from `x-ms-encryption-scope` or from a
   SAS `ses` field. The scope is returned in `x-ms-encryption-scope`, in Get
   Blob Properties, and in listings.

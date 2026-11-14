@@ -102,8 +102,8 @@ impl TwilioSmsAdapter {
     }
 
     fn credentials() -> Option<(String, String)> {
-        let account = std::env::var("SQRZL_TWILIO_ACCOUNT_SID").ok()?;
-        let token = std::env::var("SQRZL_TWILIO_AUTH_TOKEN").ok()?;
+        let account = std::env::var("TWILIO_ACCOUNT_SID").ok()?;
+        let token = std::env::var("TWILIO_AUTH_TOKEN").ok()?;
         Some((account, token))
     }
 
@@ -127,8 +127,8 @@ impl TwilioSmsAdapter {
     }
 
     fn api_key() -> Option<(String, String)> {
-        let sid = std::env::var("SQRZL_TWILIO_API_KEY_SID").ok()?;
-        let secret = std::env::var("SQRZL_TWILIO_API_KEY_SECRET").ok()?;
+        let sid = std::env::var("TWILIO_API_KEY_SID").ok()?;
+        let secret = std::env::var("TWILIO_API_KEY_SECRET").ok()?;
         (!sid.is_empty() && !secret.is_empty()).then_some((sid, secret))
     }
 

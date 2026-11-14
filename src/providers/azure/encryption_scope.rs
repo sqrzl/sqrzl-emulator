@@ -3,7 +3,7 @@
 //! Scopes are named server-side keys in a real storage account. The emulator
 //! does not encrypt anything; it records the scope name per blob, returns it on
 //! reads, and rejects scope names the operator has not declared through
-//! `SQRZL_AZURE_ENCRYPTION_SCOPES`, so an unknown scope fails as it does on
+//! `AZURE_ENCRYPTION_SCOPES`, so an unknown scope fails as it does on
 //! Azure instead of being silently dropped.
 
 use super::{AzureBlobAdapter, Request};
@@ -13,7 +13,7 @@ use hyper::Response;
 
 /// Provider metadata key recording the scope a blob was written with.
 pub(super) const AZURE_ENCRYPTION_SCOPE_KEY: &str = "azure_encryption_scope";
-const AZURE_ENCRYPTION_SCOPES_ENV: &str = "SQRZL_AZURE_ENCRYPTION_SCOPES";
+const AZURE_ENCRYPTION_SCOPES_ENV: &str = "AZURE_ENCRYPTION_SCOPES";
 const SCOPE_HEADER: &str = "x-ms-encryption-scope";
 
 fn declared_scopes() -> Vec<String> {

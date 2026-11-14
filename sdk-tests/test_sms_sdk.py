@@ -164,7 +164,7 @@ def test_azure_communication_sms_sdk(sqrzl_server):
     connection_string = (
         f"endpoint={sqrzl_server.api_url};accesskey={ACS_ACCESS_KEY}"
     )
-    os.environ["SQRZL_ACS_CONNECTION_STRING"] = connection_string
+    os.environ["ACS_CONNECTION_STRING"] = connection_string
     client = sms_mod.SmsClient.from_connection_string(
         connection_string,
         transport=LocalHttpTransport(),

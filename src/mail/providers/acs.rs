@@ -17,7 +17,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-const ENV_ACS_CONNECTION_STRING: &str = "SQRZL_ACS_CONNECTION_STRING";
+const ENV_ACS_CONNECTION_STRING: &str = "ACS_CONNECTION_STRING";
 const ACS_EMAIL_MAX_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 const ACS_EMAIL_MAX_RECIPIENTS: usize = 50;
 const ACS_EMAIL_API_VERSIONS: &[&str] = &["2023-03-01", "2023-03-31", "2025-09-01"];

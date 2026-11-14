@@ -23,7 +23,7 @@ pub const SES_EMAIL_TAGS_METADATA: &str = "ses_email_tags";
 pub const SES_CONFIGURATION_SET_METADATA: &str = "ses_configuration_set_name";
 /// Comma-separated configuration set names that exist. When unset, any valid
 /// name is accepted; when set, other names fail with `NotFoundException`.
-pub const ENV_SES_CONFIGURATION_SETS: &str = "SQRZL_SES_CONFIGURATION_SETS";
+pub const ENV_SES_CONFIGURATION_SETS: &str = "SES_CONFIGURATION_SETS";
 
 impl SesEmailAdapter {
     fn invalid_request_response(message: &str) -> Response<Body> {

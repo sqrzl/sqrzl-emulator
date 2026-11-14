@@ -198,7 +198,7 @@ fn twilio_callback_payload(
     kind: CallbackKind,
     url: &str,
 ) -> (String, HashMap<String, String>) {
-    let account_sid = std::env::var("SQRZL_TWILIO_ACCOUNT_SID")
+    let account_sid = std::env::var("TWILIO_ACCOUNT_SID")
         .unwrap_or_else(|_| "AC00000000000000000000000000000000".to_string());
     let mut fields = vec![
         ("AccountSid".to_string(), account_sid.clone()),
@@ -249,7 +249,7 @@ fn twilio_callback_payload(
         "content-type".to_string(),
         "application/x-www-form-urlencoded".to_string(),
     )]);
-    if let Ok(token) = std::env::var("SQRZL_TWILIO_AUTH_TOKEN") {
+    if let Ok(token) = std::env::var("TWILIO_AUTH_TOKEN") {
         let signature = twilio_signature(url, &fields, &token);
         headers.insert("x-twilio-signature".to_string(), signature);
     }
@@ -632,7 +632,7 @@ mod tests {
             bytes
         });
 
-        std::env::set_var("SQRZL_TWILIO_AUTH_TOKEN", "callback-secret");
+        std::env::set_var("TWILIO_AUTH_TOKEN", "callback-secret");
         let store: Arc<dyn SmsStore> = Arc::new(
             FilesystemSmsStore::open(
                 std::env::temp_dir().join(format!("sqrzl-simulator-test-{}", uuid::Uuid::new_v4())),
@@ -682,7 +682,7 @@ mod tests {
             store.get_message(&message.message_id).unwrap().body,
             "hello"
         );
-        std::env::remove_var("SQRZL_TWILIO_AUTH_TOKEN");
+        std::env::remove_var("TWILIO_AUTH_TOKEN");
     }
 
     #[test]

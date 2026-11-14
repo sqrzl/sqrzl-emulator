@@ -16,7 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-const ENV_SENDGRID_API_KEY: &str = "SQRZL_SENDGRID_API_KEY";
+const ENV_SENDGRID_API_KEY: &str = "SENDGRID_API_KEY";
 const SENDGRID_MAX_MESSAGE_BYTES: usize = 30 * 1024 * 1024;
 
 pub struct SendGridAdapter;
@@ -310,7 +310,7 @@ impl crate::mail::providers::MailAdapter for SendGridAdapter {
                 return Ok(ResponseBuilder::new(StatusCode::UNAUTHORIZED)
                     .content_type("application/json; charset=utf-8")
                     .body(
-                        serde_json::json!({"errors":[{"message":"Unauthorized","field":"authorization","help":"Set Authorization: Bearer <SQRZL_SENDGRID_API_KEY>"}]})
+                        serde_json::json!({"errors":[{"message":"Unauthorized","field":"authorization","help":"Set Authorization: Bearer <SENDGRID_API_KEY>"}]})
                             .to_string()
                             .into_bytes(),
                     )

@@ -236,13 +236,13 @@ jobs:
             --name sqrzl-emulator-smoke \
             --network host \
             -e SQRZL_ADMIN_AUTH_DISABLED=true \
-            -e SQRZL_TWILIO_ACCOUNT_SID=AC00000000000000000000000000000001 \
-            -e SQRZL_TWILIO_AUTH_TOKEN=sqrzl-twilio-token \
-            -e SQRZL_TWILIO_API_KEY_SID=SK00000000000000000000000000000001 \
-            -e SQRZL_TWILIO_API_KEY_SECRET=sqrzl-twilio-api-key-secret \
-            -e SQRZL_SES_CONFIGURATION_SETS=sqrzl-events \
-            -e SQRZL_AZURE_ENCRYPTION_SCOPES=tenant-a,tenant-b \
-            -e 'SQRZL_ACS_CONNECTION_STRING=endpoint=http://127.0.0.1:9000;accesskey=c2hhcmVkLXNlY3JldA==' \
+            -e TWILIO_ACCOUNT_SID=AC00000000000000000000000000000001 \
+            -e TWILIO_AUTH_TOKEN=sqrzl-twilio-token \
+            -e TWILIO_API_KEY_SID=SK00000000000000000000000000000001 \
+            -e TWILIO_API_KEY_SECRET=sqrzl-twilio-api-key-secret \
+            -e SES_CONFIGURATION_SETS=sqrzl-events \
+            -e AZURE_ENCRYPTION_SCOPES=tenant-a,tenant-b \
+            -e 'ACS_CONNECTION_STRING=endpoint=http://127.0.0.1:9000;accesskey=c2hhcmVkLXNlY3JldA==' \
             sqrzl-emulator:smoke
 
       - name: Wait for health

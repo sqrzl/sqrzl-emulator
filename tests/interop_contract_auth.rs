@@ -766,10 +766,10 @@ async fn should_preserve_valid_signed_workflows_given_aws_front_doors_when_date_
 #[tokio::test(flavor = "multi_thread")]
 async fn should_reject_invalid_acs_hmac_dates_given_email_and_sms_when_auth_is_configured() {
     // Arrange
-    let previous = std::env::var("SQRZL_ACS_CONNECTION_STRING").ok();
+    let previous = std::env::var("ACS_CONNECTION_STRING").ok();
     let key = BASE64.encode(b"audit-secret");
     std::env::set_var(
-        "SQRZL_ACS_CONNECTION_STRING",
+        "ACS_CONNECTION_STRING",
         format!("endpoint=http://localhost;accesskey={key}"),
     );
     let now = Utc::now();
@@ -813,9 +813,9 @@ async fn should_reject_invalid_acs_hmac_dates_given_email_and_sms_when_auth_is_c
         }
     }
     if let Some(previous) = previous {
-        std::env::set_var("SQRZL_ACS_CONNECTION_STRING", previous);
+        std::env::set_var("ACS_CONNECTION_STRING", previous);
     } else {
-        std::env::remove_var("SQRZL_ACS_CONNECTION_STRING");
+        std::env::remove_var("ACS_CONNECTION_STRING");
     }
     assert!(
         failures.is_empty(),

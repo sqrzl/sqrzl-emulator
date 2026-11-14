@@ -320,7 +320,7 @@ def test_azure_communication_email_sdk_send(sqrzl_server):
 
     mailbox, subject = _mailbox_subject("acs")
     access_key = base64.b64encode(b"shared-secret").decode("ascii")
-    os.environ["SQRZL_ACS_CONNECTION_STRING"] = (
+    os.environ["ACS_CONNECTION_STRING"] = (
         f"endpoint={sqrzl_server.api_url};accesskey={access_key}"
     )
 
@@ -335,7 +335,7 @@ def test_azure_communication_email_sdk_send(sqrzl_server):
             return super().send(request, **kwargs)
 
     client = email_mod.EmailClient.from_connection_string(
-        os.environ["SQRZL_ACS_CONNECTION_STRING"],
+        os.environ["ACS_CONNECTION_STRING"],
         transport=LocalHttpTransport(),
     )
 
