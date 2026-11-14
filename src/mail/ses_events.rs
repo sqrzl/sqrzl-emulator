@@ -225,6 +225,17 @@ impl SesEventRequest {
         }
         Ok(())
     }
+    fn fingerprint(&self) -> Result<String> {
+        let mut payload =
+            serde_json::to_value(self).map_err(|error| Error::InternalError(error.to_string()))?;
+        payload
+            .as_object_mut()
+            .ok_or_else(|| {
+                Error::InternalError("SES request serialization must produce an object".to_string())
+            })?
+            .remove("request_id");
+        Ok(hex::encode(Sha256::digest(payload.to_string().as_bytes())))
+    }
 }
 
 /// Validate a callback destination against the mail callback allowlist.
@@ -260,15 +271,7 @@ impl SesEventSimulator {
             "ses-event-{}",
             hex::encode(Sha256::digest(request_id.as_bytes()))
         );
-        let mut payload = serde_json::to_value(&request)
-            .map_err(|error| Error::InternalError(error.to_string()))?;
-        payload
-            .as_object_mut()
-            .ok_or_else(|| {
-                Error::InternalError("SES request serialization must produce an object".to_string())
-            })?
-            .remove("request_id");
-        let fingerprint = hex::encode(Sha256::digest(payload.to_string().as_bytes()));
+        let fingerprint = request.fingerprint()?;
         match self.store.get_ses_event(&event_id) {
             Ok(event) => return replay(event, &fingerprint),
             Err(Error::MessageNotFound) => {}
