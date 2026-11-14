@@ -5543,6 +5543,71 @@
           "native-auth"
         ]
       }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names": {
+      "provider": "gcs",
+      "operations": [
+        "CreateBucket",
+        "PatchBucket",
+        "InsertObject",
+        "GetObject"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CreateBucket": [
+          "positive"
+        ],
+        "PatchBucket": [
+          "positive"
+        ],
+        "InsertObject": [
+          "positive",
+          "negative"
+        ],
+        "GetObject": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "gcs.CreateBucket.post.json",
+        "gcs.PatchBucket.patch.json",
+        "gcs.InsertObject.post.json-multipart",
+        "gcs.GetObject.get.json-metadata"
+      ],
+      "operation_id_aliases": {
+        "CreateBucket": [
+          "gcs.CreateBucket.post.json"
+        ],
+        "PatchBucket": [
+          "gcs.PatchBucket.patch.json"
+        ],
+        "InsertObject": [
+          "gcs.InsertObject.post.json-multipart"
+        ],
+        "GetObject": [
+          "gcs.GetObject.get.json-metadata"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.CreateBucket.post.json": [
+          "positive"
+        ],
+        "gcs.PatchBucket.patch.json": [
+          "positive"
+        ],
+        "gcs.InsertObject.post.json-multipart": [
+          "positive",
+          "negative"
+        ],
+        "gcs.GetObject.get.json-metadata": [
+          "positive"
+        ]
+      }
     }
   }
 }

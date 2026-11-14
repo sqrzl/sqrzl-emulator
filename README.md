@@ -406,6 +406,15 @@ retention rejects replacement or deletion through both JSON and XML object
 surfaces. Policy locking, per-object retention, writable server-owned policy
 fields, and disabling an enabled soft-delete policy are explicitly rejected as
 `501 UNIMPLEMENTED` rather than approximated.
+GCS customer-managed encryption keys are modelled locally without
+cryptography: bucket `encryption.defaultKmsKeyName` is accepted on create and
+PATCH (`null` clears it), JSON uploads accept `kmsKeyName`, and XML uploads
+accept `x-goog-encryption-kms-key-name`. Key names must match
+`projects/*/locations/*/keyRings/*/cryptoKeys/*` or the upload fails with `400`
+before mutation. The bucket default applies when an upload names no key, and
+object resources return `kmsKeyName` with a `/cryptoKeyVersions/1` suffix. Key
+existence, IAM, and rotation are not modelled; encryption enforcement configs
+return `501`.
 For focused Azure data-plane tests, create a container with
 `x-sqrzl-azure-versioning-enabled: true` or
 `x-sqrzl-azure-soft-delete-days: <1-365>`. These are emulator mode selectors,

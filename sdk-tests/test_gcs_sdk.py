@@ -285,6 +285,49 @@ def test_gcs_core_json_workflows(sqrzl_server):
     bucket.delete()
 
 
+def test_gcs_cmek_default_and_explicit_key_names(sqrzl_server):
+    sqrzl_server.require_provider("gcs")
+    exceptions = pytest.importorskip("google.api_core.exceptions")
+    client = _client(sqrzl_server)
+    default_key = "projects/sqrzl/locations/us/keyRings/tenants/cryptoKeys/default"
+    tenant_key = "projects/sqrzl/locations/us/keyRings/tenants/cryptoKeys/tenant-a"
+
+    bucket = client.bucket(sqrzl_server.bucket_name("sdk-gcs-cmek"))
+    bucket.default_kms_key_name = default_key
+    bucket.create()
+    bucket.reload()
+    assert bucket.default_kms_key_name == default_key
+
+    defaulted = bucket.blob("defaulted.txt")
+    defaulted.upload_from_string(b"default key")
+    defaulted.reload()
+    assert defaulted.kms_key_name == f"{default_key}/cryptoKeyVersions/1"
+
+    explicit = bucket.blob("explicit.txt", kms_key_name=tenant_key)
+    explicit.upload_from_string(b"tenant key")
+    fetched = bucket.get_blob("explicit.txt")
+    assert fetched.kms_key_name == f"{tenant_key}/cryptoKeyVersions/1"
+    assert fetched.download_as_bytes() == b"tenant key"
+
+    invalid = bucket.blob("invalid.txt", kms_key_name="tenant-a")
+    with pytest.raises(exceptions.BadRequest):
+        invalid.upload_from_string(b"rejected")
+    assert bucket.get_blob("invalid.txt") is None
+
+    bucket.default_kms_key_name = None
+    bucket.patch()
+    bucket.reload()
+    assert bucket.default_kms_key_name is None
+    plain = bucket.blob("plain.txt")
+    plain.upload_from_string(b"no key")
+    plain.reload()
+    assert plain.kms_key_name is None
+
+    for blob in client.list_blobs(bucket):
+        blob.delete()
+    bucket.delete()
+
+
 def test_gcs_resumable_upload_workflow(sqrzl_server):
     sqrzl_server.require_provider("gcs")
     client = _client(sqrzl_server)

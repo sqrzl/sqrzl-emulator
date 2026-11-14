@@ -663,14 +663,17 @@
           "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
           "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
           "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-          "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+          "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
+          "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+          "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
         ],
         "limitations": [
-          "Unlocked bucket-retention and 7-to-less-than-90-day soft-delete configuration are locally covered and are mutually exclusive with S3 or Azure data-protection ownership of the bucket; conflicting activation returns FAILED_PRECONDITION 409 without mutation. Retention-policy locking, per-object retention, writable server-owned policy fields, and disabling an enabled soft-delete policy are explicitly rejected and are not claimed as compatible."
+          "Unlocked bucket-retention and 7-to-less-than-90-day soft-delete configuration are locally covered and are mutually exclusive with S3 or Azure data-protection ownership of the bucket; conflicting activation returns FAILED_PRECONDITION 409 without mutation. Retention-policy locking, per-object retention, writable server-owned policy fields, and disabling an enabled soft-delete policy are explicitly rejected and are not claimed as compatible.",
+          "Customer-managed encryption is modelled without cryptography: bucket encryption.defaultKmsKeyName is accepted on insert/patch and returned on get; kmsKeyName on JSON uploads (and x-goog-encryption-kms-key-name on XML uploads) must match projects/*/locations/*/keyRings/*/cryptoKeys/*, otherwise the request fails before mutation. The bucket default applies when an upload names no key, and object resources report the key with a /cryptoKeyVersions/1 suffix. KMS key existence, IAM, rotation, and encryption-enforcement configs are not modelled; enforcement configs are rejected with 501."
         ]
       }
     },
@@ -6036,7 +6039,7 @@
         "path": "/storage/v1/b?project={project}",
         "variant": "json",
         "support_tier": "partial",
-        "boundary": "Name, selected retention/soft-delete; native unsupported controls rejected.",
+        "boundary": "Name, selected retention/soft-delete, and a local default KMS key name; native unsupported controls rejected.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
@@ -6046,11 +6049,13 @@
             "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
             "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
-            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api"
+            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
           ]
         },
         "acceptance_gates": {
@@ -6109,7 +6114,7 @@
         "path": "/storage/v1/b/{bucket}",
         "variant": "json",
         "support_tier": "partial",
-        "boundary": "Typed selected retention/soft-delete; unknown controls fail before mutation.",
+        "boundary": "Typed selected retention/soft-delete and default KMS key name; unknown controls fail before mutation.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
@@ -6127,9 +6132,12 @@
             "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
             "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
-            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings"
+            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6230,12 +6238,14 @@
             "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
             "interop_gcs::should_return_custom_metadata_given_gcs_metadata_headers_when_requesting_object_head",
             "provider_conformance::should_report_gcs_json_metadata_document_length_separately_from_object_size",
-            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version"
+            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
-            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
           ]
         },
         "acceptance_gates": {
@@ -6446,7 +6456,8 @@
             "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
             "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
           "sdk": []
         },
@@ -6493,7 +6504,8 @@
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
           ]
         },
         "acceptance_gates": {
