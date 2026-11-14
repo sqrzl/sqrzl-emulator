@@ -1,5 +1,21 @@
 # Release notes
 
+## Configuration and admin reliability
+
+Vendor settings now use `TWILIO_*`, `SENDGRID_API_KEY`, `ACS_CONNECTION_STRING`,
+`AZURE_ENCRYPTION_SCOPES`, and `SES_CONFIGURATION_SETS`. Update deployments that
+used the former SQRZL-prefixed vendor names. `SQRZL_*` remains reserved for emulator
+controls. Incomplete generic or Twilio credentials, empty credentials and invalid
+ACS connection strings fail startup. Lifecycle duration overflow is rejected.
+
+SES simulations accept stable request IDs, persist intent before external delivery,
+and retain pending outcomes across interruption without automatic callback resend.
+Concurrent event destination updates no longer share temporary filenames.
+
+The admin UI supports dotted deep-link reloads, open-mode entry, visible retry
+actions and an unknown-route fallback. The generated client includes SES event
+operations and is checked against OpenAPI in CI.
+
 ## Concurrent object reads
 
 Within one emulator instance, object GET, HEAD, range, and version reads now
@@ -22,3 +38,18 @@ Provider compatibility claims affected by the contract audit are temporarily
 demoted to partial. Certification will be restored only after authenticated
 official-SDK, negative-contract, pagination, restart-durability, and
 provider-error gates pass.
+
+## Qualification and distribution polish
+
+The admin UI now configures SES destinations, simulates events, displays
+callback uncertainty and browses bounded history pages. Lost-response retries
+retain the same request identity. The pinned Google .NET SDK regression runs
+with its default gzip behavior, including resumable byte readback.
+
+Native distribution bundles include UI assets, source/version metadata and
+checksums, and launch correctly from another working directory. Linux x86_64
+and arm64 bundles build and smoke on their native runners. Distribution requires
+successful exact-source CI and full automatic measured upload qualification;
+manual narrowed campaigns do not satisfy that gate. Publishing a release remains
+a deliberate action. The [gap analysis](docs/polish-gap-analysis.md) records
+remaining engineering and qualification boundaries.

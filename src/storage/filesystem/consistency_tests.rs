@@ -1060,3 +1060,39 @@ async fn should_bound_s3_current_and_historical_materialization_before_payload_r
     );
     fs::remove_dir_all(base).unwrap();
 }
+
+#[test]
+fn should_bound_copy_snapshots_when_source_grows_after_metadata_admission() {
+    // Arrange
+    let (base, storage) = sparse_gcs_storage();
+    let limit = 1024;
+    let mut old_metadata = storage.get_object_metadata("sparse", "large").unwrap();
+    old_metadata.size = 1;
+    let metadata_path = storage.object_metadata_path(
+        "sparse",
+        &FilesystemStorage::compute_object_id("sparse", "large"),
+    );
+    FilesystemStorage::write_object_metadata(&metadata_path, &old_metadata).unwrap();
+    let replacement_path = metadata_path.clone();
+    let mut replacement = old_metadata.clone();
+    replacement.size = 64 * 1024 * 1024 + 3;
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+        if phase == TestPhase::ReadMetadata {
+            FilesystemStorage::write_object_metadata(&replacement_path, &replacement).unwrap();
+        }
+        assert_ne!(
+            phase,
+            TestPhase::FullPayload,
+            "copy must use a bounded read"
+        );
+    }));
+
+    // Act
+    let snapshot =
+        crate::providers::bounded_copy_source(storage.as_ref(), "sparse", "large", limit).unwrap();
+
+    // Assert
+    assert_eq!(snapshot.size, 64 * 1024 * 1024 + 3);
+    assert_eq!(snapshot.data.len(), usize::try_from(limit).unwrap());
+    fs::remove_dir_all(base).unwrap();
+}

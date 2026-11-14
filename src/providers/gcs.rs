@@ -29,11 +29,17 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 
 mod bounded;
+mod compose;
 
 const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
 const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
 const GCS_UPDATED_KEY: &str = "__sqrzl_gcs_updated";
 const GCS_CRC32C_KEY: &str = "__sqrzl_gcs_crc32c";
+const GCS_KMS_KEY_NAME_KEY: &str = "__sqrzl_gcs_kms_key_name";
+const GCS_COMPONENT_COUNT_KEY: &str = "__sqrzl_gcs_component_count";
+const GCS_DEFAULT_KMS_KEY_NAME_KEY: &str = "gcs_default_kms_key_name";
+/// Local CMEK model: no cryptography, a single primary key version per key.
+const GCS_KMS_PRIMARY_VERSION: &str = "1";
 const GCS_SOFT_DELETE_SECONDS_KEY: &str = "gcs_soft_delete_seconds";
 const GCS_RETENTION_SECONDS_KEY: &str = "gcs_retention_seconds";
 const S3_VERSIONING_STATUS_KEY: &str = "s3_versioning_status";
@@ -385,11 +391,79 @@ impl GcsAdapter {
             .filter(|(key, _)| {
                 !matches!(
                     key.as_str(),
-                    GCS_GENERATION_KEY | GCS_METAGENERATION_KEY | GCS_UPDATED_KEY
+                    GCS_GENERATION_KEY
+                        | GCS_METAGENERATION_KEY
+                        | GCS_UPDATED_KEY
+                        | GCS_KMS_KEY_NAME_KEY
+                        | GCS_COMPONENT_COUNT_KEY
                 )
             })
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
+    }
+
+    /// Validate a Cloud KMS key resource name
+    /// (`projects/*/locations/*/keyRings/*/cryptoKeys/*`).
+    fn valid_kms_key_name(name: &str) -> bool {
+        let segments = name.split('/').collect::<Vec<_>>();
+        let id_ok = |id: &str| {
+            !id.is_empty()
+                && id.len() <= 63
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        };
+        matches!(
+            segments.as_slice(),
+            ["projects", project, "locations", location, "keyRings", ring, "cryptoKeys", key]
+                if id_ok(project) && id_ok(location) && id_ok(ring) && id_ok(key)
+        )
+    }
+
+    fn invalid_kms_key_response(name: &str) -> Response<Body> {
+        Self::json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            &format!(
+                "Invalid kmsKeyName \"{name}\"; expected projects/*/locations/*/keyRings/*/cryptoKeys/*"
+            ),
+        )
+    }
+
+    /// Resolve the KMS key for a new object: an explicit request key wins,
+    /// otherwise the bucket default applies.
+    fn resolve_kms_key(
+        storage: &Arc<dyn Storage>,
+        bucket: &str,
+        requested: Option<&str>,
+    ) -> Result<Option<String>, Box<Response<Body>>> {
+        if let Some(name) = requested {
+            if !Self::valid_kms_key_name(name) {
+                return Err(Box::new(Self::invalid_kms_key_response(name)));
+            }
+            return Ok(Some(name.to_string()));
+        }
+        Ok(storage
+            .get_bucket(bucket)
+            .ok()
+            .and_then(|bucket| bucket.metadata.get(GCS_DEFAULT_KMS_KEY_NAME_KEY).cloned()))
+    }
+
+    fn with_kms_key(
+        mut metadata: HashMap<String, String>,
+        kms_key: Option<&str>,
+    ) -> HashMap<String, String> {
+        metadata.remove(GCS_KMS_KEY_NAME_KEY);
+        if let Some(key) = kms_key {
+            metadata.insert(GCS_KMS_KEY_NAME_KEY.to_string(), key.to_string());
+        }
+        metadata
+    }
+
+    fn kms_key_resource(metadata: &HashMap<String, String>) -> Option<String> {
+        metadata
+            .get(GCS_KMS_KEY_NAME_KEY)
+            .map(|key| format!("{key}/cryptoKeyVersions/{GCS_KMS_PRIMARY_VERSION}"))
     }
 
     fn decode_object_path(path: &str) -> Result<String, String> {
@@ -1429,6 +1503,9 @@ impl GcsAdapter {
         for (key, value) in Self::public_metadata(&blob.metadata) {
             builder = builder.header(&format!("x-goog-meta-{key}"), &value);
         }
+        if let Some(kms_key) = Self::kms_key_resource(&blob.metadata) {
+            builder = builder.header("x-goog-encryption-kms-key-name", &kms_key);
+        }
         if let Some(content_range) = content_range {
             builder = builder.header("content-range", &content_range);
         }
@@ -1917,7 +1994,9 @@ mod tests {
             ("versioning", serde_json::json!({"enabled": true})),
             (
                 "encryption",
-                serde_json::json!({"defaultKmsKeyName": "key"}),
+                serde_json::json!({
+                    "customerManagedEncryptionEnforcementConfig": {"restrictionMode": "FullyRestricted"}
+                }),
             ),
             ("lifecycle", serde_json::json!({"rule": []})),
             ("defaultEventBasedHold", serde_json::json!(true)),
@@ -2016,6 +2095,416 @@ mod tests {
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
             assert!(!storage.bucket_exists("invalid-config").unwrap());
         }
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings() {
+        // Arrange
+        let storage = temp_storage();
+        let document = serde_json::to_vec(&serde_json::json!({"name": "gzip-bucket"})).unwrap();
+        let compressed = gzip(&document);
+        let rejected = serde_json::to_vec(&serde_json::json!({"name": "rejected-coding"})).unwrap();
+        let rejected_gzip = gzip(&rejected);
+
+        // Act
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("content-encoding", "gzip")],
+            &compressed,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(storage.bucket_exists("gzip-bucket").unwrap());
+
+        let patch = gzip(br#"{"retentionPolicy":{"retentionPeriod":"3600"}}"#);
+        let request = parsed_request(
+            "PATCH",
+            "http://localhost/storage/v1/b/gzip-bucket",
+            &[
+                ("content-encoding", "gzip"),
+                ("content-type", "application/json"),
+            ],
+            &patch,
+        )
+        .await;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &auth_disabled(), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        for (encoding, body, status) in [
+            ("br", rejected.clone(), StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            (
+                "gzip, br",
+                rejected_gzip,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            ("gzip", rejected, StatusCode::BAD_REQUEST),
+        ] {
+            let request = parsed_request(
+                "POST",
+                "http://localhost/storage/v1/b?project=test-project",
+                &[("content-encoding", encoding)],
+                &body,
+            )
+            .await;
+            let response = GcsAdapter::new()
+                .handle_request(&storage, &auth_disabled(), &request)
+                .unwrap();
+            assert_eq!(response.status(), status, "{encoding}");
+            let json: serde_json::Value =
+                serde_json::from_slice(&read_test_body(response).await).unwrap();
+            assert!(json["error"]["message"].is_string());
+        }
+        assert!(!storage.bucket_exists("rejected-coding").unwrap());
+
+        let oversized = gzip(&vec![b' '; 4096]);
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("content-encoding", "gzip")],
+            &oversized,
+        )
+        .await;
+        let mut config = (*auth_disabled()).clone();
+        config.max_request_bytes = 1024;
+        let response = GcsAdapter::new()
+            .handle_request(&storage, &Arc::new(config), &request)
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn should_decode_all_gzip_members_before_applying_the_body_limit() {
+        // Arrange
+        let mut compressed = gzip(br#"{"name":"multi-member"}"#);
+        compressed.extend(gzip(&vec![b' '; 2048]));
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("content-encoding", "gzip")],
+            &compressed,
+        )
+        .await;
+
+        // Act
+        let response = GcsAdapter::decode_json_content_encoding(&request, 1024);
+
+        // Assert
+        assert_eq!(
+            response.err().unwrap().status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
+    #[tokio::test]
+    async fn should_reject_malformed_compose_preconditions_without_writing() {
+        // Arrange
+        let storage = temp_storage();
+        let adapter = GcsAdapter::new();
+        seed_compose_bucket(&storage, &adapter).await;
+        let mut outcomes = Vec::new();
+
+        // Act
+        for preconditions in [
+            serde_json::json!(false),
+            serde_json::json!("bad"),
+            serde_json::json!([]),
+        ] {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "sourceObjects": [{"name": "part-1", "objectPreconditions": preconditions}]
+            }))
+            .unwrap();
+            outcomes.push(
+                send_json(
+                    &storage,
+                    &adapter,
+                    "POST",
+                    "http://localhost/storage/v1/b/assembly/o/rejected/compose",
+                    &body,
+                )
+                .await
+                .0,
+            );
+        }
+
+        // Assert
+        assert_eq!(outcomes, vec![StatusCode::BAD_REQUEST; 3]);
+        assert!(storage.get_object_metadata("assembly", "rejected").is_err());
+    }
+
+    #[tokio::test]
+    async fn should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects() {
+        // Arrange
+        let storage = temp_storage();
+        let adapter = GcsAdapter::new();
+        let default_key = "projects/p/locations/us/keyRings/ring/cryptoKeys/default";
+        let tenant_key = "projects/p/locations/us/keyRings/ring/cryptoKeys/tenant-a";
+        let send = |method: &'static str, uri: String, body: Vec<u8>| {
+            let storage = storage.clone();
+            let adapter = &adapter;
+            async move {
+                let request = parsed_request(method, &uri, &[], &body).await;
+                let response = adapter
+                    .handle_request(&storage, &auth_disabled(), &request)
+                    .unwrap();
+                let status = response.status();
+                (status, parse_json_body(response).await)
+            }
+        };
+
+        // Act
+        let (status, bucket) = send(
+            "POST",
+            "http://localhost/storage/v1/b?project=p".to_string(),
+            serde_json::to_vec(&serde_json::json!({
+                "name": "cmek",
+                "encryption": {"defaultKmsKeyName": default_key}
+            }))
+            .unwrap(),
+        )
+        .await;
+        let (_, defaulted) = send(
+            "POST",
+            "http://localhost/upload/storage/v1/b/cmek/o?uploadType=media&name=defaulted"
+                .to_string(),
+            b"one".to_vec(),
+        )
+        .await;
+        let (_, explicit) = send(
+            "POST",
+            format!(
+                "http://localhost/upload/storage/v1/b/cmek/o?uploadType=media&name=explicit&kmsKeyName={}",
+                urlencoding::encode(tenant_key)
+            ),
+            b"two".to_vec(),
+        )
+        .await;
+        let (invalid_status, _) = send(
+            "POST",
+            "http://localhost/upload/storage/v1/b/cmek/o?uploadType=media&name=invalid&kmsKeyName=tenant-a".to_string(),
+            b"three".to_vec(),
+        )
+        .await;
+        let (_, patched) = send(
+            "PATCH",
+            "http://localhost/storage/v1/b/cmek/o/explicit".to_string(),
+            br#"{"metadata":{"owner":"tenant-a"}}"#.to_vec(),
+        )
+        .await;
+        let (_, cleared) = send(
+            "PATCH",
+            "http://localhost/storage/v1/b/cmek".to_string(),
+            br#"{"encryption":null}"#.to_vec(),
+        )
+        .await;
+        let (_, plain) = send(
+            "POST",
+            "http://localhost/upload/storage/v1/b/cmek/o?uploadType=media&name=plain".to_string(),
+            b"four".to_vec(),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(bucket["encryption"]["defaultKmsKeyName"], default_key);
+        assert_eq!(
+            defaulted["kmsKeyName"],
+            format!("{default_key}/cryptoKeyVersions/1")
+        );
+        assert_eq!(
+            explicit["kmsKeyName"],
+            format!("{tenant_key}/cryptoKeyVersions/1")
+        );
+        assert_eq!(invalid_status, StatusCode::BAD_REQUEST);
+        assert!(storage.get_object_metadata("cmek", "invalid").is_err());
+        assert_eq!(
+            patched["kmsKeyName"],
+            format!("{tenant_key}/cryptoKeyVersions/1")
+        );
+        assert!(patched["metadata"].get(GCS_KMS_KEY_NAME_KEY).is_none());
+        assert!(cleared.get("encryption").is_none());
+        assert!(plain.get("kmsKeyName").is_none());
+    }
+
+    async fn send_json(
+        storage: &Arc<dyn Storage>,
+        adapter: &GcsAdapter,
+        method: &str,
+        uri: &str,
+        body: &[u8],
+    ) -> (StatusCode, serde_json::Value) {
+        let request = parsed_request(method, uri, &[], body).await;
+        let response = adapter
+            .handle_request(storage, &auth_disabled(), &request)
+            .unwrap();
+        let status = response.status();
+        let bytes = read_test_body(response).await;
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    async fn seed_compose_bucket(storage: &Arc<dyn Storage>, adapter: &GcsAdapter) -> [String; 2] {
+        storage.create_bucket("assembly".to_string()).unwrap();
+        let mut generations = Vec::new();
+        for (name, body) in [("part-1", "hello "), ("part-2", "world")] {
+            let (status, resource) = send_json(
+                storage,
+                adapter,
+                "POST",
+                &format!(
+                    "http://localhost/upload/storage/v1/b/assembly/o?uploadType=media&name={name}"
+                ),
+                body.as_bytes(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            generations.push(resource["generation"].as_str().unwrap().to_string());
+        }
+        [generations[0].clone(), generations[1].clone()]
+    }
+
+    #[tokio::test]
+    async fn should_compose_gcs_sources_with_generation_preconditions() {
+        // Arrange
+        let storage = temp_storage();
+        let adapter = GcsAdapter::new();
+        let [first, second] = seed_compose_bucket(&storage, &adapter).await;
+        let compose_uri =
+            "http://localhost/storage/v1/b/assembly/o/joined/compose?ifGenerationMatch=0";
+        let request = |first_precondition: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "storage#composeRequest",
+                "sourceObjects": [
+                    {"name": "part-1", "generation": first, "objectPreconditions": {"ifGenerationMatch": first_precondition}},
+                    {"name": "part-2", "generation": second.clone()}
+                ],
+                "destination": {"name": "joined", "contentType": "text/plain", "metadata": {"stage": "composed"}}
+            }))
+            .unwrap()
+        };
+
+        // Act
+        let (stale_status, _) =
+            send_json(&storage, &adapter, "POST", compose_uri, &request("1")).await;
+        let (status, composed) =
+            send_json(&storage, &adapter, "POST", compose_uri, &request(&first)).await;
+        let (repeat_status, _) =
+            send_json(&storage, &adapter, "POST", compose_uri, &request(&first)).await;
+        let too_many = serde_json::json!({
+            "sourceObjects": vec![serde_json::json!({"name": "part-1"}); 33]
+        });
+        let (too_many_status, _) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/many/compose",
+            &serde_json::to_vec(&too_many).unwrap(),
+        )
+        .await;
+        let (method_status, _) = send_json(
+            &storage,
+            &adapter,
+            "GET",
+            "http://localhost/storage/v1/b/assembly/o/joined/compose",
+            b"",
+        )
+        .await;
+
+        // Assert
+        assert_eq!(stale_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(composed["size"], "11");
+        assert_eq!(composed["componentCount"], 2);
+        assert_eq!(composed["contentType"], "text/plain");
+        assert_eq!(composed["metadata"]["stage"], "composed");
+        assert_eq!(
+            composed["crc32c"],
+            GcsAdapter::encoded_crc32c(b"hello world")
+        );
+        assert_eq!(
+            storage.get_object("assembly", "joined").unwrap().data,
+            b"hello world"
+        );
+        assert_eq!(repeat_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(too_many_status, StatusCode::BAD_REQUEST);
+        assert!(storage.get_object_metadata("assembly", "many").is_err());
+        assert_eq!(method_status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent() {
+        // Arrange
+        let storage = temp_storage();
+        let adapter = GcsAdapter::new();
+        let [first, _] = seed_compose_bucket(&storage, &adapter).await;
+        let rewrite_uri = format!(
+            "http://localhost/storage/v1/b/assembly/o/part-1/rewriteTo/b/assembly/o/{}?ifGenerationMatch=0&ifSourceGenerationMatch={first}",
+            urlencoding::encode("final/part-1")
+        );
+        let body = br#"{"name":"final/part-1","metadata":{"published":"yes"}}"#;
+
+        // Act
+        let (status, rewritten) = send_json(&storage, &adapter, "POST", &rewrite_uri, body).await;
+        let (repeat_status, _) = send_json(&storage, &adapter, "POST", &rewrite_uri, body).await;
+        let (stale_source_status, _) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/part-1/rewriteTo/b/assembly/o/other?ifSourceGenerationMatch=1",
+            b"",
+        )
+        .await;
+        let (token_status, _) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/part-1/rewriteTo/b/assembly/o/other?rewriteToken=abc",
+            b"",
+        )
+        .await;
+        let (copy_status, copied) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/part-2/copyTo/b/assembly/o/copy?ifGenerationMatch=0",
+            b"",
+        )
+        .await;
+
+        // Assert
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(rewritten["kind"], "storage#rewriteResponse");
+        assert_eq!(rewritten["done"], true);
+        assert_eq!(rewritten["totalBytesRewritten"], "6");
+        assert_eq!(rewritten["resource"]["name"], "final/part-1");
+        assert_eq!(rewritten["resource"]["metadata"]["published"], "yes");
+        assert_eq!(
+            storage.get_object("assembly", "final/part-1").unwrap().data,
+            b"hello "
+        );
+        assert_eq!(repeat_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(stale_source_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(token_status, StatusCode::NOT_IMPLEMENTED);
+        assert!(storage.get_object_metadata("assembly", "other").is_err());
+        assert_eq!(copy_status, StatusCode::OK);
+        assert_eq!(copied["kind"], "storage#object");
+        assert_eq!(copied["size"], "5");
     }
 
     #[tokio::test]
@@ -6455,6 +6944,19 @@ impl GcsAdapter {
         auth_config: &Arc<AuthConfig>,
         req: &Request,
     ) -> Result<Response<Body>, String> {
+        let decoded;
+        let req = if Self::is_json_api_request(req) {
+            match Self::decode_json_content_encoding(req, auth_config.max_request_bytes) {
+                Ok(Some(request)) => {
+                    decoded = request;
+                    &decoded
+                }
+                Ok(None) => req,
+                Err(response) => return Ok(*response),
+            }
+        } else {
+            req
+        };
         if Self::is_json_api_request(req)
             && (req.path().starts_with("/storage/v1/")
                 || req.path().starts_with("/download/storage/v1/"))
@@ -6498,6 +7000,75 @@ impl GcsAdapter {
         } else {
             Ok(Self::handle_xml_bucket_request(storage, req, &bucket))
         }
+    }
+
+    /// Honour `Content-Encoding` on JSON API request bodies. The Google .NET client
+    /// gzips metadata documents by default, so a gzip body is decoded (bounded by
+    /// `SQRZL_MAX_REQUEST_BYTES` after decompression) before routing. Any other
+    /// coding is rejected rather than parsed as identity bytes.
+    fn decode_json_content_encoding(
+        req: &Request,
+        max_request_bytes: usize,
+    ) -> Result<Option<Request>, Box<Response<Body>>> {
+        let codings = req
+            .headers
+            .get_all(http::header::CONTENT_ENCODING)
+            .iter()
+            .map(|value| value.to_str().unwrap_or("\u{fffd}"))
+            .flat_map(|value| value.split(','))
+            .map(|coding| coding.trim().to_ascii_lowercase())
+            .filter(|coding| !coding.is_empty() && coding != "identity")
+            .collect::<Vec<_>>();
+        if codings.is_empty() {
+            return Ok(None);
+        }
+        if !matches!(codings.as_slice(), [coding] if coding == "gzip" || coding == "x-gzip") {
+            return Err(Box::new(Self::json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupportedMediaType",
+                &format!(
+                    "Content-Encoding {} is not supported; only gzip request bodies are decoded",
+                    codings.join(", ")
+                ),
+            )));
+        }
+        if req.spooled_body.is_some() {
+            // Media and multipart object bodies are streamed to disk; their bytes are
+            // object data, so a transfer coding there is refused rather than stored.
+            return Err(Box::new(Self::json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupportedMediaType",
+                "Content-Encoding gzip is supported on JSON API metadata requests, not on object media bodies",
+            )));
+        }
+        let mut decoded = Vec::new();
+        let limit = u64::try_from(max_request_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        if let Err(error) = flate2::read::MultiGzDecoder::new(req.body.as_ref())
+            .take(limit)
+            .read_to_end(&mut decoded)
+        {
+            return Err(Box::new(Self::json_error(
+                StatusCode::BAD_REQUEST,
+                "invalidArgument",
+                &format!("Request body is not valid gzip: {error}"),
+            )));
+        }
+        if decoded.len() > max_request_bytes {
+            return Err(Box::new(Self::payload_too_large_response(
+                true,
+                max_request_bytes,
+            )));
+        }
+        let mut request = req.clone();
+        request.headers.remove(http::header::CONTENT_ENCODING);
+        request.headers.insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from(decoded.len()),
+        );
+        request.body = decoded.into();
+        Ok(Some(request))
     }
 
     fn handle_xml_root_request(storage: &Arc<dyn Storage>, req: &Request) -> Response<Body> {
@@ -6912,6 +7483,17 @@ impl GcsAdapter {
         if declared_total.is_some_and(|total| total > GCS_MAX_OBJECT_SIZE) {
             return Ok(Self::object_too_large_response(false));
         }
+        let Ok(kms_key) = Self::resolve_kms_key(
+            storage,
+            bucket,
+            req.header("x-goog-encryption-kms-key-name"),
+        ) else {
+            return Ok(Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                "x-goog-encryption-kms-key-name must name projects/*/locations/*/keyRings/*/cryptoKeys/*",
+            ));
+        };
         let session_id = uuid::Uuid::new_v4().to_string();
         let session = ResumableSession {
             bucket: bucket.to_string(),
@@ -6922,7 +7504,7 @@ impl GcsAdapter {
                 .or_else(|| req.header("content-type"))
                 .unwrap_or("application/octet-stream")
                 .to_string(),
-            metadata: Self::metadata_from_headers(req),
+            metadata: Self::with_kms_key(Self::metadata_from_headers(req), kms_key.as_deref()),
             crc32c: None,
             if_generation_match: req.header("x-goog-if-generation-match").map(str::to_string),
             if_generation_not_match: None,
@@ -6975,9 +7557,20 @@ impl GcsAdapter {
             Ok(condition) => condition,
             Err(response) => return response,
         };
+        let Ok(kms_key) = Self::resolve_kms_key(
+            storage,
+            bucket,
+            req.header("x-goog-encryption-kms-key-name"),
+        ) else {
+            return Self::error_response(
+                StatusCode::BAD_REQUEST,
+                "InvalidArgument",
+                "x-goog-encryption-kms-key-name must name projects/*/locations/*/keyRings/*/cryptoKeys/*",
+            );
+        };
         let existing = storage.get_object_metadata(bucket, object).ok();
         let metadata = Self::metadata_with_gcs_state(
-            Self::metadata_from_headers(req),
+            Self::with_kms_key(Self::metadata_from_headers(req), kms_key.as_deref()),
             Self::next_generation(existing.as_ref()),
             "1".to_string(),
             None,
@@ -7273,10 +7866,15 @@ impl GcsAdapter {
         if Self::foreign_data_protection_active(storage, bucket) {
             return Ok(Self::foreign_data_protection_json_response());
         }
+        let kms_key = match Self::resolve_kms_key(storage, bucket, req.query_param("kmsKeyName")) {
+            Ok(kms_key) => kms_key,
+            Err(response) => return Ok(*response),
+        };
+        let kms_key = kms_key.as_deref();
         match req.query_param("uploadType") {
-            Some("media") => self.handle_media_upload(storage, req, bucket),
-            Some("multipart") => self.handle_multipart_upload(storage, req, bucket),
-            Some("resumable") => self.create_resumable_session(storage, req, bucket),
+            Some("media") => self.handle_media_upload(storage, req, bucket, kms_key),
+            Some("multipart") => self.handle_multipart_upload(storage, req, bucket, kms_key),
+            Some("resumable") => self.create_resumable_session(storage, req, bucket, kms_key),
             Some(value) => Ok(Self::json_upload_error(
                 StatusCode::BAD_REQUEST,
                 "INVALID_ARGUMENT",
@@ -7351,6 +7949,7 @@ impl GcsAdapter {
         storage: &Arc<dyn Storage>,
         req: &Request,
         bucket: &str,
+        kms_key: Option<&str>,
     ) -> Result<Response<Body>, String> {
         if req.payload_len() > GCS_MAX_OBJECT_SIZE {
             return Ok(Self::object_too_large_response(true));
@@ -7399,7 +7998,7 @@ impl GcsAdapter {
                 key,
                 req,
                 content_type,
-                Self::metadata_from_headers(req),
+                Self::with_kms_key(Self::metadata_from_headers(req), kms_key),
                 preconditions,
             )?
         } else {
@@ -7410,7 +8009,7 @@ impl GcsAdapter {
                 BlobWrite {
                     data: req.body.to_vec(),
                     content_type,
-                    metadata: Self::metadata_from_headers(req),
+                    metadata: Self::with_kms_key(Self::metadata_from_headers(req), kms_key),
                     preconditions,
                 },
             )?
@@ -7433,6 +8032,7 @@ impl GcsAdapter {
         storage: &Arc<dyn Storage>,
         req: &Request,
         bucket: &str,
+        kms_key: Option<&str>,
     ) -> Result<Response<Body>, String> {
         if let Some(response) = Self::invalid_json_mutation_headers(req) {
             return Ok(response);
@@ -7509,7 +8109,7 @@ impl GcsAdapter {
                 upload.len,
                 upload.crc32c,
                 upload.content_type,
-                upload.metadata.metadata,
+                Self::with_kms_key(upload.metadata.metadata, kms_key),
                 preconditions,
             );
             let cleanup = storage.delete_upload_session("gcs-multipart", &session);
@@ -7563,7 +8163,7 @@ impl GcsAdapter {
             BlobWrite {
                 data,
                 content_type: object_content_type,
-                metadata: upload_metadata.metadata,
+                metadata: Self::with_kms_key(upload_metadata.metadata, kms_key),
                 preconditions,
             },
         )?;
@@ -7584,6 +8184,7 @@ impl GcsAdapter {
         storage: &Arc<dyn Storage>,
         req: &Request,
         bucket: &str,
+        kms_key: Option<&str>,
     ) -> Result<Response<Body>, String> {
         if let Some(response) = Self::invalid_json_mutation_headers(req) {
             return Ok(response);
@@ -7630,7 +8231,7 @@ impl GcsAdapter {
                     .unwrap_or("application/octet-stream")
                     .to_string()
             }),
-            metadata: upload_metadata.metadata,
+            metadata: Self::with_kms_key(upload_metadata.metadata, kms_key),
             crc32c: upload_metadata.crc32c,
             if_generation_match: req.query_param("ifGenerationMatch").map(str::to_string),
             if_generation_not_match: req.query_param("ifGenerationNotMatch").map(str::to_string),
@@ -8166,7 +8767,7 @@ impl GcsAdapter {
     ) -> Response<Body> {
         Self::json_response(
             status,
-            &serde_json::json!({
+            &Self::omit_absent_kms_key(serde_json::json!({
                 "kind": "storage#object",
                 "name": stored.key,
                 "bucket": stored.namespace,
@@ -8178,9 +8779,30 @@ impl GcsAdapter {
                 "updated": Self::gcs_updated(&stored.metadata, stored.last_modified),
                 "contentType": stored.content_type,
                 "metadata": Self::public_metadata(&stored.metadata),
-            })
+                "kmsKeyName": Self::kms_key_resource(&stored.metadata),
+                "componentCount": Self::component_count_field(&stored.metadata),
+            }))
             .to_string(),
         )
+    }
+
+    /// GCS omits `kmsKeyName` for objects without a customer-managed key and
+    /// `componentCount` for objects that were not composed.
+    fn omit_absent_kms_key(mut resource: serde_json::Value) -> serde_json::Value {
+        if let Some(fields) = resource.as_object_mut() {
+            for field in ["kmsKeyName", "componentCount"] {
+                if fields.get(field).is_some_and(serde_json::Value::is_null) {
+                    fields.remove(field);
+                }
+            }
+        }
+        resource
+    }
+
+    fn component_count_field(metadata: &HashMap<String, String>) -> Option<u64> {
+        metadata
+            .get(GCS_COMPONENT_COUNT_KEY)
+            .and_then(|count| count.parse().ok())
     }
 
     fn handle_json_api(
@@ -8631,10 +9253,9 @@ impl GcsAdapter {
         for field in fields.keys() {
             match field.as_str() {
                 "name" if req.method() == Method::POST => {}
-                "retentionPolicy" | "softDeletePolicy" => {}
+                "retentionPolicy" | "softDeletePolicy" | "encryption" => {}
                 "name"
                 | "versioning"
-                | "encryption"
                 | "lifecycle"
                 | "defaultEventBasedHold"
                 | "iamConfiguration"
@@ -8699,12 +9320,57 @@ impl GcsAdapter {
                 }
             }
         }
+        if let Some(response) = fields
+            .get("encryption")
+            .and_then(Self::validate_bucket_encryption)
+        {
+            return Some(response);
+        }
         if req.query_param("predefinedAcl").is_some()
             || req.query_param("predefinedDefaultObjectAcl").is_some()
         {
             return Some(Self::unimplemented_data_protection_response(
                 "Predefined bucket and default object ACLs are not supported",
             ));
+        }
+        None
+    }
+
+    fn validate_bucket_encryption(encryption: &serde_json::Value) -> Option<Response<Body>> {
+        if encryption.is_null() {
+            return None;
+        }
+        let Some(encryption) = encryption.as_object() else {
+            return Some(Self::invalid_data_protection_response(
+                "encryption must be a JSON object",
+            ));
+        };
+        for (field, value) in encryption {
+            match (field.as_str(), value) {
+                ("defaultKmsKeyName", serde_json::Value::Null) => {}
+                ("defaultKmsKeyName", serde_json::Value::String(name))
+                    if Self::valid_kms_key_name(name) => {}
+                ("defaultKmsKeyName", value) => {
+                    return Some(Self::invalid_kms_key_response(
+                        value.as_str().unwrap_or(&value.to_string()),
+                    ));
+                }
+                (
+                    "googleManagedEncryptionEnforcementConfig"
+                    | "customerManagedEncryptionEnforcementConfig"
+                    | "customerSuppliedEncryptionEnforcementConfig",
+                    _,
+                ) => {
+                    return Some(Self::unimplemented_data_protection_response(&format!(
+                        "Bucket encryption field {field} is not supported by this emulator surface"
+                    )));
+                }
+                _ => {
+                    return Some(Self::invalid_data_protection_response(&format!(
+                        "Unknown encryption field: {field}"
+                    )));
+                }
+            }
         }
         None
     }
@@ -8792,18 +9458,24 @@ impl GcsAdapter {
             .metadata
             .get(GCS_RETENTION_SECONDS_KEY)
             .map(|seconds| serde_json::json!({"retentionPeriod": seconds}));
-        Self::json_response(
-            status,
-            &serde_json::json!({
-                "kind": "storage#bucket",
-                "name": namespace.name,
-                "timeCreated": namespace.created_at.to_rfc3339(),
-                "updated": namespace.modified_at.to_rfc3339(),
-                "softDeletePolicy": soft_delete,
-                "retentionPolicy": retention,
-            })
-            .to_string(),
-        )
+        let encryption = namespace
+            .metadata
+            .get(GCS_DEFAULT_KMS_KEY_NAME_KEY)
+            .map(|name| serde_json::json!({"defaultKmsKeyName": name}));
+        let mut resource = serde_json::json!({
+            "kind": "storage#bucket",
+            "name": namespace.name,
+            "timeCreated": namespace.created_at.to_rfc3339(),
+            "updated": namespace.modified_at.to_rfc3339(),
+            "softDeletePolicy": soft_delete,
+            "retentionPolicy": retention,
+        });
+        // GCS omits `encryption` when no default key is configured; clients read it
+        // as an object whenever the field is present.
+        if let Some(encryption) = encryption {
+            resource["encryption"] = encryption;
+        }
+        Self::json_response(status, &resource.to_string())
     }
 
     fn apply_bucket_data_protection(
@@ -8828,6 +9500,20 @@ impl GcsAdapter {
             storage
                 .enable_versioning(bucket)
                 .map_err(|err| err.to_string())?;
+        }
+        if let Some(encryption) = payload.get("encryption") {
+            match encryption
+                .get("defaultKmsKeyName")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(name) => {
+                    metadata.insert(GCS_DEFAULT_KMS_KEY_NAME_KEY.to_string(), name.to_string());
+                }
+                // `encryption: null` or `defaultKmsKeyName: null` clears the default.
+                None => {
+                    metadata.remove(GCS_DEFAULT_KMS_KEY_NAME_KEY);
+                }
+            }
         }
         if let Some(policy) = payload.get("retentionPolicy") {
             if policy.is_null() {
@@ -8903,6 +9589,11 @@ impl GcsAdapter {
             return Ok(Self::list_json_objects(storage, req, bucket));
         }
 
+        if let Some(response) =
+            self.handle_json_object_action(storage, auth_config, req, parts, bucket)?
+        {
+            return Ok(response);
+        }
         let object = match Self::decode_object_path(&parts[5..].join("/")) {
             Ok(object) => object,
             Err(error) => {
@@ -8921,6 +9612,83 @@ impl GcsAdapter {
         }
         let alt_media = req.query_param("alt") == Some("media");
         self.handle_json_object_item(storage, req, bucket, &object, alt_media)
+    }
+
+    /// Route `compose`, `rewriteTo`, and `copyTo` object actions. Object names
+    /// are percent-encoded single path segments, so the action is unambiguous.
+    fn handle_json_object_action(
+        &self,
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
+        parts: &[&str],
+        bucket: &str,
+    ) -> Result<Option<Response<Body>>, String> {
+        let action = match parts {
+            [_, _, _, _, "o", _, "compose"] => "compose",
+            [_, _, _, _, "o", _, action @ ("rewriteTo" | "copyTo"), "b", _, "o", _] => action,
+            _ => return Ok(None),
+        };
+        if *req.method() != Method::POST {
+            return Ok(Some(Self::json_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "methodNotAllowed",
+                "The HTTP verb in the request is not supported.",
+            )));
+        }
+        let decode = |segment: &str| {
+            Self::decode_object_path(segment).map_err(|error| {
+                Box::new(Self::json_upload_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    &error,
+                ))
+            })
+        };
+        let object = match decode(parts[5]) {
+            Ok(object) => object,
+            Err(response) => return Ok(Some(*response)),
+        };
+        if let Err(response) = Self::authorize(req, auth_config, bucket, Some(&object)) {
+            return Ok(Some(response));
+        }
+        if let Some(response) = Self::invalid_json_mutation_headers(req) {
+            return Ok(Some(response));
+        }
+        if Self::foreign_data_protection_active(storage, bucket) {
+            return Ok(Some(Self::foreign_data_protection_json_response()));
+        }
+        if action == "compose" {
+            return self
+                .compose_json_object(storage, req, bucket, &object)
+                .map(Some);
+        }
+        let destination_bucket = match decode(parts[8]) {
+            Ok(bucket) => bucket,
+            Err(response) => return Ok(Some(*response)),
+        };
+        let destination_object = match decode(parts[10]) {
+            Ok(object) => object,
+            Err(response) => return Ok(Some(*response)),
+        };
+        if let Err(response) = Self::authorize(
+            req,
+            auth_config,
+            &destination_bucket,
+            Some(&destination_object),
+        ) {
+            return Ok(Some(response));
+        }
+        self.rewrite_json_object(
+            storage,
+            req,
+            bucket,
+            &object,
+            &destination_bucket,
+            &destination_object,
+            action == "rewriteTo",
+        )
+        .map(Some)
     }
 
     fn list_json_objects(
@@ -9303,6 +10071,13 @@ impl GcsAdapter {
             }
         }
         let previous_updated = Self::gcs_updated(&blob.metadata, blob.last_modified);
+        let mut metadata = Self::with_kms_key(
+            metadata,
+            blob.metadata.get(GCS_KMS_KEY_NAME_KEY).map(String::as_str),
+        );
+        if let Some(count) = blob.metadata.get(GCS_COMPONENT_COUNT_KEY) {
+            metadata.insert(GCS_COMPONENT_COUNT_KEY.to_string(), count.clone());
+        }
         Ok(Self::metadata_with_gcs_state(
             metadata,
             Self::generation(blob),
@@ -9317,7 +10092,7 @@ impl GcsAdapter {
     }
 
     fn json_object_metadata(bucket: &str, blob: &crate::models::Object) -> serde_json::Value {
-        serde_json::json!({
+        Self::omit_absent_kms_key(serde_json::json!({
             "kind": "storage#object",
             "name": blob.key,
             "bucket": bucket,
@@ -9330,14 +10105,16 @@ impl GcsAdapter {
             "updated": Self::gcs_updated(&blob.metadata, blob.last_modified),
             "contentType": blob.content_type,
             "metadata": Self::public_metadata(&blob.metadata),
-        })
+            "kmsKeyName": Self::kms_key_resource(&blob.metadata),
+            "componentCount": Self::component_count_field(&blob.metadata),
+        }))
     }
 
     fn json_blob_record_metadata(
         bucket: &str,
         blob: &crate::blob::BlobRecord,
     ) -> serde_json::Value {
-        serde_json::json!({
+        Self::omit_absent_kms_key(serde_json::json!({
             "kind": "storage#object",
             "name": blob.key,
             "bucket": bucket,
@@ -9349,7 +10126,9 @@ impl GcsAdapter {
             "updated": Self::gcs_updated(&blob.metadata, blob.last_modified),
             "contentType": blob.content_type,
             "metadata": Self::public_metadata(&blob.metadata),
-        })
+            "kmsKeyName": Self::kms_key_resource(&blob.metadata),
+            "componentCount": Self::component_count_field(&blob.metadata),
+        }))
     }
 
     fn handle_json_download(

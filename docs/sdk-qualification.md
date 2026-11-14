@@ -138,3 +138,14 @@ the committed baseline. Locally, install that extra in a separate environment
 and set `SQRZL_SDK_ALLOW_UPGRADE=1` for each candidate run. Review all three
 lane artifacts before intentionally regenerating the lock, direct pins, and
 version snapshot. A green upgrade smoke does not promote provider support.
+
+The functional and storage-auth CI lanes also install the exact .NET SDK in
+[`global.json`](../sdk-tests/dotnet/global.json). The Google .NET wrapper uses a
+locked NuGet graph and records default gzip, observed request paths/statuses,
+SDK version and dependency-lock digest. It qualifies only the assertions in
+its acceptance-manifest entry. Install that SDK locally to run
+`python -m pytest sdk-tests/test_gcs_dotnet_sdk.py`; absence is an explicit skip,
+not passing evidence.
+
+See the [polish gap analysis](polish-gap-analysis.md) for remaining process,
+resource, diagnostics and operation-acceptance gaps.

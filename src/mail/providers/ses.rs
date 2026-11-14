@@ -17,10 +17,32 @@ use std::sync::Arc;
 
 pub struct SesEmailAdapter;
 
+/// Provider metadata key holding the caller's `EmailTags` as `[{Name, Value}]`.
+pub const SES_EMAIL_TAGS_METADATA: &str = "ses_email_tags";
+/// Provider metadata key holding the caller's `ConfigurationSetName`.
+pub const SES_CONFIGURATION_SET_METADATA: &str = "ses_configuration_set_name";
+/// Comma-separated configuration set names that exist. When unset, any valid
+/// name is accepted; when set, other names fail with `NotFoundException`.
+pub const ENV_SES_CONFIGURATION_SETS: &str = "SES_CONFIGURATION_SETS";
+
 impl SesEmailAdapter {
     fn invalid_request_response(message: &str) -> Response<Body> {
         ResponseBuilder::new(StatusCode::BAD_REQUEST)
             .header("x-amzn-errortype", "BadRequestException")
+            .content_type("application/json")
+            .body(
+                serde_json::json!({
+                    "message": message,
+                })
+                .to_string()
+                .into_bytes(),
+            )
+            .build()
+    }
+
+    fn not_found_response(message: &str) -> Response<Body> {
+        ResponseBuilder::new(StatusCode::NOT_FOUND)
+            .header("x-amzn-errortype", "NotFoundException")
             .content_type("application/json")
             .body(
                 serde_json::json!({
@@ -48,9 +70,13 @@ impl SesEmailAdapter {
                 "Destination",
                 "ReplyToAddresses",
                 "Content",
+                "EmailTags",
+                "ConfigurationSetName",
             ],
             "SES SendEmail",
         )?;
+        let email_tags = parse_email_tags(payload.get("EmailTags"))?;
+        let configuration_set = parse_configuration_set_name(payload.get("ConfigurationSetName"))?;
 
         let from = payload
             .get("FromEmailAddress")
@@ -127,6 +153,23 @@ impl SesEmailAdapter {
         }
         if let Some(charset) = html_charset.flatten() {
             provider_metadata.insert("html_charset".to_string(), Value::String(charset));
+        }
+        if !email_tags.is_empty() {
+            provider_metadata.insert(
+                SES_EMAIL_TAGS_METADATA.to_string(),
+                Value::Array(
+                    email_tags
+                        .into_iter()
+                        .map(|(name, value)| serde_json::json!({"Name": name, "Value": value}))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(name) = configuration_set {
+            provider_metadata.insert(
+                SES_CONFIGURATION_SET_METADATA.to_string(),
+                Value::String(name),
+            );
         }
 
         Ok(Message {
@@ -300,6 +343,23 @@ impl MailAdapter for SesEmailAdapter {
                 Ok(message) => message,
                 Err(message) => return Ok(Self::invalid_request_response(&message)),
             };
+            if let Some(name) = message
+                .provider_metadata
+                .get(SES_CONFIGURATION_SET_METADATA)
+                .and_then(Value::as_str)
+            {
+                if !configuration_set_exists(
+                    auth_config
+                        .vendor_credentials
+                        .ses_configuration_sets
+                        .as_deref(),
+                    name,
+                ) {
+                    return Ok(Self::not_found_response(&format!(
+                        "Configuration set <{name}> does not exist."
+                    )));
+                }
+            }
             let stored_messages = match fan_out(mail.as_ref(), &message) {
                 Ok(stored_messages) => stored_messages,
                 Err(crate::error::Error::CaptureTooLarge) => {
@@ -452,6 +512,88 @@ fn parse_message_headers(
         headers.insert(name.to_string(), header_value.to_string());
     }
     Ok(headers)
+}
+
+/// SES message tags: up to 50, unique names of ASCII letters, digits, `_` and
+/// `-`; values may also contain `.` and `@`; both fewer than 256 characters.
+fn parse_email_tags(value: Option<&Value>) -> Result<Vec<(String, String)>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| "EmailTags must be an array".to_string())?;
+    if values.len() > 50 {
+        return Err("EmailTags supports at most 50 tags".to_string());
+    }
+    let valid = |text: &str, extra: &[u8], allow_empty: bool| {
+        (allow_empty || !text.is_empty())
+            && text.len() < 256
+            && text.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || b"_-".contains(&byte) || extra.contains(&byte)
+            })
+    };
+    let mut names = std::collections::HashSet::new();
+    let mut tags = Vec::with_capacity(values.len());
+    for value in values {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "EmailTags entries must be objects".to_string())?;
+        reject_unsupported_fields(object, &["Name", "Value"], "SES EmailTag")?;
+        let name = object
+            .get("Name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "EmailTag Name is required".to_string())?;
+        let tag_value = object
+            .get("Value")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "EmailTag Value is required".to_string())?;
+        if !valid(name, b"", false) {
+            return Err(format!(
+                "Invalid EmailTag Name {name:?}: use fewer than 256 ASCII letters, digits, underscores, or dashes"
+            ));
+        }
+        if !valid(tag_value, b".@", true) {
+            return Err(format!(
+                "Invalid EmailTag Value for {name}: use fewer than 256 ASCII letters, digits, underscores, dashes, periods, or at signs"
+            ));
+        }
+        if !names.insert(name.to_string()) {
+            return Err(format!("Duplicate EmailTag Name {name}"));
+        }
+        tags.push((name.to_string(), tag_value.to_string()));
+    }
+    Ok(tags)
+}
+
+fn parse_configuration_set_name(value: Option<&Value>) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let name = value
+        .as_str()
+        .ok_or_else(|| "ConfigurationSetName must be a string".to_string())?;
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err(format!(
+            "Invalid ConfigurationSetName {name:?}: use 1 to 64 ASCII letters, digits, underscores, or dashes"
+        ));
+    }
+    Ok(Some(name.to_string()))
+}
+
+/// Without a declared list every valid name exists; with one, only listed names do.
+fn configuration_set_exists(declared: Option<&str>, name: &str) -> bool {
+    declared.is_none_or(|declared| {
+        declared
+            .split(',')
+            .map(str::trim)
+            .any(|candidate| candidate == name)
+    })
 }
 
 fn reject_unsupported_fields(
@@ -778,5 +920,102 @@ mod tests {
             .expect("list should succeed");
         assert_eq!(messages.messages.len(), 1);
         assert_eq!(messages.messages[0].message.subject, "ses test");
+    }
+
+    #[test]
+    fn should_reject_invalid_or_duplicate_ses_email_tags() {
+        // Arrange
+        let tags = |value: serde_json::Value| parse_email_tags(Some(&value));
+
+        // Act
+        let accepted = tags(serde_json::json!([
+            {"Name": "tenant_id", "Value": "tenant-a.example@corp"},
+            {"Name": "order-1", "Value": ""}
+        ]));
+
+        // Assert
+        assert_eq!(
+            accepted.unwrap(),
+            vec![
+                ("tenant_id".to_string(), "tenant-a.example@corp".to_string()),
+                ("order-1".to_string(), String::new()),
+            ]
+        );
+        for invalid in [
+            serde_json::json!([{"Name": "ses:caller", "Value": "x"}]),
+            serde_json::json!([{"Name": "tenant", "Value": "a b"}]),
+            serde_json::json!([{"Name": "", "Value": "x"}]),
+            serde_json::json!([{"Name": "x".repeat(256), "Value": "x"}]),
+            serde_json::json!([{"Name": "dup", "Value": "1"}, {"Name": "dup", "Value": "2"}]),
+            serde_json::json!([{"Name": "tenant"}]),
+            serde_json::json!([{"Name": "tenant", "Value": "x", "Extra": "y"}]),
+            serde_json::json!(vec![serde_json::json!({"Name": "n", "Value": "v"}); 51]),
+        ] {
+            assert!(tags(invalid.clone()).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn should_treat_configuration_sets_as_declared_only_when_a_list_is_configured() {
+        // Arrange
+        let valid = parse_configuration_set_name(Some(&serde_json::json!("events")));
+
+        // Act
+        let invalid = parse_configuration_set_name(Some(&serde_json::json!("bad name")));
+
+        // Assert
+        assert_eq!(valid.unwrap().as_deref(), Some("events"));
+        assert!(invalid.is_err());
+        assert!(configuration_set_exists(None, "anything"));
+        assert!(configuration_set_exists(Some("events, audit"), "audit"));
+        assert!(!configuration_set_exists(Some("events,audit"), "missing"));
+    }
+
+    #[tokio::test]
+    async fn should_capture_ses_email_tags_with_configuration_set_on_the_message() {
+        // Arrange
+        let mail = temp_mail();
+        let body = r#"{"FromEmailAddress":"alice@example.com","Destination":{"ToAddresses":["bob@example.com"]},"ConfigurationSetName":"events","EmailTags":[{"Name":"tenant","Value":"a"}],"Content":{"Simple":{"Subject":{"Data":"tagged"},"Body":{"Text":{"Data":"hello"}}}}}"#;
+        let req = request_with_signature(body, "test-key", &uuid::Uuid::new_v4().to_string()).await;
+
+        // Act
+        let response = SesEmailAdapter
+            .handle(
+                mail.clone(),
+                Arc::new(AuthConfig {
+                    access_key_id: None,
+                    secret_access_key: None,
+                    enforce_auth: false,
+                    admin_auth_disabled: false,
+                    blobs_path: "./blobs".to_string(),
+                    lifecycle_interval: std::time::Duration::from_hours(1),
+                    api_port: 9000,
+                    ui_port: 9001,
+                    max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+                    smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+                    vendor_credentials: crate::config::VendorCredentials::default(),
+                    mcp: crate::config::McpConfig::default(),
+                }),
+                req,
+            )
+            .await
+            .expect("ses adapter should handle request");
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::OK);
+        let stored = mail
+            .list_messages("bob@example.com", ListMessagesParams::default())
+            .unwrap()
+            .messages
+            .remove(0);
+        let detail = crate::api::admin::mail_dto::stored_to_detail(stored);
+        assert_eq!(detail.configuration_set_name.as_deref(), Some("events"));
+        assert_eq!(
+            detail.email_tags,
+            vec![crate::api::models::MessageTag {
+                name: "tenant".to_string(),
+                value: "a".to_string()
+            }]
+        );
     }
 }

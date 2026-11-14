@@ -24,6 +24,7 @@ import {
   MailAddress,
   MessageAttachmentSummary,
   MessageDetail,
+  MessageTag,
 } from '@/adapters/api.g';
 import { formatByteCount, formatRelativeTime } from '@/shared/format';
 import { mailboxPath } from '@/shared/routes';
@@ -32,6 +33,8 @@ import {
   downloadMessageContent,
   getMessageDetail,
 } from '../messages.query';
+
+import SesEventsPanel from './ses-events-panel';
 
 export default function MessageDetails({
   mailboxName,
@@ -174,7 +177,7 @@ export default function MessageDetails({
         <EmptyState
           title="Message could not load"
           description="Retry the admin API call to see message details."
-          actions={<Button onPress={() => detail.refresh()}>Retry</Button>}
+          action={<Button onPress={() => detail.refresh()}>Retry</Button>}
         />
       </Show>
 
@@ -250,6 +253,14 @@ export default function MessageDetails({
                         <TableHeaderCell>Thread ID</TableHeaderCell>
                         <TableCell>{message.thread_id ?? '—'}</TableCell>
                       </TableRow>
+                      <Show when={Boolean(message.configuration_set_name)}>
+                        <TableRow>
+                          <TableHeaderCell>Configuration set</TableHeaderCell>
+                          <TableCell>
+                            {message.configuration_set_name ?? ''}
+                          </TableCell>
+                        </TableRow>
+                      </Show>
                     </TableBody>
                   </Table>
                 </DataTable>
@@ -294,6 +305,49 @@ export default function MessageDetails({
                 </Show>
               </Block>
             </section>
+
+            <Show when={(message.email_tags ?? []).length > 0}>
+              <section aria-labelledby="mail-message-tags-title">
+                <Block direction="column" gap="sm">
+                  <Toolbar
+                    title={<span id="mail-message-tags-title">Email tags</span>}
+                  />
+                  <DataTable
+                    data-sqrzl-slot="storage-table-scroll"
+                    data-sqrzl-table-width="detail"
+                  >
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Name</TableHeaderCell>
+                          <TableHeaderCell>Value</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        <For
+                          each={message.email_tags ?? []}
+                          by={(tag: MessageTag) => tag.name}
+                        >
+                          {(tag: MessageTag) => (
+                            <TableRow key={tag.name}>
+                              <TableHeaderCell>{tag.name}</TableHeaderCell>
+                              <TableCell>{tag.value}</TableCell>
+                            </TableRow>
+                          )}
+                        </For>
+                      </TableBody>
+                    </Table>
+                  </DataTable>
+                </Block>
+              </section>
+            </Show>
+
+            <Show when={message.source_protocol === 'ses'}>
+              <SesEventsPanel
+                messageId={message.message_id}
+                configurationSet={message.configuration_set_name}
+              />
+            </Show>
 
             <section aria-labelledby="mail-message-body-title">
               <Block direction="column" gap="sm">

@@ -16,6 +16,18 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DEFAULT_CALLBACK_TIMEOUT_MS: u64 = 5_000;
+
+/// Environment controls for one emulated callback surface.
+#[derive(Clone, Copy)]
+pub(crate) struct CallbackPolicy {
+    pub allowed_hosts_env: &'static str,
+    pub timeout_env: &'static str,
+}
+
+pub(crate) const TEXT_CALLBACK_POLICY: CallbackPolicy = CallbackPolicy {
+    allowed_hosts_env: "SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS",
+    timeout_env: "SQRZL_TEXT_CALLBACK_TIMEOUT_MS",
+};
 const MAX_RECORDED_RESPONSE_BYTES: usize = 64 * 1024;
 
 pub struct SmsSimulator {
@@ -132,7 +144,8 @@ impl SmsSimulator {
         let (body, mut headers) = callback_payload(message, kind, url);
         let attempted_at = Utc::now();
         let attempt_id = format!("attempt-{}", uuid::Uuid::new_v4());
-        let response = send_http_callback(url, &headers, body.as_bytes()).await;
+        let response =
+            send_http_callback(TEXT_CALLBACK_POLICY, url, &headers, body.as_bytes()).await;
         let (response_status, response_body, error, state) = match response {
             Ok((status, response_body)) if (200..300).contains(&status) => (
                 Some(status),
@@ -185,7 +198,7 @@ fn twilio_callback_payload(
     kind: CallbackKind,
     url: &str,
 ) -> (String, HashMap<String, String>) {
-    let account_sid = std::env::var("SQRZL_TWILIO_ACCOUNT_SID")
+    let account_sid = std::env::var("TWILIO_ACCOUNT_SID")
         .unwrap_or_else(|_| "AC00000000000000000000000000000000".to_string());
     let mut fields = vec![
         ("AccountSid".to_string(), account_sid.clone()),
@@ -236,7 +249,7 @@ fn twilio_callback_payload(
         "content-type".to_string(),
         "application/x-www-form-urlencoded".to_string(),
     )]);
-    if let Ok(token) = std::env::var("SQRZL_TWILIO_AUTH_TOKEN") {
+    if let Ok(token) = std::env::var("TWILIO_AUTH_TOKEN") {
         let signature = twilio_signature(url, &fields, &token);
         headers.insert("x-twilio-signature".to_string(), signature);
     }
@@ -372,7 +385,8 @@ fn twilio_signature(url: &str, fields: &[(String, String)], token: &str) -> Stri
     BASE64.encode(mac.finalize().into_bytes())
 }
 
-async fn send_http_callback(
+pub(crate) async fn send_http_callback(
+    policy: CallbackPolicy,
     url: &str,
     headers: &HashMap<String, String>,
     body: &[u8],
@@ -388,7 +402,7 @@ async fn send_http_callback(
     let host = uri
         .host()
         .ok_or_else(|| "callback URL must include a host".to_string())?;
-    if !callback_host_allowed(host) {
+    if !callback_host_allowed(policy, host) {
         return Err(format!("callback host is not allowlisted: {host}"));
     }
     let port = uri.port_u16().unwrap_or(80);
@@ -399,7 +413,7 @@ async fn send_http_callback(
     let path = uri
         .path_and_query()
         .map_or("/", http::uri::PathAndQuery::as_str);
-    let timeout = callback_timeout();
+    let timeout = callback_timeout(policy);
 
     tokio::time::timeout(timeout, async {
         let mut stream = tokio::net::TcpStream::connect((host, port))
@@ -464,13 +478,13 @@ fn parse_http_response(response: &[u8]) -> std::result::Result<(u16, String), St
     Ok((status, String::from_utf8_lossy(bounded).into_owned()))
 }
 
-fn callback_host_allowed(host: &str) -> bool {
+fn callback_host_allowed(policy: CallbackPolicy, host: &str) -> bool {
     let mut hosts = HashSet::from([
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         "::1".to_string(),
     ]);
-    if let Ok(configured) = std::env::var("SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS") {
+    if let Ok(configured) = std::env::var(policy.allowed_hosts_env) {
         hosts.extend(
             configured
                 .split(',')
@@ -483,6 +497,10 @@ fn callback_host_allowed(host: &str) -> bool {
 }
 
 pub(crate) fn validate_callback_url(url: &str) -> Result<()> {
+    validate_callback_url_for(TEXT_CALLBACK_POLICY, url)
+}
+
+pub(crate) fn validate_callback_url_for(policy: CallbackPolicy, url: &str) -> Result<()> {
     let uri = url
         .parse::<Uri>()
         .map_err(|err| Error::InvalidRequest(format!("invalid callback URL: {err}")))?;
@@ -494,7 +512,7 @@ pub(crate) fn validate_callback_url(url: &str) -> Result<()> {
     let host = uri
         .host()
         .ok_or_else(|| Error::InvalidRequest("callback URL must include a host".to_string()))?;
-    if !callback_host_allowed(host) {
+    if !callback_host_allowed(policy, host) {
         return Err(Error::InvalidRequest(format!(
             "callback host is not allowlisted: {host}"
         )));
@@ -502,8 +520,8 @@ pub(crate) fn validate_callback_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-fn callback_timeout() -> Duration {
-    let milliseconds = std::env::var("SQRZL_TEXT_CALLBACK_TIMEOUT_MS")
+fn callback_timeout(policy: CallbackPolicy) -> Duration {
+    let milliseconds = std::env::var(policy.timeout_env)
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
@@ -561,9 +579,9 @@ mod tests {
 
     #[test]
     fn should_default_callback_allowlist_to_loopback() {
-        assert!(callback_host_allowed("localhost"));
-        assert!(callback_host_allowed("127.0.0.1"));
-        assert!(!callback_host_allowed("example.com"));
+        assert!(callback_host_allowed(TEXT_CALLBACK_POLICY, "localhost"));
+        assert!(callback_host_allowed(TEXT_CALLBACK_POLICY, "127.0.0.1"));
+        assert!(!callback_host_allowed(TEXT_CALLBACK_POLICY, "example.com"));
     }
 
     #[test]
@@ -614,7 +632,7 @@ mod tests {
             bytes
         });
 
-        std::env::set_var("SQRZL_TWILIO_AUTH_TOKEN", "callback-secret");
+        std::env::set_var("TWILIO_AUTH_TOKEN", "callback-secret");
         let store: Arc<dyn SmsStore> = Arc::new(
             FilesystemSmsStore::open(
                 std::env::temp_dir().join(format!("sqrzl-simulator-test-{}", uuid::Uuid::new_v4())),
@@ -664,7 +682,7 @@ mod tests {
             store.get_message(&message.message_id).unwrap().body,
             "hello"
         );
-        std::env::remove_var("SQRZL_TWILIO_AUTH_TOKEN");
+        std::env::remove_var("TWILIO_AUTH_TOKEN");
     }
 
     #[test]

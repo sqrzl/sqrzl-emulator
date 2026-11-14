@@ -13,10 +13,12 @@ use crate::error::{Error, Result};
 use crate::mail::model::{
     DeliveryStatus, ListMessagesParams, ListMessagesResult, MailboxInfo, Message, StoredMessage,
 };
+use crate::mail::ses_events::{SesEventDestination, SesEventRecord};
 use crate::mail::{MailStore, ALL_MAILBOX};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -30,6 +32,9 @@ type CaptureFiles = Vec<(PathBuf, Vec<u8>)>;
 const RAW_SUFFIX: &str = ".raw";
 const MAILBOX_METADATA: &str = ".mailbox";
 const MAILBOX_DIRECTORY_PREFIX: &str = "mbx-";
+// Dot-prefixed so mailbox listing never treats them as recipient mailboxes.
+const SES_EVENTS_DIR: &str = ".ses-events";
+const SES_DESTINATIONS_DIR: &str = ".ses-event-destinations";
 
 impl FilesystemMailStore {
     /// Opens (creating if needed) the `_mail` subtree under `blobs_path`.
@@ -45,6 +50,13 @@ impl FilesystemMailStore {
             root,
             capture_lock: Mutex::new(()),
         })
+    }
+
+    fn ses_destination_path(&self, configuration_set: &str) -> PathBuf {
+        self.root.join(SES_DESTINATIONS_DIR).join(format!(
+            "{}.json",
+            hex::encode(configuration_set.as_bytes())
+        ))
     }
 
     fn mailbox_dir(&self, mailbox: &str) -> Result<PathBuf> {
@@ -444,6 +456,154 @@ impl MailStore for FilesystemMailStore {
         self.ensure_mailbox_dir(mailbox)?;
         Ok(())
     }
+
+    fn put_ses_event_destination(
+        &self,
+        destination: &SesEventDestination,
+    ) -> Result<SesEventDestination> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
+        let path = self.ses_destination_path(&destination.configuration_set);
+        let mut stored = destination.clone();
+        if let Ok(previous) = fs::read(&path)
+            .map_err(|err| io_err(&err))
+            .and_then(|bytes| {
+                serde_json::from_slice::<SesEventDestination>(&bytes)
+                    .map_err(|err| Error::InternalError(err.to_string()))
+            })
+        {
+            stored.created_at = previous.created_at;
+        }
+        let bytes =
+            serde_json::to_vec(&stored).map_err(|err| Error::InternalError(err.to_string()))?;
+        write_atomic(&path, &bytes)?;
+        Ok(stored)
+    }
+
+    fn get_ses_event_destination(&self, configuration_set: &str) -> Result<SesEventDestination> {
+        let bytes = fs::read(self.ses_destination_path(configuration_set)).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                Error::MessageNotFound
+            } else {
+                io_err(&err)
+            }
+        })?;
+        serde_json::from_slice(&bytes).map_err(|err| Error::InternalError(err.to_string()))
+    }
+
+    fn delete_ses_event_destination(&self, configuration_set: &str) -> Result<()> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
+        match fs::remove_file(self.ses_destination_path(configuration_set)) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(io_err(&err)),
+        }
+    }
+
+    fn claim_ses_event(&self, event: &SesEventRecord) -> Result<Option<SesEventRecord>> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
+        match self.get_ses_event(&event.event_id) {
+            Ok(existing) => return Ok(Some(existing)),
+            Err(Error::MessageNotFound) => {}
+            Err(error) => return Err(error),
+        }
+        validate_segment(&event.event_id)?;
+        let path = self
+            .root
+            .join(SES_EVENTS_DIR)
+            .join(format!("{}.json", event.event_id));
+        if write_atomic_mode(&path, &ses_event_bytes(event)?, false)? {
+            Ok(None)
+        } else {
+            self.get_ses_event(&event.event_id).map(Some)
+        }
+    }
+
+    fn get_ses_event(&self, event_id: &str) -> Result<SesEventRecord> {
+        validate_segment(event_id)?;
+        let bytes = fs::read(
+            self.root
+                .join(SES_EVENTS_DIR)
+                .join(format!("{event_id}.json")),
+        )
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::MessageNotFound
+            } else {
+                io_err(&error)
+            }
+        })?;
+        serde_json::from_slice(&bytes).map_err(|error| Error::InternalError(error.to_string()))
+    }
+
+    fn record_ses_event(&self, event: &SesEventRecord) -> Result<()> {
+        validate_segment(&event.event_id)?;
+        write_atomic(
+            &self
+                .root
+                .join(SES_EVENTS_DIR)
+                .join(format!("{}.json", event.event_id)),
+            &ses_event_bytes(event)?,
+        )
+    }
+
+    fn list_ses_event_page(
+        &self,
+        message_id: Option<&str>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<crate::mail::ses_events::SesEventPage> {
+        crate::mail::ses_events::event_page(
+            ses_event_records(&self.root)?,
+            message_id,
+            after,
+            limit,
+        )
+    }
+
+    fn list_ses_events(&self, message_id: Option<&str>) -> Result<Vec<SesEventRecord>> {
+        let mut events = ses_event_records(&self.root)?.collect::<Result<Vec<_>>>()?;
+        events.retain(|event| message_id.is_none_or(|id| event.message_id == id));
+        events.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.event_id.cmp(&b.event_id))
+        });
+        Ok(events)
+    }
+}
+
+fn ses_event_records(root: &Path) -> Result<impl Iterator<Item = Result<SesEventRecord>>> {
+    let entries = match fs::read_dir(root.join(SES_EVENTS_DIR)) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_err(&error)),
+    };
+    Ok(entries.into_iter().flatten().filter_map(|entry| {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => return Some(Err(io_err(&error))),
+        };
+        if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+            return None;
+        }
+        let bytes = match fs::read(entry.path()) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => return Some(Err(io_err(&error))),
+        };
+        Some(
+            serde_json::from_slice(&bytes).map_err(|error| Error::InternalError(error.to_string())),
+        )
+    }))
 }
 
 fn mailbox_storage_key(mailbox: &str) -> String {
@@ -464,7 +624,20 @@ fn validate_segment(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn ses_event_bytes(event: &SesEventRecord) -> Result<Vec<u8>> {
+    let mut value =
+        serde_json::to_value(event).map_err(|error| Error::InternalError(error.to_string()))?;
+    if let Some(fingerprint) = &event.request_fingerprint {
+        value["__sqrzl_request_fingerprint"] = serde_json::json!(fingerprint);
+    }
+    serde_json::to_vec(&value).map_err(|error| Error::InternalError(error.to_string()))
+}
+
 fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    write_atomic_mode(path, data, true).map(|_| ())
+}
+
+fn write_atomic_mode(path: &Path, data: &[u8], replace: bool) -> Result<bool> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| io_err(&err))?;
     }
@@ -472,11 +645,43 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
         .file_name()
         .ok_or_else(|| Error::InternalError("message path has no file name".to_string()))?
         .to_os_string();
-    tmp_name.push(".tmp");
+    tmp_name.push(format!(".{}.tmp", uuid::Uuid::new_v4()));
     let tmp_path = path.with_file_name(tmp_name);
-    fs::write(&tmp_path, data).map_err(|err| io_err(&err))?;
-    fs::rename(&tmp_path, path).map_err(|err| io_err(&err))?;
-    Ok(())
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+            .map_err(|error| io_err(&error))?;
+        file.write_all(data).map_err(|error| io_err(&error))?;
+        file.sync_all().map_err(|error| io_err(&error))?;
+        if replace {
+            fs::rename(&tmp_path, path).map_err(|error| io_err(&error))?;
+        } else {
+            // Link a completely written inode without replacing an existing claim.
+            // This arbitrates ownership across independent store handles as well.
+            match fs::hard_link(&tmp_path, path) {
+                Ok(()) => {
+                    fs::remove_file(&tmp_path).map_err(|error| io_err(&error))?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    fs::remove_file(&tmp_path).map_err(|error| io_err(&error))?;
+                    return Ok(false);
+                }
+                Err(error) => return Err(io_err(&error)),
+            }
+        }
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| io_err(&error))?;
+        }
+        Ok(true)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
 }
 
 fn io_err(err: &std::io::Error) -> Error {
@@ -851,5 +1056,140 @@ mod tests {
             )
             .expect_err("path traversal in message id should be rejected");
         assert!(matches!(err, Error::InvalidRequest(_)));
+    }
+    #[test]
+    fn should_serialize_concurrent_ses_destination_updates() {
+        // Arrange
+        let store = std::sync::Arc::new(temp_store());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let mut workers = Vec::new();
+
+        // Act
+        for worker in 0..16 {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                (0..16)
+                    .map(|index| {
+                        let now = Utc::now();
+                        store
+                            .put_ses_event_destination(&SesEventDestination {
+                                configuration_set: "concurrent".to_string(),
+                                callback_url: format!("http://localhost/{worker}/{index}"),
+                                event_types: Vec::new(),
+                                created_at: now,
+                                updated_at: now,
+                            })
+                            .is_ok()
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+        let outcomes = workers
+            .into_iter()
+            .flat_map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+
+        // Assert
+        assert!(outcomes.into_iter().all(|succeeded| succeeded));
+        assert!(store.get_ses_event_destination("concurrent").is_ok());
+    }
+
+    #[test]
+    fn should_surface_ses_event_directory_failures() {
+        // Arrange
+        let store = temp_store();
+        fs::write(store.root.join(SES_EVENTS_DIR), b"not a directory").unwrap();
+
+        // Act
+        let result = store.list_ses_events(None);
+
+        // Assert
+        assert!(result.is_err());
+    }
+    #[test]
+    fn should_claim_one_ses_event_across_independent_store_handles() {
+        // Arrange
+        let root = std::env::temp_dir().join(format!("sqrzl-ses-claims-{}", uuid::Uuid::new_v4()));
+        let stores = (0..16)
+            .map(|_| FilesystemMailStore::open(&root).unwrap())
+            .collect::<Vec<_>>();
+        let event: SesEventRecord = serde_json::from_value(serde_json::json!({
+            "event_id": "ses-event-shared", "request_id": "shared", "state": "pending",
+            "message_id": "message", "event_type": "Delivery", "record": {}, "notification": {}, "created_at": Utc::now(),
+        })).unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(stores.len()));
+
+        // Act
+        let workers = stores
+            .into_iter()
+            .map(|store| {
+                let barrier = barrier.clone();
+                let event = event.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.claim_ses_event(&event).unwrap().is_none()
+                })
+            })
+            .collect::<Vec<_>>();
+        let owners = workers
+            .into_iter()
+            .map(|worker| usize::from(worker.join().unwrap()))
+            .sum::<usize>();
+
+        // Assert
+        assert_eq!(owners, 1, "more than one store claimed callback delivery");
+    }
+    #[test]
+    fn should_continue_ses_event_pages_given_deleted_boundary_record() {
+        // Arrange
+        let root = std::env::temp_dir().join(format!("sqrzl-ses-page-{}", uuid::Uuid::new_v4()));
+        let store = FilesystemMailStore::open(&root).unwrap();
+        let created = Utc::now();
+        for index in 0..8 {
+            let event: SesEventRecord = serde_json::from_value(serde_json::json!({
+                "event_id": format!("event-{index}"), "message_id": "message", "event_type": "Delivery",
+                "record": {}, "notification": {}, "created_at": created,
+            })).unwrap();
+            store.record_ses_event(&event).unwrap();
+        }
+        // Act
+        let first = store.list_ses_event_page(Some("message"), None, 3).unwrap();
+        fs::remove_file(store.root.join(super::SES_EVENTS_DIR).join("event-2.json")).unwrap();
+        let second = store
+            .list_ses_event_page(Some("message"), first.next.as_deref(), 3)
+            .unwrap();
+        let last = store
+            .list_ses_event_page(Some("message"), second.next.as_deref(), 3)
+            .unwrap();
+        // Assert
+        assert_eq!(first.items.len(), 3);
+        assert_eq!(second.items[0].event_id, "event-3");
+        assert_eq!(last.items.len(), 2);
+        assert!(last.next.is_none());
+        assert!(store
+            .list_ses_event_page(Some("other-message"), first.next.as_deref(), 3)
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn should_reject_invalid_ses_event_page_parameters_before_reading_records() {
+        // Arrange
+        let records =
+            || std::iter::once_with(|| panic!("records read before parameter validation"));
+        // Act
+        let invalid_cursor =
+            crate::mail::ses_events::event_page(records(), None, Some("garbage"), 3);
+        let invalid_limit = crate::mail::ses_events::event_page(records(), None, None, 501);
+        // Assert
+        assert!(matches!(
+            invalid_cursor,
+            Err(crate::Error::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            invalid_limit,
+            Err(crate::Error::InvalidRequest(_))
+        ));
     }
 }

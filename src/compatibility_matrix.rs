@@ -54,6 +54,24 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header",
+            "providers::azure::user_delegation::tests::should_sign_user_delegation_sas_with_version_specific_layouts_until_key_expiry",
+            "providers::azure::user_delegation::tests::should_issue_delegation_keys_only_to_bearer_callers_within_seven_days",
+            "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+            "providers::azure::copy::tests::should_evaluate_source_conditions_against_the_source_etag",
+            "providers::azure::tests::should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url",
+            "providers::azure::tests::should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions",
+            "mail::ses_events::tests::should_record_every_event_type_without_a_destination",
+            "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_ses_tags",
+            "mail::providers::ses::tests::should_capture_ses_email_tags_with_configuration_set_on_the_message",
+            "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
+            "mail::providers::ses::tests::should_reject_invalid_or_duplicate_ses_email_tags",
+            "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent",
+            "providers::gcs::tests::should_compose_gcs_sources_with_generation_preconditions",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects",
+            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api",
+            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
+            "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_while_rejecting_mixed_credentials",
             "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes",
             "storage_provider_parity::should_validate_s3_part_md5_before_replacing_an_acknowledged_part",
             "storage_provider_parity::should_validate_gcs_xml_integrity_headers_before_publishing_an_object",
@@ -294,6 +312,14 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas",
+            "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas",
+            "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow",
+            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key",
             "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
             "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",

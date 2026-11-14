@@ -656,7 +656,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_store_each_acs_recipient_with_one_shared_batch_id() {
-        if std::env::var("SQRZL_ACS_CONNECTION_STRING").is_ok() {
+        if std::env::var("ACS_CONNECTION_STRING").is_ok() {
             return;
         }
         let registry = SmsAdapterRegistry::default();
@@ -838,7 +838,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_support_sns_get_and_acs_per_recipient_results() {
-        if std::env::var("SQRZL_ACS_CONNECTION_STRING").is_ok() {
+        if std::env::var("ACS_CONNECTION_STRING").is_ok() {
             return;
         }
         let registry = SmsAdapterRegistry::default();
@@ -920,7 +920,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_validate_acs_sms_options_and_repeatability_without_duplicate_capture() {
-        if std::env::var("SQRZL_ACS_CONNECTION_STRING").is_ok() {
+        if std::env::var("ACS_CONNECTION_STRING").is_ok() {
             return;
         }
         let registry = SmsAdapterRegistry::default();

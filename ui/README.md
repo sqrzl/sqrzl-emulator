@@ -47,6 +47,25 @@ npm run preview  # Preview production build
 npm test         # Run tests with Vitest
 ```
 
+Real-server browser regressions cover open/protected authentication, create and
+delete dialogs, nested uploads, dotted-folder and mailbox reloads, mobile layout,
+and unknown-route recovery. They start isolated Rust servers and remove their
+owned temporary storage after the processes exit:
+
+```bash
+# From the repository root:
+cargo build --locked --bin sqrzl-emulator
+cd ui
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+The browser harness uses local ports 19000–19003 and 19251/19253 and refuses to
+reuse an existing server. CI installs Chromium and runs the same desktop/mobile
+journeys. `npm run gen` uses the pinned generator and formats its output; CI fails
+when regeneration changes the committed client.
+
 Node 24 or newer is required. CI and the container build use Node 26.
 
 ## Dependencies
@@ -65,6 +84,8 @@ as its HTTP transport. Keep `package.json` and `package-lock.json` in sync;
 | `@askrjs/ui`     |          `0.5.0` |
 | `@askrjs/vite`   |          `0.5.0` |
 | `@fgrzl/fetch`   |         `^2.0.0` |
+| `@fgrzl/fetch-gen` |        `2.0.0` |
+| `@playwright/test` |       `1.65.1` |
 | `@types/node`    |        `^26.6.6` |
 | `jiti`           |         `^2.7.0` |
 | `jsdom`          |        `^30.1.3` |

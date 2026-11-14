@@ -277,15 +277,17 @@ impl AcsSmsAdapter {
         Ok(None)
     }
 
-    fn connection_key() -> Option<String> {
-        std::env::var("SQRZL_ACS_CONNECTION_STRING")
-            .ok()
-            .and_then(|value| parse_connection_string(&value))
+    fn connection_key(config: &AuthConfig) -> Option<String> {
+        config
+            .vendor_credentials
+            .acs_connection_string
+            .as_deref()
+            .and_then(parse_connection_string)
             .map(|connection| connection.access_key)
     }
 
-    fn authorized(request: &SmsRequest) -> bool {
-        let Some(access_key) = Self::connection_key() else {
+    fn authorized(request: &SmsRequest, config: &AuthConfig) -> bool {
+        let Some(access_key) = Self::connection_key(config) else {
             return true;
         };
         let Some(value) = request.header("authorization") else {
@@ -699,7 +701,7 @@ impl SmsAdapter for AcsSmsAdapter {
     fn handle<'a>(
         &'a self,
         store: Arc<dyn SmsStore>,
-        _auth: Arc<AuthConfig>,
+        auth: Arc<AuthConfig>,
         request: SmsRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, String>> + Send + 'a>> {
         Box::pin(async move {
@@ -722,7 +724,7 @@ impl SmsAdapter for AcsSmsAdapter {
                     "api-version is not supported",
                 ));
             }
-            if !Self::authorized(&request) {
+            if !Self::authorized(&request, &auth) {
                 return Ok(Self::standard_error(
                     StatusCode::UNAUTHORIZED,
                     "Unauthorized",

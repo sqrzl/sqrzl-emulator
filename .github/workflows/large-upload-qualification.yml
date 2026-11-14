@@ -1,6 +1,8 @@
 name: Measured large upload qualification
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
     paths:

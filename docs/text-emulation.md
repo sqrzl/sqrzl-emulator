@@ -46,10 +46,13 @@ delivery state. Callback redirects are not followed. Callback hosts default to
 `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS`. `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` defaults
 to 5000.
 
-Set both `SQRZL_TWILIO_ACCOUNT_SID` and `SQRZL_TWILIO_AUTH_TOKEN` to require
-Twilio Basic authentication and sign inbound/status callback forms. AWS adapters
+Set both `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` to require
+Twilio Basic authentication and sign inbound/status callback forms. Optionally
+set `TWILIO_API_KEY_SID` and `TWILIO_API_KEY_SECRET` to also accept
+an API key (`SK...` SID as the user name) for the configured account; callbacks
+are still signed with the auth token, as on Twilio. AWS adapters
 reuse `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY`. ACS SMS reuses
-`SQRZL_ACS_CONNECTION_STRING`.
+`ACS_CONNECTION_STRING`.
 
 Twilio inbound simulations may include base64 media. Sqrzl persists those bytes
 and serves authenticated Twilio-shaped media URLs. Outbound Twilio media URLs

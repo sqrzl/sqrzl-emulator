@@ -68,3 +68,19 @@ replay, and retry after a persistence failure.
 
 Native repeatability references: [ACS repeatable requests](https://learn.microsoft.com/en-us/rest/api/communication/repeatable-requests)
 and [ACS SMS Send](https://learn.microsoft.com/en-us/rest/api/communication/sms/sms/send?view=rest-communication-sms-2021-03-07).
+
+## SES event processing
+
+SES event requests durably claim their stable request ID before changing local
+delivery state or sending an external callback. Concurrent requests share one
+claim; changed payloads cannot reuse an ID. A completed record replays its stored
+outcome. A pending record preserves its notification identity across restart and
+never causes an automatic resend, including when the receiver acknowledged a
+callback but the final local write failed. Callers must retain request IDs when
+retrying. Pending outcomes require explicit inspection; HTTP delivery is not an
+exactly-once transaction with local persistence.
+
+Destination updates are serialized and use unique, synced temporary files.
+Initial event claims and final outcomes also sync files and their parent directory.
+This extends process-interruption evidence; physical power-loss qualification
+remains outside the stated local-filesystem contract.

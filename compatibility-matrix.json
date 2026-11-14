@@ -272,16 +272,23 @@
           "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
           "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
           "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create",
-          "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes"
+          "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes",
+          "providers::azure::tests::should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions",
+          "providers::azure::tests::should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url",
+          "providers::azure::copy::tests::should_evaluate_source_conditions_against_the_source_etag",
+          "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
           "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
-          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+          "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas",
+          "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions"
         ],
         "limitations": [
-          "Azure local versioning/soft-delete mode is mutually exclusive with S3 and GCS data-protection ownership of the same container. Conflicting activation, protected mutation, or foreign version access returns FeatureVersionMismatch 409 without mutation. Selected previous-version and snapshot mutations are either handled by the supported delete path or rejected before changing the current blob. Put Block List preserves Committed, Uncommitted, and Latest selectors and reports real block sizes. Unimplemented blob subresources return FeatureNotSupported before ordinary blob CRUD can run."
+          "Azure local versioning/soft-delete mode is mutually exclusive with S3 and GCS data-protection ownership of the same container. Conflicting activation, protected mutation, or foreign version access returns FeatureVersionMismatch 409 without mutation. Selected previous-version and snapshot mutations are either handled by the supported delete path or rejected before changing the current blob. Put Block List preserves Committed, Uncommitted, and Latest selectors and reports real block sizes. Unimplemented blob subresources return FeatureNotSupported before ordinary blob CRUD can run.",
+          "Synchronous Copy Blob From URL copies same-account sources up to 64 MiB with SAS-authorized reads and atomic source/destination ETag conditions; asynchronous copy returns 501. Encryption scopes are modeled by name only: x-ms-encryption-scope and SAS ses must name a scope declared in AZURE_ENCRYPTION_SCOPES, are recorded per blob and returned on reads and listings, and must match the blob's scope on append, page, metadata, and snapshot writes. Container default scopes return 501."
         ]
       },
       "metadata_headers": {
@@ -368,15 +375,19 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
-          "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas"
+          "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas",
+          "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+          "providers::azure::user_delegation::tests::should_issue_delegation_keys_only_to_bearer_callers_within_seven_days",
+          "providers::azure::user_delegation::tests::should_sign_user_delegation_sas_with_version_specific_layouts_until_key_expiry"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+          "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
         ],
         "limitations": [
-          "Blob SAS read, create, write, and delete permissions are verified, including staging and committing a multi-block upload through one SDK-generated SAS. Account SAS and service-level SAS operations remain outside this subset."
+          "Blob SAS read, create, write, and delete permissions are verified, including staging and committing a multi-block upload through one SDK-generated SAS. Service SAS may pin an encryption scope (ses). User delegation SAS is verified with keys from Get User Delegation Key, which accepts only the local bearer credential. Account SAS and service-level SAS operations remain outside this subset."
         ]
       },
       "block_blob_upload": {
@@ -489,11 +500,13 @@
           "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
           "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
           "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
-          "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
+          "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
+          "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+          "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
         ],
         "limitations": [
           "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
@@ -540,7 +553,8 @@
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-          "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers",
+          "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
         ],
         "limitations": [
           "The accepted JSON upload checksum subset validates base64 big-endian CRC32C supplied in multipart object metadata and in X-Goog-Hash on media or final resumable requests. Malformed, conflicting, mismatched, and unsupported checksum algorithms fail before mutation; a failed final resumable checksum leaves the session retriable. A separate third JSON multipart checksum part and JSON MD5 validation remain explicitly rejected rather than approximated. Current-generation JSON metadata, media, and delete selectors are accepted only when they equal the stored generation; historical generation access remains unsupported.",
@@ -631,7 +645,8 @@
           "providers::gcs::tests::should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url",
           "providers::tests::should_route_local_gcs_resumable_session_uris_back_to_gcs",
           "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
-          "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
+          "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing",
+          "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -661,14 +676,21 @@
           "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
           "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
           "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-          "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+          "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
+          "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects",
+          "providers::gcs::tests::should_compose_gcs_sources_with_generation_preconditions",
+          "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+          "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+          "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
         ],
         "limitations": [
-          "Unlocked bucket-retention and 7-to-less-than-90-day soft-delete configuration are locally covered and are mutually exclusive with S3 or Azure data-protection ownership of the bucket; conflicting activation returns FAILED_PRECONDITION 409 without mutation. Retention-policy locking, per-object retention, writable server-owned policy fields, and disabling an enabled soft-delete policy are explicitly rejected and are not claimed as compatible."
+          "Unlocked bucket-retention and 7-to-less-than-90-day soft-delete configuration are locally covered and are mutually exclusive with S3 or Azure data-protection ownership of the bucket; conflicting activation returns FAILED_PRECONDITION 409 without mutation. Retention-policy locking, per-object retention, writable server-owned policy fields, and disabling an enabled soft-delete policy are explicitly rejected and are not claimed as compatible.",
+          "Customer-managed encryption is modelled without cryptography: bucket encryption.defaultKmsKeyName is accepted on insert/patch and returned on get; kmsKeyName on JSON uploads (and x-goog-encryption-kms-key-name on XML uploads) must match projects/*/locations/*/keyRings/*/cryptoKeys/*, otherwise the request fails before mutation. The bucket default applies when an upload names no key, and object resources report the key with a /cryptoKeyVersions/1 suffix. KMS key existence, IAM, rotation, and encryption-enforcement configs are not modelled; enforcement configs are rejected with 501.",
+          "objects.compose, objects.rewrite, and objects.copy are supported for same-emulator sources up to 64 MiB, completing in one call; source and destination generation preconditions return 412 on mismatch without mutation. rewriteToken continuation, destination ACLs, source metageneration preconditions, and writable destination fields beyond contentType, metadata, and kmsKeyName are rejected."
         ]
       }
     },
@@ -853,14 +875,16 @@
           "sms::providers::tests::should_reject_invalid_twilio_sids_media_and_unsupported_fields_without_capture",
           "sms::providers::tests::should_render_provider_shaped_incomplete_body_responses",
           "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
-          "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
+          "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api",
+          "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_while_rejecting_mixed_credentials"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
+          "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk",
+          "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key"
         ],
         "limitations": [
-          "Outbound creation accepts only To, From or MessagingServiceSid, optional Body, up to 10 absolute HTTP(S) MediaUrl values, and a safety-allowlisted StatusCallback. Account/Messaging Service SIDs, E.164 values, media, 1600-character body limit, initial accepted/queued status, and Twilio error envelopes are validated before capture. Other create parameters, TwiML execution, remote media fetching, WhatsApp, RCS, voice, scheduling, automatic delivery timing, and provider management APIs are unsupported."
+          "Outbound creation accepts only To, From or MessagingServiceSid, optional Body, up to 10 absolute HTTP(S) MediaUrl values, and a safety-allowlisted StatusCallback. Account/Messaging Service SIDs, E.164 values, media, 1600-character body limit, initial accepted/queued status, and Twilio error envelopes are validated before capture. When authentication is enabled, Basic credentials may be the account auth token or an optional configured API key (SK SID and secret); status callbacks stay signed with the auth token. Other create parameters, TwiML execution, remote media fetching, WhatsApp, RCS, voice, scheduling, automatic delivery timing, and provider management APIs are unsupported."
         ]
       }
     },
@@ -905,14 +929,21 @@
         "verified_by": [
           "interop_email::should_capture_ses_send_with_signature_authorization",
           "interop_email::should_reject_unsupported_mail_shapes_before_capture",
-          "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
+          "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses",
+          "mail::providers::ses::tests::should_reject_invalid_or_duplicate_ses_email_tags",
+          "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
+          "mail::providers::ses::tests::should_capture_ses_email_tags_with_configuration_set_on_the_message",
+          "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_ses_tags",
+          "mail::ses_events::tests::should_record_every_event_type_without_a_destination"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_email_sdk.py::test_ses_sdk_send"
+          "sdk-tests/test_email_sdk.py::test_ses_sdk_send",
+          "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing"
         ],
         "limitations": [
-          "The accepted SES v2 SendEmail subset is Content.Simple with Destination, FromEmailAddress, ReplyToAddresses, subject/body charset metadata, and up to 15 non-reserved custom headers. Content.Raw, Content.Template, Simple attachments, tags, configuration sets, feedback forwarding, tenant fields, and other top-level options are explicitly rejected. SigV4 is validated for the local endpoint, but IAM, identities, quotas, and every signing edge case are not certified."
+          "The accepted SES v2 SendEmail subset is Content.Simple with Destination, FromEmailAddress, ReplyToAddresses, subject/body charset metadata, up to 15 non-reserved custom headers, up to 50 validated unique EmailTags, and ConfigurationSetName. When SES_CONFIGURATION_SETS is set, unlisted configuration sets return NotFoundException; otherwise any valid name is accepted. Content.Raw, Content.Template, Simple attachments, feedback forwarding, tenant fields, and other top-level options are explicitly rejected. SigV4 is validated for the local endpoint, but IAM, identities, quotas, and every signing edge case are not certified.",
+          "Event publishing is simulated through the admin API and MCP: Send, Delivery, Bounce, Complaint, Reject, DeliveryDelay, and Rendering Failure records carry the documented mail object (including caller EmailTags and ses:* tags) and per-type detail, are readable through /admin/v1/ses-events, and are posted as unsigned SNS Notification envelopes to allowlisted HTTP callbacks configured per configuration set. SNS subscription management, signing certificates, EventBridge, Firehose, CloudWatch, and automatic event timing are not modelled."
         ]
       }
     },
@@ -4207,7 +4238,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
-            "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries"
+            "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4296,7 +4328,8 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
             "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
-            "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
+            "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create",
+            "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
@@ -4309,7 +4342,9 @@
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
             "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob",
             "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
-            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas",
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4378,7 +4413,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
-            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob"
+            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob",
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4455,7 +4491,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
-            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4521,7 +4558,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
-            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts"
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4554,7 +4592,8 @@
             "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4592,14 +4631,16 @@
             "providers::azure::tests::should_reject_malformed_azure_block_lists_without_committing",
             "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
             "providers::azure::tests::should_preserve_active_lease_across_azure_blob_overwrites",
-            "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
+            "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+            "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
             "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4643,7 +4684,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
             "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4915,7 +4957,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "copy-source",
         "support_tier": "unsupported",
-        "boundary": "This exact operation/variant is not implemented; returns501 FeatureNotSupported before mutation.",
+        "boundary": "Asynchronous Copy Blob (x-ms-copy-source without x-ms-requires-sync: true) and Put Block From URL are not implemented; return 501 FeatureNotSupported before mutation. See CopyBlobFromURL.put.sync.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
@@ -4949,7 +4991,9 @@
             "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions"
+          ]
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -5502,7 +5546,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "shared-key",
         "support_tier": "partial",
-        "boundary": "Five selected versions; HTTP-only localhost. Account/user-delegation SAS, signed IP, policy and response overrides are rejected.",
+        "boundary": "Five selected versions; HTTP-only localhost. Account SAS, signed IP, policy and response overrides are rejected.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_concatenate_azure_canonical_headers_and_resource_without_blank_line",
@@ -5536,16 +5580,18 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "service-sas",
         "support_tier": "partial",
-        "boundary": "Five selected versions; HTTP-only localhost. Account/user-delegation SAS, signed IP, policy and response overrides are rejected.",
+        "boundary": "Five selected versions; HTTP-only localhost. Account SAS, signed IP, policy and response overrides are rejected. A signed encryption scope (ses) is validated, pinned onto writes, and must match any x-ms-encryption-scope header.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
-            "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas"
+            "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas",
+            "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -6032,7 +6078,7 @@
         "path": "/storage/v1/b?project={project}",
         "variant": "json",
         "support_tier": "partial",
-        "boundary": "Name, selected retention/soft-delete; native unsupported controls rejected.",
+        "boundary": "Name, selected retention/soft-delete, and a local default KMS key name; native unsupported controls rejected.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_handle_gcs_bucket_and_object_crud",
@@ -6040,11 +6086,16 @@
             "interop_gcs::should_round_trip_bucket_and_object_operations_given_basic_gcs_requests_when_using_xml_api",
             "provider_conformance::should_reject_malformed_gcs_json_mutation_bodies_without_mutation",
             "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
-            "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
+            "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations",
+            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
+            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6079,7 +6130,9 @@
             "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6103,7 +6156,7 @@
         "path": "/storage/v1/b/{bucket}",
         "variant": "json",
         "support_tier": "partial",
-        "boundary": "Typed selected retention/soft-delete; unknown controls fail before mutation.",
+        "boundary": "Typed selected retention/soft-delete and default KMS key name; unknown controls fail before mutation.",
         "evidence_candidates": {
           "rust": [
             "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
@@ -6120,9 +6173,13 @@
             "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
             "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
+            "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6158,7 +6215,8 @@
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6223,12 +6281,15 @@
             "providers::gcs::tests::should_return_generation_headers_and_support_ranges",
             "interop_gcs::should_return_custom_metadata_given_gcs_metadata_headers_when_requesting_object_head",
             "provider_conformance::should_report_gcs_json_metadata_document_length_separately_from_object_size",
-            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version"
+            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
-            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6397,7 +6458,8 @@
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
-            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6439,7 +6501,8 @@
             "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
             "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
             "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
+            "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
           ],
           "sdk": []
         },
@@ -6486,7 +6549,8 @@
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
           ]
         },
         "acceptance_gates": {
@@ -6524,12 +6588,14 @@
             "providers::gcs::tests::should_initiate_a_resumable_upload_with_a_v4_hmac_signed_url",
             "providers::tests::should_route_local_gcs_resumable_session_uris_back_to_gcs",
             "provider_conformance::should_keep_gcs_json_resumable_sessions_retriable_after_framing_failures",
-            "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing"
+            "provider_conformance::should_route_non_upload_gcs_methods_before_enforcing_upload_framing",
+            "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api"
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6577,7 +6643,8 @@
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6642,39 +6709,27 @@
         "method": "POST",
         "path": "/storage/v1/b/{bucket}/o/{object}/compose",
         "variant": "json",
-        "support_tier": "unsupported",
-        "boundary": "Native compose/rewrite is not implemented; POST reaches the explicit unsupported-method response and does not mutate data. Resumable assembly is a different local operation.",
+        "support_tier": "partial",
+        "boundary": "Up to 32 same-bucket sources with optional per-source generation and ifGenerationMatch, destination ifGenerationMatch/ifGenerationNotMatch (including 0) evaluated atomically with the write, replaced destination contentType/metadata, kmsKeyName, composed CRC32C and componentCount. Materialized locally up to 64 MiB; destination ACLs and other writable fields are rejected.",
         "evidence_candidates": {
           "rust": [
-            "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
-            "providers::gcs::tests::should_increment_generation_on_overwrite_and_patch_metageneration",
-            "providers::gcs::tests::should_enforce_gcs_generation_and_metageneration_preconditions",
-            "providers::gcs::tests::should_reject_retained_overwrite_and_invalid_generation_preconditions",
-            "providers::gcs::tests::should_reject_unsupported_or_invalid_bucket_retention_configuration_without_mutation",
-            "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
-            "providers::gcs::tests::should_apply_resumable_json_metadata_and_body_name_without_silent_fields",
-            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version",
-            "providers::gcs::tests::should_serialize_conflicting_s3_and_gcs_data_protection_activation",
-            "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation",
-            "lifecycle::tests::should_not_eagerly_expire_objects_from_gcs_retained_buckets",
-            "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
-            "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
-            "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "providers::gcs::tests::should_compose_gcs_sources_with_generation_preconditions"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
+          ]
         },
         "acceptance_gates": {
-          "positive": "not-applicable",
+          "positive": "pending",
           "negative": "pending",
-          "boundary": "not-applicable",
-          "condition": "not-applicable",
+          "boundary": "pending",
+          "condition": "pending",
           "pages": "not-applicable",
-          "restart": "not-applicable",
+          "restart": "pending",
           "native-error": "pending",
-          "native-auth": "not-applicable",
-          "process-crash": "not-applicable",
-          "resources": "not-applicable"
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
         }
       },
       {
@@ -6685,39 +6740,58 @@
         "method": "POST",
         "path": "/storage/v1/b/{bucket}/o/{object}/rewriteTo/...",
         "variant": "json",
-        "support_tier": "unsupported",
-        "boundary": "Native compose/rewrite is not implemented; POST reaches the explicit unsupported-method response and does not mutate data. Resumable assembly is a different local operation.",
+        "support_tier": "partial",
+        "boundary": "Same-emulator source and destination completed in one call (done: true) with sourceGeneration, ifSourceGenerationMatch/NotMatch, destination ifGenerationMatch/NotMatch (including 0) evaluated atomically with the write, replaced metadata/contentType, and destinationKmsKeyName. rewriteToken continuation, destinationPredefinedAcl, and source metageneration preconditions are rejected; materialized locally up to 64 MiB.",
         "evidence_candidates": {
           "rust": [
-            "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
-            "providers::gcs::tests::should_increment_generation_on_overwrite_and_patch_metageneration",
-            "providers::gcs::tests::should_enforce_gcs_generation_and_metageneration_preconditions",
-            "providers::gcs::tests::should_reject_retained_overwrite_and_invalid_generation_preconditions",
-            "providers::gcs::tests::should_reject_unsupported_or_invalid_bucket_retention_configuration_without_mutation",
-            "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
-            "providers::gcs::tests::should_apply_resumable_json_metadata_and_body_name_without_silent_fields",
-            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version",
-            "providers::gcs::tests::should_serialize_conflicting_s3_and_gcs_data_protection_activation",
-            "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation",
-            "lifecycle::tests::should_not_eagerly_expire_objects_from_gcs_retained_buckets",
-            "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
-            "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
-            "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
+          ]
         },
         "acceptance_gates": {
-          "positive": "not-applicable",
+          "positive": "pending",
           "negative": "pending",
-          "boundary": "not-applicable",
-          "condition": "not-applicable",
+          "boundary": "pending",
+          "condition": "pending",
           "pages": "not-applicable",
-          "restart": "not-applicable",
+          "restart": "pending",
           "native-error": "pending",
-          "native-auth": "not-applicable",
-          "process-crash": "not-applicable",
-          "resources": "not-applicable"
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "gcs.CopyObject.post.json",
+        "provider": "gcs",
+        "family": "json_api_breadth",
+        "operation": "CopyObject",
+        "method": "POST",
+        "path": "/storage/v1/b/{bucket}/o/{object}/copyTo/b/{destinationBucket}/o/{destinationObject}",
+        "variant": "json",
+        "support_tier": "partial",
+        "boundary": "Same semantics as the local rewrite subset, returning the destination object resource; kmsKeyName selects the destination key.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent"
+          ],
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "not-applicable",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
         }
       },
       {
@@ -8022,16 +8096,22 @@
         "path": "/v2/email/outbound-emails",
         "variant": "Simple",
         "support_tier": "partial",
-        "boundary": "Selected Simple content and SigV4; Raw, Template, attachments and unsupported options rejected.",
+        "boundary": "Selected Simple content, EmailTags, ConfigurationSetName, and SigV4; Raw, Template, attachments and unsupported options rejected.",
         "evidence_candidates": {
           "rust": [
             "interop_email::should_capture_ses_send_with_signature_authorization",
             "interop_email::should_reject_unsupported_mail_shapes_before_capture",
-            "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
+            "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses",
+            "mail::providers::ses::tests::should_reject_invalid_or_duplicate_ses_email_tags",
+            "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
+            "mail::providers::ses::tests::should_capture_ses_email_tags_with_configuration_set_on_the_message",
+            "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_ses_tags",
+            "mail::ses_events::tests::should_record_every_event_type_without_a_destination"
           ],
           "sdk": [
             "sdk-tests/test_email_sdk.py::test_ses_sdk_send",
-            "sdk-tests/test_messaging_acceptance.py::test_ses_native_auth_and_process_restart"
+            "sdk-tests/test_messaging_acceptance.py::test_ses_native_auth_and_process_restart",
+            "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing"
           ]
         },
         "acceptance_gates": {
@@ -8291,7 +8371,7 @@
         "path": "/2010-04-01/Accounts/{sid}/Messages.json",
         "variant": "form",
         "support_tier": "partial",
-        "boundary": "Selected SMS/MMS fields and token authentication; remote media is not fetched.",
+        "boundary": "Selected SMS/MMS fields with auth-token or API-key Basic authentication; remote media is not fetched.",
         "evidence_candidates": {
           "rust": [
             "sms::providers::tests::should_capture_twilio_repeated_media_and_return_sdk_resource",
@@ -8299,11 +8379,13 @@
             "sms::providers::tests::should_reject_invalid_twilio_sids_media_and_unsupported_fields_without_capture",
             "sms::providers::tests::should_render_provider_shaped_incomplete_body_responses",
             "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
-            "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api"
+            "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api",
+            "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_while_rejecting_mixed_credentials"
           ],
           "sdk": [
             "sdk-tests/test_messaging_acceptance.py::test_twilio_native_auth_and_body_boundary",
-            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk"
+            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk",
+            "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key"
           ]
         },
         "acceptance_gates": {
@@ -9160,7 +9242,8 @@
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -9464,6 +9547,103 @@
           "native-auth": "not-applicable",
           "process-crash": "not-applicable",
           "resources": "not-applicable"
+        }
+      },
+      {
+        "id": "azure-blob.CopyBlobFromURL.put.sync",
+        "provider": "azure-blob",
+        "family": "blob_crud",
+        "operation": "CopyBlobFromURL",
+        "method": "PUT",
+        "path": "/{account}/{container}/{blob}",
+        "variant": "sync",
+        "support_tier": "partial",
+        "boundary": "Synchronous same-account copy (x-ms-requires-sync: true) to a BlockBlob; source must carry a read SAS when auth is enforced. x-ms-source-if-match/none-match and If-Match/If-None-Match are evaluated atomically with the write (412 SourceConditionNotMet/ConditionNotMet, 409 BlobAlreadyExists). x-ms-meta-* replaces metadata and x-ms-encryption-scope applies to the destination. Materializes at most 64 MiB; cross-account, snapshot/version sources, source OAuth, tags and date source conditions return 501.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions",
+            "providers::azure::tests::should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url",
+            "providers::azure::copy::tests::should_evaluate_source_conditions_against_the_source_etag"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "azure-blob.GetUserDelegationKey.post.default",
+        "provider": "azure-blob",
+        "family": "sas_auth",
+        "operation": "GetUserDelegationKey",
+        "method": "POST",
+        "path": "/{account}?restype=service&comp=userdelegationkey",
+        "variant": "default",
+        "support_tier": "partial",
+        "boundary": "Accepts only the local bearer credential (Bearer <account key>); Shared Key and SAS are refused. Issues a key for one fixed local principal, valid at most 7 days, derived statelessly from the account key. Role assignments and tenant validation are not modeled.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+            "providers::azure::user_delegation::tests::should_issue_delegation_keys_only_to_bearer_callers_within_seven_days"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "azure-blob.Authenticate.http.user-delegation-sas",
+        "provider": "azure-blob",
+        "family": "sas_auth",
+        "operation": "Authenticate",
+        "method": "HTTP",
+        "path": "/{account}/{container}/{blob}",
+        "variant": "user-delegation-sas",
+        "support_tier": "partial",
+        "boundary": "Blob and container user delegation SAS signed with a key from Get User Delegation Key, using the pre-2025-07-05 or 2026-04-06+ string-to-sign; read/create/write/delete/list permissions as for service SAS, refused outside the key validity window. Agent object IDs, correlation IDs, delegated user OIDs, and signed request headers/query parameters are rejected.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+            "providers::azure::user_delegation::tests::should_sign_user_delegation_sas_with_version_specific_layouts_until_key_expiry"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
         }
       }
     ],

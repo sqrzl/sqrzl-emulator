@@ -15,7 +15,7 @@ struct HealthResponse {
     admin_auth_enforced: bool,
     max_request_bytes: usize,
     storage_ready: bool,
-    enabled_providers: [&'static str; 4],
+    enabled_providers: Vec<&'static str>,
 }
 
 pub fn response(
@@ -23,21 +23,48 @@ pub fn response(
     config: &crate::Config,
 ) -> hyper::Response<Body> {
     let storage_ready = storage.list_buckets().is_ok();
+    let vendor = &config.vendor_credentials;
+    let auth_enforced_providers = [
+        ("s3-family", config.enforce_auth),
+        ("azure-blob", config.azure_auth_enforced()),
+        ("gcs", config.gcs_auth_enforced()),
+        ("oci-object", config.oci_auth_enforced()),
+        ("ses", config.enforce_auth),
+        ("sns", config.enforce_auth),
+        ("aws-sms-voice-v2", config.enforce_auth),
+        (
+            "twilio",
+            vendor.twilio_account_sid.is_some() && vendor.twilio_auth_token.is_some(),
+        ),
+        ("sendgrid", vendor.sendgrid_api_key.is_some()),
+        ("acs", vendor.acs_connection_string.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(provider, enforced)| enforced.then_some(provider))
+    .collect::<Vec<_>>();
     let body = HealthResponse {
         status: if storage_ready { "ok" } else { "degraded" },
         version: env!("CARGO_PKG_VERSION"),
         api_port: config.api_port,
         ui_port: config.ui_port,
-        auth_enforced: config.enforce_auth,
-        auth_enforced_providers: if config.enforce_auth {
-            vec!["s3-family", "azure-blob", "gcs", "oci-object"]
-        } else {
-            Vec::new()
-        },
+        auth_enforced: !auth_enforced_providers.is_empty(),
+        auth_enforced_providers,
         admin_auth_enforced: config.admin_auth_enforced(),
         max_request_bytes: config.max_request_bytes,
         storage_ready,
-        enabled_providers: ["s3-family", "azure-blob", "gcs", "oci-object"],
+        enabled_providers: vec![
+            "s3-family",
+            "azure-blob",
+            "gcs",
+            "oci-object",
+            "smtp",
+            "ses",
+            "sns",
+            "aws-sms-voice-v2",
+            "twilio",
+            "sendgrid",
+            "acs",
+        ],
     };
 
     match serde_json::to_vec(&body) {

@@ -3,28 +3,84 @@ name: Executables
 on:
   workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'compatibility-matrix.json'
+      - '.github/workflows/executables.yml'
+      - 'scripts/*package*.py'
+      - 'src/api/server.rs'
+      - 'src/main.rs'
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
-  build:
-    name: Build Linux executables
+  qualification:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+      - name: Require exact source qualification before distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/require_release_checks.py
 
-      - name: Build linux x86_64
-        run: docker run --rm -v "$GITHUB_WORKSPACE:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild cargo zigbuild --release --locked --bin sqrzl-emulator --target x86_64-unknown-linux-gnu && mkdir -p dist/executables/x86_64-unknown-linux-gnu && cp target/x86_64-unknown-linux-gnu/release/sqrzl-emulator dist/executables/x86_64-unknown-linux-gnu/
-
-      - name: Build linux aarch64
-        run: docker run --rm -v "$GITHUB_WORKSPACE:/io" -w /io ghcr.io/rust-cross/cargo-zigbuild cargo zigbuild --release --locked --bin sqrzl-emulator --target aarch64-unknown-linux-gnu && mkdir -p dist/executables/aarch64-unknown-linux-gnu && cp target/aarch64-unknown-linux-gnu/release/sqrzl-emulator dist/executables/aarch64-unknown-linux-gnu/
-
-      - name: Upload executable artifacts
-        uses: actions/upload-artifact@v7
+  build:
+    name: Native bundle (${{ matrix.target }})
+    needs: qualification
+    if: ${{ !cancelled() && (needs.qualification.result == 'success' || github.event_name == 'pull_request') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
         with:
-          name: sqrzl-emulator-linux-executables
-          path: dist/executables
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Build complete UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-${{ matrix.target }}
+      - name: Build native executable
+        run: cargo +1.99.1 build --release --locked --bin sqrzl-emulator
+      - name: Test bundle contract
+        run: python3 -m unittest discover -s scripts -p test_release_package.py
+      - name: Package complete distribution
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          git diff --exit-code
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo 'Release tag must match Cargo package version'
+            exit 1
+          fi
+          python3 scripts/release_package.py --binary target/release/sqrzl-emulator --ui ui/dist --output dist/native --version "$version" --source-sha "$(git rev-parse HEAD)" --target "$TARGET"
+          mkdir -p dist/smoke
+          tar -xzf dist/native/*.tar.gz -C dist/smoke
+          python3 scripts/smoke_native_package.py dist/smoke/* | tee dist/native/smoke-${TARGET}.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sqrzl-emulator-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist/native/*
           if-no-files-found: error

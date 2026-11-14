@@ -688,6 +688,47 @@ fn tool_specs() -> Vec<ToolSpec> {
             "/admin/v1/text-callback-attempts/{attempt_id}/retry",
             r#"{"type":"object","properties":{"attempt_id":{"type":"string"}},"required":["attempt_id"]}"#
         ),
+        tool!(
+            "mail_ses_event_destination_get",
+            "Read the SES event destination for a configuration set.",
+            "sqrzl:read",
+            "GET",
+            "/admin/v1/ses-event-destinations/{configuration_set}",
+            r#"{"type":"object","properties":{"configuration_set":{"type":"string"}},"required":["configuration_set"]}"#
+        ),
+        tool!(
+            "mail_ses_event_destination_set",
+            "Deliver SES event records for a configuration set to an allowlisted HTTP callback as SNS notifications.",
+            "sqrzl:write",
+            "PUT",
+            "/admin/v1/ses-event-destinations/{configuration_set}",
+            r#"{"type":"object","properties":{"configuration_set":{"type":"string"},"callback_url":{"type":"string"},"event_types":{"type":"array","items":{"type":"string","enum":["Send","Delivery","Bounce","Complaint","Reject","DeliveryDelay","Rendering Failure"]}}},"required":["configuration_set","callback_url"]}"#
+        ),
+        tool!(
+            "mail_ses_event_destination_delete",
+            "Delete the SES event destination for a configuration set.",
+            "sqrzl:write",
+            "DELETE",
+            "/admin/v1/ses-event-destinations/{configuration_set}",
+            r#"{"type":"object","properties":{"configuration_set":{"type":"string"}},"required":["configuration_set"]}"#
+        ),
+        tool!(
+            "mail_ses_event_simulate",
+            "Emit an SES event-publishing record for a message captured through SES SendEmail.",
+            "sqrzl:write",
+            "POST",
+            "/admin/v1/ses-events",
+            r#"{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"message_id":{"type":"string"},"event_type":{"type":"string","enum":["Send","Delivery","Bounce","Complaint","Reject","DeliveryDelay","Rendering Failure"]},"recipients":{"type":"array","items":{"type":"string"}},"bounce_type":{"type":"string","enum":["Undetermined","Permanent","Transient"]},"bounce_sub_type":{"type":"string"},"complaint_feedback_type":{"type":"string"},"delay_type":{"type":"string"},"reason":{"type":"string"},"smtp_response":{"type":"string"}},"required":["message_id","event_type"]}"#
+        ),
+        tool!(
+            "mail_ses_events_list",
+            "List simulated SES event records, optionally for one message.",
+            "sqrzl:read",
+            "GET",
+            "/admin/v1/ses-events",
+            r#"{"type":"object","properties":{"message_id":{"type":"string"},"next":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500}}}"#,
+            query &["message_id", "next", "limit"]
+        ),
         ToolSpec {
             name: "usage_query",
             description: "Read usage rows filtered by caller-selected request and byte thresholds.",
@@ -1024,6 +1065,11 @@ impl McpHandler {
             .map_err(|error| error.to_string())?;
         let response = if spec.route.starts_with("/admin/v1/mailboxes") {
             match crate::api::admin_mail::handle_request(&self.state.mail, &request) {
+                Ok(response) => response,
+                Err(error) => crate::api::admin::error_response(&error),
+            }
+        } else if crate::api::admin_mail_events::matches_path(request.uri().path()) {
+            match crate::api::admin_mail_events::handle_request(&self.state.mail, request).await {
                 Ok(response) => response,
                 Err(error) => crate::api::admin::error_response(&error),
             }

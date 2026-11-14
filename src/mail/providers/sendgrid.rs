@@ -16,7 +16,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-const ENV_SENDGRID_API_KEY: &str = "SQRZL_SENDGRID_API_KEY";
 const SENDGRID_MAX_MESSAGE_BYTES: usize = 30 * 1024 * 1024;
 
 pub struct SendGridAdapter;
@@ -93,12 +92,8 @@ impl SendGridAdapter {
             .build()
     }
 
-    fn require_api_key() -> Option<String> {
-        std::env::var(ENV_SENDGRID_API_KEY).ok()
-    }
-
-    fn is_authorized(req: &MailRequest) -> bool {
-        let Some(expected_key) = Self::require_api_key() else {
+    fn is_authorized(req: &MailRequest, config: &AuthConfig) -> bool {
+        let Some(expected_key) = config.vendor_credentials.sendgrid_api_key.as_deref() else {
             return true;
         };
 
@@ -291,7 +286,7 @@ impl crate::mail::providers::MailAdapter for SendGridAdapter {
     fn handle<'a>(
         &'a self,
         mail: Arc<dyn MailStore>,
-        _auth_config: Arc<AuthConfig>,
+        auth_config: Arc<AuthConfig>,
         req: MailRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, String>> + Send + 'a>> {
         Box::pin(async move {
@@ -306,11 +301,11 @@ impl crate::mail::providers::MailAdapter for SendGridAdapter {
                     )
                     .build());
             }
-            if !Self::is_authorized(&req) {
+            if !Self::is_authorized(&req, &auth_config) {
                 return Ok(ResponseBuilder::new(StatusCode::UNAUTHORIZED)
                     .content_type("application/json; charset=utf-8")
                     .body(
-                        serde_json::json!({"errors":[{"message":"Unauthorized","field":"authorization","help":"Set Authorization: Bearer <SQRZL_SENDGRID_API_KEY>"}]})
+                        serde_json::json!({"errors":[{"message":"Unauthorized","field":"authorization","help":"Set Authorization: Bearer <SENDGRID_API_KEY>"}]})
                             .to_string()
                             .into_bytes(),
                     )

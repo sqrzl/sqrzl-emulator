@@ -43,7 +43,7 @@ password/secret key: sqrzl-secret
 
 Use those values on the UI login page. To run an open local instance, remove
 `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY` from `compose.yml`; both must
-be absent. Setting only one also leaves authentication disabled.
+be absent. Setting only one is rejected at startup.
 
 Stop the container while retaining data:
 
@@ -133,14 +133,18 @@ docker run --rm \
 
 ## Environment variables
 
-The table below is the complete runtime configuration surface.
+The table below is the complete runtime configuration surface. `SQRZL_*` is
+reserved for emulator settings, including shared authentication and callback
+policy. Vendor credentials and resource settings use their provider prefix
+(`AZURE_*`, `GCS_*`, `OCI_*`, `TWILIO_*`, `SENDGRID_*`, `ACS_*`, or `SES_*`).
 
 | Variable | Accepted values | Default | Description |
 | --- | --- | --- | --- |
-| `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | S3 access key and admin username. Provider and admin authentication are enabled only when both generic credential variables are present. Also supplies the Azure account or GCS HMAC access ID when that provider's native override is unset. |
+| `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | S3 access key and admin username. Provider and admin authentication are enabled only when both generic credential variables are present. Incomplete or empty credentials fail startup. Also supplies the Azure account or GCS HMAC access ID when that provider's native override is unset. |
 | `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | S3 signing secret and admin password. Also supplies the Azure account key or GCS HMAC secret when that provider's native override is unset. |
 | `AZURE_ACCOUNT` | Azure storage account name; set with `AZURE_ACCOUNT_KEY` | Generic access key, otherwise unset | Azure Shared Key and SAS account override. These vendor-native variables intentionally have no `SQRZL_` prefix. |
-| `AZURE_ACCOUNT_KEY` | Azure storage account key; set with `AZURE_ACCOUNT` | Generic secret, otherwise unset | Azure Shared Key and SAS signing key. Valid Base64 is decoded as Azure key material; other values are used literally. |
+| `AZURE_ACCOUNT_KEY` | Azure storage account key; set with `AZURE_ACCOUNT` | Generic secret, otherwise unset | Azure Shared Key and SAS signing key. Valid Base64 is decoded as Azure key material; other values are used literally. Also the local bearer token accepted by Get User Delegation Key. |
+| `AZURE_ENCRYPTION_SCOPES` | Comma-separated Azure encryption scope names | Unset (no scopes exist) | Scopes that `x-ms-encryption-scope` and SAS `ses` may name. Any other scope returns `403 AuthorizationFailure`. |
 | `GCS_HMAC_ACCESS_ID` | GCS interoperability HMAC access ID; set with `GCS_HMAC_SECRET` | Generic access key, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signed-URL identity. |
 | `GCS_HMAC_SECRET` | GCS interoperability HMAC secret; set with `GCS_HMAC_ACCESS_ID` | Generic secret, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signing secret. |
 | `OCI_TENANCY_OCID` | OCI tenancy OCID | Unset | First component of the accepted OCI request-signing key ID. Configure all four OCI variables together. |
@@ -164,12 +168,56 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names use the Amazon S3 general-purpose rules: 3–63 lowercase letters, digits, periods, or hyphens; an alphanumeric first and last character; no adjacent periods, IP-address form, or AWS-reserved affix. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
 | `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
-| `SQRZL_SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
-| `SQRZL_TWILIO_ACCOUNT_SID` | Twilio account SID; set with `SQRZL_TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication only when both Twilio values are present. |
-| `SQRZL_TWILIO_AUTH_TOKEN` | Twilio auth token; set with `SQRZL_TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
-| `SQRZL_ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
+| `SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID; set with `TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication when both Twilio values are present; incomplete credentials fail startup. |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token; set with `TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
+| `TWILIO_API_KEY_SID` | Twilio API key SID (`SK...`); set with `TWILIO_API_KEY_SECRET` | Unset | Additional Basic credential accepted for the configured account when Twilio authentication is enabled. Callbacks stay signed with the auth token. |
+| `TWILIO_API_KEY_SECRET` | Twilio API key secret; set with `TWILIO_API_KEY_SID` | Unset | Password paired with `TWILIO_API_KEY_SID`. |
+| `ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
 | `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
 | `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each inbound or delivery callback attempt. |
+| `SES_CONFIGURATION_SETS` | Comma-separated SES configuration set names | Unset | When set, SES `SendEmail` with an unlisted `ConfigurationSetName` returns `NotFoundException`. When unset, any valid name is accepted. |
+| `SQRZL_MAIL_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds SES event callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
+| `SQRZL_MAIL_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each simulated SES event callback. |
+
+## SES event publishing simulation
+
+SES event simulation accepts an optional `request_id` (1–128 ASCII letters,
+digits, hyphens or underscores). Supply it before sending when a lost response may be retried. Reuse it with the same payload to read the
+persisted outcome without sending the callback again. Each response includes a
+request ID; retain it for retries. Reusing an ID with a changed payload is rejected.
+Events are persisted with `state: pending` before local updates or callback
+delivery. Completed processing records `state: completed` and the callback result.
+A pending record after interruption has an incomplete or uncertain outcome and is
+never resent automatically. Without a supplied request ID, each call creates a
+new event. These semantics prevent automatic duplicate delivery; they do not claim
+exactly-once delivery to an HTTP receiver.
+
+Captured SES messages keep their `EmailTags` and `ConfigurationSetName`; both
+appear on the admin message detail (`email_tags`, `configuration_set_name`),
+in the UI, and through the `mail_message_get` MCP tool. To test code that
+consumes SES event-publishing records:
+
+1. Optionally route a configuration set to a callback:
+   `PUT /admin/v1/ses-event-destinations/{configurationSet}` with
+   `{"callback_url": "http://127.0.0.1:8080/ses", "event_types": ["Delivery", "Bounce"]}`
+   (omit `event_types` to deliver every type).
+2. Emit an event: `POST /admin/v1/ses-events` with
+   `{"message_id": "<SES MessageId>", "event_type": "Bounce", "bounce_type": "Transient", "recipients": ["user@example.com"]}`.
+   Event types are `Send`, `Delivery`, `Bounce`, `Complaint`, `Reject`,
+   `DeliveryDelay`, and `Rendering Failure`.
+3. Read records back with `GET /admin/v1/ses-events?message_id=<id>`.
+
+Each record has `eventType`, the `mail` object (`timestamp`, `messageId`,
+`source`, `destination`, `commonHeaders`, and `tags` with the caller's tags plus
+`ses:configuration-set`, `ses:from-domain`, `ses:source-ip` and
+`ses:caller-identity`), and the per-type detail object. When the message's
+configuration set has a destination, the record is posted as an SNS
+`Notification` envelope (`x-amz-sns-message-type: Notification`) and the
+attempt is stored with the record. Delivery, Bounce, Reject, and Rendering
+Failure also update the captured copies' delivery state. The same operations
+are available as `mail_ses_event_*` MCP tools. Envelopes are unsigned; SNS
+subscriptions, signing certificates, EventBridge, and Firehose are not modelled.
 
 ## MCP and usage diagnostics
 
@@ -238,13 +286,13 @@ All provider APIs use the storage listener, normally
 | Provider | Endpoint/client setting | Local notes |
 | --- | --- | --- |
 | S3-compatible | Endpoint URL `http://localhost:9000` | Use region `us-east-1`, SigV4, and path-style addressing. |
-| Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. Shared Key and service SAS use `AZURE_ACCOUNT` and `AZURE_ACCOUNT_KEY` when configured. |
+| Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. Shared Key and service SAS use `AZURE_ACCOUNT` and `AZURE_ACCOUNT_KEY` when configured. User delegation SAS and encryption scopes are described below. |
 | GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. HMAC signing uses `GCS_HMAC_ACCESS_ID` and `GCS_HMAC_SECRET`; the local JSON SDK qualification also accepts the configured secret as a bearer token. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
 | OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/sqrzl-emulator/b/<bucket>/...`; namespace discovery returns `sqrzl-emulator`. Authenticated requests use the four `OCI_*` identity/public-key variables and OCI RSA-SHA256 request signing. |
 | SMTP | SMTP server `localhost:2525` | Plaintext local capture with strict envelope paths and null reverse-path support; SMTP AUTH and STARTTLS are intentionally unsupported. |
-| SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
-| Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4; Raw, Template, and attachments are rejected. |
+| SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SENDGRID_API_KEY` bearer authentication. |
+| Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4, including validated `EmailTags` and `ConfigurationSetName`; Raw, Template, and attachments are rejected. Admin-driven event publishing emits SES records (see below). |
 | ACS Email | Connection-string endpoint `http://localhost:9000` | Supports the matrix-listed `POST /emails:send` subset, operation polling, caller operation IDs, repeatability, and ACS HMAC authentication. |
 | Twilio Messages | API base `http://localhost:9000` | Supports outbound SMS/MMS references plus admin-driven inbound and delivery simulation. |
 | Amazon SNS | Endpoint URL `http://localhost:9000` | Supports direct `PhoneNumber` SMS `Publish` only. |
@@ -316,6 +364,16 @@ ETags can be fed back into later conditional requests. Conditional operations
 target the current object; historical GCS generation retrieval and the full
 HTTP conditional-header matrix remain outside this local emulator contract.
 
+GCS JSON `objects.compose` (up to 32 same-bucket sources), `objects.rewrite`,
+and `objects.copy` support the "upload parts, compose, verify, then publish
+only if absent" flow: per-source `generation` and `ifGenerationMatch`,
+`ifSourceGenerationMatch`/`ifSourceGenerationNotMatch`, and destination
+`ifGenerationMatch` (including `0`) are checked atomically with the write and
+fail with `412` without mutation. Composed objects report CRC32C and
+`componentCount`; rewrites always finish in one call with `done: true`.
+Sources are materialized locally up to 64 MiB. `rewriteToken` continuation,
+destination ACLs, and other unsupported destination fields are rejected.
+
 ## Protocol conformance and deterministic failures
 
 Sqrzl keeps mutation responses provider-specific: S3 object PUT/DELETE use
@@ -328,7 +386,11 @@ JSON/XML upload paths also require `Content-Length`; GCS accepts
 surface's `411` error shape. Azure committed and uncommitted block bytes remain
 distinct, including `Committed`, `Uncommitted`, and `Latest` block-list
 selection. Declared body length mismatches are rejected before a provider
-mutation is dispatched. GCS JSON object metadata reports stored
+mutation is dispatched. GCS JSON API request bodies honour
+`Content-Encoding: gzip` (the Google .NET client default) for metadata documents
+and resumable-session metadata, bounded by `SQRZL_MAX_REQUEST_BYTES` after
+decompression; other codings, and any coding on streamed media bodies, return
+`415 unsupportedMediaType` instead of being parsed as identity bytes. GCS JSON object metadata reports stored
 bytes in its JSON `size` field while the HTTP `Content-Length` describes the
 JSON document. GCS JSON metadata updates preserve the object's generation,
 increment metageneration, and issue new `etag` and `updated` identity values.
@@ -400,6 +462,15 @@ retention rejects replacement or deletion through both JSON and XML object
 surfaces. Policy locking, per-object retention, writable server-owned policy
 fields, and disabling an enabled soft-delete policy are explicitly rejected as
 `501 UNIMPLEMENTED` rather than approximated.
+GCS customer-managed encryption keys are modelled locally without
+cryptography: bucket `encryption.defaultKmsKeyName` is accepted on create and
+PATCH (`null` clears it), JSON uploads accept `kmsKeyName`, and XML uploads
+accept `x-goog-encryption-kms-key-name`. Key names must match
+`projects/*/locations/*/keyRings/*/cryptoKeys/*` or the upload fails with `400`
+before mutation. The bucket default applies when an upload names no key, and
+object resources return `kmsKeyName` with a `/cryptoKeyVersions/1` suffix. Key
+existence, IAM, and rotation are not modelled; encryption enforcement configs
+return `501`.
 For focused Azure data-plane tests, create a container with
 `x-sqrzl-azure-versioning-enabled: true` or
 `x-sqrzl-azure-soft-delete-days: <1-365>`. These are emulator mode selectors,
@@ -470,6 +541,42 @@ container.upload_blob("hello.txt", b"hello")
 ```
 
 This example expects Sqrzl authentication to be disabled.
+
+### Azure encryption scopes, server-side copy, and user delegation SAS
+
+- **Encryption scopes.** Declare the scope names your tests use in
+  `AZURE_ENCRYPTION_SCOPES`. Put Blob, Put Block, Put Block List, and
+  Copy Blob From URL record the scope from `x-ms-encryption-scope` or from a
+  SAS `ses` field. The scope is returned in `x-ms-encryption-scope`, in Get
+  Blob Properties, and in listings.
+  - A SAS-pinned scope that differs from the header returns
+    `400 InvalidHeaderValue`.
+  - A Put Block List that commits blocks staged under another scope fails the
+    same way.
+  - Container default scopes return `501`.
+  - Nothing is actually encrypted.
+- **Copy Blob From URL.** `PUT` with `x-ms-copy-source` and
+  `x-ms-requires-sync: true` copies a blob in the same account and returns
+  `202` with `x-ms-copy-status: success`.
+  - When authentication is enabled, the source URL must carry a SAS with read
+    permission.
+  - `x-ms-source-if-match` and `x-ms-source-if-none-match` are checked against
+    the source. A failure returns `412 SourceConditionNotMet`.
+  - `If-Match` and `If-None-Match: *` are applied atomically with the write.
+    They return `412 ConditionNotMet` or `409 BlobAlreadyExists`.
+  - Sources are limited to 64 MiB.
+  - Asynchronous Copy Blob, cross-account sources, and snapshot or version
+    sources return `501`.
+- **User delegation SAS.** `POST /<account>?restype=service&comp=userdelegationkey`
+  accepts only `Authorization: Bearer <AZURE_ACCOUNT_KEY>`; Shared Key is
+  refused, as on Azure.
+  - The key is issued for one fixed local principal and is valid for at most
+    seven days.
+  - A blob or container SAS signed with that key authorizes the same
+    permissions as a service SAS. It is refused after the key's `SignedExpiry`.
+  - The Azure SDKs refuse token credentials over plain HTTP. Send the key
+    request directly, or through an HTTPS proxy, and pass the returned key to
+    `generate_blob_sas`.
 
 ### GCS example
 

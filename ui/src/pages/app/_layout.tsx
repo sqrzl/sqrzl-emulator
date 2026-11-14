@@ -80,7 +80,7 @@ export default function AppLayout({ children }: { children?: unknown }) {
           </Navbar>
         </Container>
       </Header>
-      <main data-sqrzl-slot="application-main">{children}</main>
+      <div data-sqrzl-slot="application-main">{children}</div>
     </>
   );
 }

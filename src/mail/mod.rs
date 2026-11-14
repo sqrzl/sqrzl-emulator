@@ -12,6 +12,7 @@ pub(crate) mod budget;
 pub mod filesystem;
 pub mod model;
 pub mod providers;
+pub mod ses_events;
 pub mod smtp;
 
 pub use filesystem::FilesystemMailStore;
@@ -147,6 +148,98 @@ pub trait MailStore: Send + Sync {
     ///
     /// Returns an error when the underlying emulator operation fails.
     fn ensure_mailbox(&self, mailbox: &str) -> Result<()>;
+
+    /// Creates or replaces the event destination for an SES configuration set.
+    ///
+    /// # Errors
+    /// Returns an error when the backend does not persist SES events or the write fails.
+    fn put_ses_event_destination(
+        &self,
+        _destination: &ses_events::SesEventDestination,
+    ) -> Result<ses_events::SesEventDestination> {
+        Err(Error::InvalidRequest(
+            "this mail store does not support SES event simulation".to_string(),
+        ))
+    }
+
+    /// Reads the event destination for an SES configuration set.
+    ///
+    /// # Errors
+    /// Returns [`Error::MessageNotFound`] when no destination is configured.
+    fn get_ses_event_destination(
+        &self,
+        _configuration_set: &str,
+    ) -> Result<ses_events::SesEventDestination> {
+        Err(Error::MessageNotFound)
+    }
+
+    /// Removes an SES event destination. Idempotent.
+    ///
+    /// # Errors
+    /// Returns an error when the delete fails.
+    fn delete_ses_event_destination(&self, _configuration_set: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Atomically persist initial intent, returning the existing event on replay.
+    ///
+    /// # Errors
+    /// Returns an error when the store cannot durably claim events.
+    fn claim_ses_event(
+        &self,
+        _event: &ses_events::SesEventRecord,
+    ) -> Result<Option<ses_events::SesEventRecord>> {
+        Err(Error::InvalidRequest(
+            "this mail store does not support durable SES event claims".to_string(),
+        ))
+    }
+
+    /// Read one SES event by its stable identity.
+    ///
+    /// # Errors
+    /// Returns an error when the event does not exist or cannot be read.
+    fn get_ses_event(&self, _event_id: &str) -> Result<ses_events::SesEventRecord> {
+        Err(Error::MessageNotFound)
+    }
+
+    /// Persists a simulated SES event record.
+    ///
+    /// # Errors
+    /// Returns an error when the backend does not persist SES events or the write fails.
+    fn record_ses_event(&self, _event: &ses_events::SesEventRecord) -> Result<()> {
+        Err(Error::InvalidRequest(
+            "this mail store does not support SES event simulation".to_string(),
+        ))
+    }
+
+    /// Lists at most `limit` SES records using a stable, filter-bound cursor.
+    ///
+    /// # Errors
+    /// Returns invalid cursor, read, or persistence errors.
+    fn list_ses_event_page(
+        &self,
+        message_id: Option<&str>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<ses_events::SesEventPage> {
+        ses_events::event_page(
+            self.list_ses_events(message_id)?.into_iter().map(Ok),
+            message_id,
+            after,
+            limit,
+        )
+    }
+
+    /// Lists simulated SES events, optionally for one message, oldest first.
+    ///
+    /// # Errors
+    /// Returns an error when records cannot be read.
+    fn list_ses_events(
+        &self,
+        _message_id: Option<&str>,
+    ) -> Result<Vec<ses_events::SesEventRecord>> {
+        Ok(Vec::new())
+    }
 }
 
 /// Generates a fresh message id shared by every per-mailbox copy of one message.

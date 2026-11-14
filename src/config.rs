@@ -4,6 +4,7 @@
 //! and configuration options. All other modules should use the types and
 //! functions exported from this module rather than accessing env vars directly.
 
+use base64::Engine as _;
 use std::env;
 use std::time::Duration;
 
@@ -55,7 +56,7 @@ pub enum LogFormat {
     Json,
 }
 
-/// Provider-native authentication overrides. These intentionally use each
+/// Provider-native resource settings and authentication overrides. These use each
 /// vendor name directly rather than the emulator's `SQRZL_` prefix.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VendorCredentials {
@@ -67,6 +68,14 @@ pub struct VendorCredentials {
     pub oci_user_ocid: Option<String>,
     pub oci_key_fingerprint: Option<String>,
     pub oci_public_key_path: Option<String>,
+    pub sendgrid_api_key: Option<String>,
+    pub acs_connection_string: Option<String>,
+    pub twilio_account_sid: Option<String>,
+    pub twilio_auth_token: Option<String>,
+    pub twilio_api_key_sid: Option<String>,
+    pub twilio_api_key_secret: Option<String>,
+    pub azure_encryption_scopes: Option<String>,
+    pub ses_configuration_sets: Option<String>,
 }
 
 /// Global application configuration loaded from environment variables.
@@ -175,6 +184,14 @@ impl Config {
             oci_user_ocid: lookup(ENV_OCI_USER_OCID),
             oci_key_fingerprint: lookup(ENV_OCI_KEY_FINGERPRINT),
             oci_public_key_path: lookup(ENV_OCI_PUBLIC_KEY_PATH),
+            sendgrid_api_key: lookup("SENDGRID_API_KEY"),
+            acs_connection_string: lookup("ACS_CONNECTION_STRING"),
+            twilio_account_sid: lookup("TWILIO_ACCOUNT_SID"),
+            twilio_auth_token: lookup("TWILIO_AUTH_TOKEN"),
+            twilio_api_key_sid: lookup("TWILIO_API_KEY_SID"),
+            twilio_api_key_secret: lookup("TWILIO_API_KEY_SECRET"),
+            azure_encryption_scopes: lookup("AZURE_ENCRYPTION_SCOPES"),
+            ses_configuration_sets: lookup("SES_CONFIGURATION_SETS"),
         };
 
         let enforce_auth = access_key_id.is_some() && secret_access_key.is_some();
@@ -185,7 +202,11 @@ impl Config {
             enforce_auth,
             admin_auth_disabled,
             blobs_path,
-            lifecycle_interval: Duration::from_secs(lifecycle_interval_hours * 3600),
+            lifecycle_interval: Duration::from_secs(
+                lifecycle_interval_hours
+                    .checked_mul(3600)
+                    .unwrap_or(DEFAULT_SQRZL_LIFECYCLE_HOURS * 3600),
+            ),
             api_port,
             ui_port,
             max_request_bytes,
@@ -195,7 +216,8 @@ impl Config {
         }
     }
 
-    /// Load configuration from environment variables.
+    /// Load configuration defaults without validation. Runtime entry points
+    /// should use [`Self::try_from_env`] before opening storage or listeners.
     ///
     /// # Environment Variables
     ///
@@ -219,6 +241,25 @@ impl Config {
     #[must_use]
     pub fn from_env() -> Self {
         Self::from_env_with(|name| env::var(name).ok())
+    }
+
+    /// Load validated runtime settings before any listener starts.
+    ///
+    /// # Errors
+    /// Rejects overflowing lifecycle intervals and incomplete credentials.
+    pub fn try_from_env() -> Result<Self, String> {
+        if let Some(hours) = env::var(ENV_SQRZL_LIFECYCLE_HOURS)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            if hours.checked_mul(3600).is_none() {
+                return Err("SQRZL_LIFECYCLE_HOURS exceeds the supported duration".to_string());
+            }
+        }
+        let config = Self::from_env();
+        config.validate_vendor_credentials()?;
+        config.validate_mcp_config()?;
+        Ok(config)
     }
 
     /// Load comma-delimited startup bucket names from the environment.
@@ -458,6 +499,7 @@ impl Config {
     /// Returns an error when a provider-native credential set is incomplete or
     /// the configured OCI public key is not a readable file.
     pub fn validate_vendor_credentials(&self) -> Result<(), String> {
+        self.validate_messaging_credentials()?;
         let azure_configured = self.vendor_credentials.azure_account.is_some()
             || self.vendor_credentials.azure_account_key.is_some();
         if azure_configured
@@ -497,6 +539,78 @@ impl Config {
                 return Err(format!(
                     "OCI_PUBLIC_KEY_PATH does not name a readable file: {path}"
                 ));
+            }
+        }
+        Ok(())
+    }
+    fn validate_messaging_credentials(&self) -> Result<(), String> {
+        if self.access_key_id.is_some() != self.secret_access_key.is_some() {
+            return Err("SQRZL_ACCESS_KEY_ID and SQRZL_SECRET_ACCESS_KEY must both be configured, or both absent for open mode".to_string());
+        }
+        let vendor = &self.vendor_credentials;
+        for (name, value) in [
+            ("SQRZL_ACCESS_KEY_ID", self.access_key_id.as_deref()),
+            ("SQRZL_SECRET_ACCESS_KEY", self.secret_access_key.as_deref()),
+            ("AZURE_ACCOUNT", vendor.azure_account.as_deref()),
+            ("AZURE_ACCOUNT_KEY", vendor.azure_account_key.as_deref()),
+            ("GCS_HMAC_ACCESS_ID", vendor.gcs_hmac_access_id.as_deref()),
+            ("GCS_HMAC_SECRET", vendor.gcs_hmac_secret.as_deref()),
+            ("OCI_TENANCY_OCID", vendor.oci_tenancy_ocid.as_deref()),
+            ("OCI_USER_OCID", vendor.oci_user_ocid.as_deref()),
+            ("OCI_KEY_FINGERPRINT", vendor.oci_key_fingerprint.as_deref()),
+            ("OCI_PUBLIC_KEY_PATH", vendor.oci_public_key_path.as_deref()),
+            ("SENDGRID_API_KEY", vendor.sendgrid_api_key.as_deref()),
+            ("TWILIO_ACCOUNT_SID", vendor.twilio_account_sid.as_deref()),
+            ("TWILIO_AUTH_TOKEN", vendor.twilio_auth_token.as_deref()),
+            ("TWILIO_API_KEY_SID", vendor.twilio_api_key_sid.as_deref()),
+            (
+                "TWILIO_API_KEY_SECRET",
+                vendor.twilio_api_key_secret.as_deref(),
+            ),
+        ] {
+            if value.is_some_and(|value| value.trim().is_empty()) {
+                return Err(format!("{name} must not be empty"));
+            }
+        }
+        for (left_name, left, right_name, right) in [
+            (
+                "TWILIO_ACCOUNT_SID",
+                &vendor.twilio_account_sid,
+                "TWILIO_AUTH_TOKEN",
+                &vendor.twilio_auth_token,
+            ),
+            (
+                "TWILIO_API_KEY_SID",
+                &vendor.twilio_api_key_sid,
+                "TWILIO_API_KEY_SECRET",
+                &vendor.twilio_api_key_secret,
+            ),
+        ] {
+            if left.is_some() != right.is_some() {
+                return Err(format!(
+                    "{left_name} and {right_name} must both be configured"
+                ));
+            }
+        }
+        if vendor.twilio_api_key_sid.is_some() && vendor.twilio_account_sid.is_none() {
+            return Err(
+                "Twilio API key credentials require TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
+                    .to_string(),
+            );
+        }
+        if let Some(value) = &vendor.acs_connection_string {
+            let valid = crate::auth::parse_connection_string(value).is_some_and(|connection| {
+                let endpoint = connection.endpoint.parse::<http::Uri>().ok();
+                endpoint.is_some_and(|uri| {
+                    matches!(uri.scheme_str(), Some("http" | "https")) && uri.authority().is_some()
+                }) && base64::engine::general_purpose::STANDARD
+                    .decode(&connection.access_key)
+                    .is_ok_and(|key| !key.is_empty())
+            });
+            if !valid {
+                return Err(
+                    "ACS_CONNECTION_STRING must include a valid endpoint and accesskey".to_string(),
+                );
             }
         }
         Ok(())
@@ -839,5 +953,83 @@ mod tests {
         assert!(validation.is_ok());
         assert!(config.mcp_auth_enforced());
         assert!(!config.mcp_oauth_settings_present());
+    }
+    #[test]
+    fn should_reject_incomplete_generic_credentials() {
+        // Arrange
+        let config = Config::from_env_with(|name| {
+            (name == ENV_SQRZL_ACCESS_KEY_ID).then(|| "configured".to_string())
+        });
+
+        // Act
+        let result = config.validate_vendor_credentials();
+
+        // Assert
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn should_parse_overflowing_lifecycle_hours_without_panicking() {
+        // Arrange
+        let lookup = |name: &str| (name == ENV_SQRZL_LIFECYCLE_HOURS).then(|| u64::MAX.to_string());
+
+        // Act
+        let result = std::panic::catch_unwind(|| Config::from_env_with(lookup));
+
+        // Assert
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn should_report_native_authentication_in_health() {
+        // Arrange
+        use crate::storage::FilesystemStorage;
+        use http_body_util::BodyExt as _;
+        let config = Config::from_env_with(|name| match name {
+            ENV_AZURE_ACCOUNT => Some("account".to_string()),
+            ENV_AZURE_ACCOUNT_KEY => Some("key".to_string()),
+            _ => None,
+        });
+        let root = std::env::temp_dir().join(format!("sqrzl-health-{}", uuid::Uuid::new_v4()));
+        let storage = FilesystemStorage::new(root);
+
+        // Act
+        let response = crate::health::response(&storage, &config);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let health: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        // Assert
+        assert_eq!(health["auth_enforced"], true);
+        assert!(health["auth_enforced_providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider == "azure-blob"));
+        assert_eq!(health["admin_auth_enforced"], false);
+    }
+    #[test]
+    fn should_reject_empty_native_storage_credentials() {
+        // Arrange
+        let cases = [
+            [(ENV_AZURE_ACCOUNT, "account"), (ENV_AZURE_ACCOUNT_KEY, "")],
+            [
+                (ENV_GCS_HMAC_ACCESS_ID, ""),
+                (ENV_GCS_HMAC_SECRET, "secret"),
+            ],
+        ];
+
+        // Act
+        let results = cases.map(|values| {
+            Config::from_env_with(|name| {
+                values
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_string())
+            })
+            .validate_vendor_credentials()
+        });
+
+        // Assert
+        assert!(results.into_iter().all(|result| result.is_err()));
     }
 }

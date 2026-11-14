@@ -90,6 +90,18 @@ pub struct MessageDetail {
     pub thread_id: Option<String>,
     #[serde(default)]
     pub attachments: Vec<MessageAttachmentSummary>,
+    /// SES `EmailTags` supplied by the sender.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub email_tags: Vec<MessageTag>,
+    /// SES `ConfigurationSetName` supplied by the sender.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_set_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageTag {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -79,6 +79,38 @@ pub(crate) fn data_protection_activation_lock(bucket: &str) -> Result<Arc<Mutex<
     Ok(lock)
 }
 
+/// Read a coherent snapshot without allocating more than `limit` payload bytes.
+/// Oversized snapshots carry metadata only (or a bounded prefix); callers must
+/// reject their size before using the payload.
+pub(crate) fn bounded_copy_source(
+    storage: &dyn Storage,
+    bucket: &str,
+    key: &str,
+    limit: u64,
+) -> crate::error::Result<crate::models::Object> {
+    let metadata = storage.get_object_metadata(bucket, key)?;
+    if metadata.size == 0 || metadata.size > limit {
+        return Ok(metadata);
+    }
+    match storage.get_object_range(bucket, key, 0, Some(limit - 1)) {
+        Ok((mut snapshot, data)) => {
+            snapshot.data = data;
+            Ok(snapshot)
+        }
+        Err(error @ crate::error::Error::InvalidRequest(_)) => {
+            // A concurrent replacement may have made the object empty, which
+            // cannot be addressed by an HTTP-style inclusive byte range.
+            let current = storage.get_object_metadata(bucket, key)?;
+            if current.size == 0 {
+                Ok(current)
+            } else {
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub trait ProviderAdapter: Send + Sync {
     fn name(&self) -> &'static str;
     fn matches(&self, req: &Request) -> bool;

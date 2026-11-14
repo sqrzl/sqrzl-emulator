@@ -40,7 +40,12 @@ impl Fixture {
 
     async fn call(&self, request: Request<RequestBody>) -> Response<sqrzl_emulator::body::Body> {
         let request = RequestExt::from_hyper(request).await.unwrap();
-        let auth = auth_enabled("audit-access", "audit-secret");
+        let mut config = (*auth_enabled("audit-access", "audit-secret")).clone();
+        config.vendor_credentials.acs_connection_string = Some(format!(
+            "endpoint=http://localhost;accesskey={}",
+            BASE64.encode(b"audit-secret")
+        ));
+        let auth = Arc::new(config);
         if request.path().starts_with("/v2/") || request.path().starts_with("/emails:") {
             return MailAdapterRegistry::default()
                 .route(self.mail.clone(), auth, request)
@@ -766,12 +771,6 @@ async fn should_preserve_valid_signed_workflows_given_aws_front_doors_when_date_
 #[tokio::test(flavor = "multi_thread")]
 async fn should_reject_invalid_acs_hmac_dates_given_email_and_sms_when_auth_is_configured() {
     // Arrange
-    let previous = std::env::var("SQRZL_ACS_CONNECTION_STRING").ok();
-    let key = BASE64.encode(b"audit-secret");
-    std::env::set_var(
-        "SQRZL_ACS_CONNECTION_STRING",
-        format!("endpoint=http://localhost;accesskey={key}"),
-    );
     let now = Utc::now();
     let mut failures = Vec::new();
     for (path, body) in [
@@ -811,11 +810,6 @@ async fn should_reject_invalid_acs_hmac_dates_given_email_and_sms_when_auth_is_c
                 fixture.assert_no_capture();
             }
         }
-    }
-    if let Some(previous) = previous {
-        std::env::set_var("SQRZL_ACS_CONNECTION_STRING", previous);
-    } else {
-        std::env::remove_var("SQRZL_ACS_CONNECTION_STRING");
     }
     assert!(
         failures.is_empty(),

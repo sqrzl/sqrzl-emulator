@@ -1,5 +1,6 @@
 use crate::api::models;
 use crate::mail::model::{ListMessagesResult, MailboxInfo, StoredMessage};
+use crate::mail::providers::{SES_CONFIGURATION_SET_METADATA, SES_EMAIL_TAGS_METADATA};
 
 pub(crate) fn mailbox_to_info(mailbox: MailboxInfo) -> models::MailboxInfo {
     models::MailboxInfo {
@@ -45,7 +46,28 @@ pub(crate) fn stored_to_summary(message: StoredMessage) -> models::MessageSummar
 }
 
 pub(crate) fn stored_to_detail(message: StoredMessage) -> models::MessageDetail {
+    let metadata = &message.message.provider_metadata;
+    let email_tags = metadata
+        .get(SES_EMAIL_TAGS_METADATA)
+        .and_then(serde_json::Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(|tag| {
+                    Some(models::MessageTag {
+                        name: tag.get("Name")?.as_str()?.to_string(),
+                        value: tag.get("Value")?.as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let configuration_set_name = metadata
+        .get(SES_CONFIGURATION_SET_METADATA)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     models::MessageDetail {
+        email_tags,
+        configuration_set_name,
         message_id: message.message_id,
         mailbox: message.mailbox,
         source_protocol: message.message.source_protocol,

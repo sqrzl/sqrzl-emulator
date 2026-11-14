@@ -297,6 +297,17 @@ async fn handle_ui_request(
         return Ok(resp);
     }
 
+    if crate::api::admin_mail_events::matches_path(&path) {
+        if !admin_request_is_authorized(&req, &config, &admin_session) {
+            return Ok(admin_unauthorized_response());
+        }
+        let resp = match crate::api::admin_mail_events::handle_request(&mail, req).await {
+            Ok(resp) => resp,
+            Err(err) => crate::api::admin::error_response(&err),
+        };
+        return Ok(resp);
+    }
+
     if crate::api::admin_text::matches_path(&path) {
         if !admin_request_is_authorized(&req, &config, &admin_session) {
             return Ok(admin_unauthorized_response());
@@ -324,16 +335,10 @@ async fn handle_ui_request(
         return Ok(json_error_response(&Error::RouteNotFound(path)));
     }
 
-    let has_static = Path::new("./static").exists() || Path::new("/app/ui/dist").exists();
-
-    if has_static {
-        let static_dir = if Path::new("./static").exists() {
-            "./static"
-        } else {
-            "/app/ui/dist"
-        };
-
-        return Ok(serve_static_content(Path::new(static_dir), &path).await);
+    let working = std::env::current_dir().unwrap_or_default();
+    let executable = std::env::current_exe().ok();
+    if let Some(static_dir) = find_static_directory(&working, executable.as_deref()) {
+        return Ok(serve_static_content(&static_dir, &path).await);
     }
 
     let default_content =
@@ -656,9 +661,22 @@ fn admin_payload_too_large_response(max_request_bytes: usize) -> Response<Body> 
     json_response(StatusCode::PAYLOAD_TOO_LARGE, &body)
 }
 
+fn find_static_directory(working: &Path, executable: Option<&Path>) -> Option<std::path::PathBuf> {
+    let mut candidates = vec![working.join("static")];
+    if let Some(parent) = executable.and_then(Path::parent) {
+        candidates.push(parent.join("static"));
+    }
+    candidates.push(std::path::PathBuf::from("/app/ui/dist"));
+    candidates
+        .into_iter()
+        .find(|path| path.join("index.html").is_file())
+}
+
 async fn serve_static_content(static_dir: &Path, request_path: &str) -> Response<Body> {
     let normalized_path = request_path.trim_start_matches('/');
-    let is_spa_route = normalized_path == "app"
+    let is_spa_route = normalized_path == "admin"
+        || normalized_path.starts_with("admin/")
+        || normalized_path == "app"
         || normalized_path.starts_with("app/")
         || normalized_path == "auth"
         || normalized_path.starts_with("auth/");
@@ -919,6 +937,22 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    #[test]
+    fn should_resolve_packaged_static_assets_beside_executable_from_another_working_directory() {
+        // Arrange
+        let root = temp_static_dir();
+        let package = root.join("package");
+        let working = root.join("working");
+        fs::create_dir_all(package.join("static")).unwrap();
+        fs::create_dir_all(&working).unwrap();
+        fs::write(package.join("static/index.html"), "packaged UI").unwrap();
+        // Act
+        let found = super::find_static_directory(&working, Some(&package.join("sqrzl-emulator")));
+        // Assert
+        assert_eq!(found, Some(package.join("static")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn should_bound_ui_request_bodies_without_relying_on_content_length() {
         let request = Request::builder()
@@ -1039,6 +1073,33 @@ mod tests {
                 .to_str()
                 .expect("content-type should be valid utf-8"),
             "text/html; charset=utf-8"
+        );
+    }
+    #[tokio::test]
+    async fn should_serve_current_admin_deep_links_as_spa_documents() {
+        // Arrange
+        let root = temp_static_dir();
+        fs::write(root.join("index.html"), "<div id=\"app\"></div>").unwrap();
+        let mut statuses = Vec::new();
+
+        // Act
+        for path in [
+            "/admin/mailboxes/team%40example.com",
+            "/admin/buckets/example/folder.with.dot",
+            "/admin/blobs/example/blob.txt",
+            "/login",
+            "/logout",
+        ] {
+            statuses.push(serve_static_content(&root, path).await.status());
+        }
+
+        // Assert
+        assert_eq!(statuses, vec![StatusCode::OK; 5]);
+        assert_eq!(
+            serve_static_content(&root, "/assets/missing.js")
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
         );
     }
 }

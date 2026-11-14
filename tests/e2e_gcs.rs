@@ -118,6 +118,102 @@ async fn should_complete_resumable_upload_given_live_server_when_using_gcs_json_
     assert!(metadata.contains("\"owner\":\"jules\""));
 }
 
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(bytes).expect("gzip should encode");
+    encoder.finish().expect("gzip should finish")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api() {
+    // Arrange
+    let server = LiveServer::start_api(auth_disabled()).await;
+
+    let create_bucket = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "{}/storage/v1/b?project=test-project",
+            server.base_url
+        ))
+        .header("host", "storage.googleapis.com")
+        .header("content-type", "application/json; charset=utf-8")
+        .header("content-encoding", "gzip")
+        .body(Body::from(gzip(br#"{"name":"gzip-json-bucket"}"#)))
+        .expect("gzip bucket create request should build");
+
+    // Act
+    let create_bucket_response = server.request(create_bucket).await;
+
+    // Assert
+    assert_eq!(create_bucket_response.status(), StatusCode::OK);
+    assert!(text_body(create_bucket_response)
+        .await
+        .contains("\"gzip-json-bucket\""));
+
+    let start_upload = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "{}/upload/storage/v1/b/gzip-json-bucket/o?uploadType=resumable",
+            server.base_url
+        ))
+        .header("host", "storage.googleapis.com")
+        .header("x-upload-content-type", "text/plain")
+        .header("content-type", "application/json; charset=utf-8")
+        .header("content-encoding", "gzip")
+        .body(Body::from(gzip(
+            br#"{"name":"zipped.txt","metadata":{"owner":"dotnet"}}"#,
+        )))
+        .expect("gzip resumable init request should build");
+    let start_upload_response = server.request(start_upload).await;
+    assert_eq!(start_upload_response.status(), StatusCode::OK);
+    let upstream_location = start_upload_response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("resumable location should exist")
+        .to_string();
+    let upload_object = Request::builder()
+        .method("PUT")
+        .uri(rebase_url(&server.base_url, &upstream_location))
+        .header("host", "storage.googleapis.com")
+        .body(Body::from("plain media"))
+        .expect("resumable upload request should build");
+    assert_eq!(server.request(upload_object).await.status(), StatusCode::OK);
+
+    let get_metadata = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "{}/storage/v1/b/gzip-json-bucket/o/zipped.txt",
+            server.base_url
+        ))
+        .header("host", "storage.googleapis.com")
+        .body(Body::default())
+        .expect("metadata request should build");
+    let metadata = text_body(server.request(get_metadata).await).await;
+    assert!(metadata.contains("\"owner\":\"dotnet\""));
+
+    let unsupported = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "{}/storage/v1/b?project=test-project",
+            server.base_url
+        ))
+        .header("host", "storage.googleapis.com")
+        .header("content-type", "application/json")
+        .header("content-encoding", "br")
+        .body(Body::from(r#"{"name":"brotli-bucket"}"#))
+        .expect("unsupported coding request should build");
+    let unsupported_response = server.request(unsupported).await;
+    assert_eq!(
+        unsupported_response.status(),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert!(text_body(unsupported_response)
+        .await
+        .contains("Content-Encoding"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn should_enforce_gcs_generation_preconditions_and_return_json_not_found() {
     let server = LiveServer::start_api(auth_disabled()).await;

@@ -33,6 +33,8 @@ AZURE_ACCOUNT = "devstoreaccount1"
 ACS_ACCESS_KEY = base64.b64encode(b"shared-secret").decode("ascii")
 TWILIO_ACCOUNT_SID = "AC00000000000000000000000000000001"
 TWILIO_AUTH_TOKEN = "sqrzl-twilio-token"
+TWILIO_API_KEY_SID = "SK00000000000000000000000000000001"
+TWILIO_API_KEY_SECRET = "sqrzl-twilio-api-key-secret"
 SENDGRID_API_KEY = "SG.sqrzl-sdk-qualification"
 
 
@@ -418,7 +420,7 @@ def sqrzl_server() -> SqrzlSettings:
             enabled_providers=enabled_providers,
             enforce_auth=enforce_auth,
             messaging_auth=messaging_auth,
-            sendgrid_api_key=os.getenv("SQRZL_SENDGRID_API_KEY", SENDGRID_API_KEY),
+            sendgrid_api_key=os.getenv("SENDGRID_API_KEY", SENDGRID_API_KEY),
         )
         return
 
@@ -442,10 +444,12 @@ def sqrzl_server() -> SqrzlSettings:
         "OCI_USER_OCID",
         "OCI_KEY_FINGERPRINT",
         "OCI_PUBLIC_KEY_PATH",
-        "SQRZL_ACS_CONNECTION_STRING",
-        "SQRZL_TWILIO_ACCOUNT_SID",
-        "SQRZL_TWILIO_AUTH_TOKEN",
-        "SQRZL_SENDGRID_API_KEY",
+        "ACS_CONNECTION_STRING",
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_API_KEY_SID",
+        "TWILIO_API_KEY_SECRET",
+        "SENDGRID_API_KEY",
     ]:
         env.pop(name, None)
     env.update(
@@ -459,14 +463,20 @@ def sqrzl_server() -> SqrzlSettings:
         }
     )
     if "acs" in enabled_providers:
-        env["SQRZL_ACS_CONNECTION_STRING"] = (
+        env["ACS_CONNECTION_STRING"] = (
             f"endpoint=http://127.0.0.1:{api_port};accesskey={ACS_ACCESS_KEY}"
         )
     if "twilio" in enabled_providers:
-        env["SQRZL_TWILIO_ACCOUNT_SID"] = TWILIO_ACCOUNT_SID
-        env["SQRZL_TWILIO_AUTH_TOKEN"] = TWILIO_AUTH_TOKEN
+        env["TWILIO_ACCOUNT_SID"] = TWILIO_ACCOUNT_SID
+        env["TWILIO_AUTH_TOKEN"] = TWILIO_AUTH_TOKEN
+        env["TWILIO_API_KEY_SID"] = TWILIO_API_KEY_SID
+        env["TWILIO_API_KEY_SECRET"] = TWILIO_API_KEY_SECRET
     if "sendgrid" in enabled_providers:
-        env["SQRZL_SENDGRID_API_KEY"] = SENDGRID_API_KEY
+        env["SENDGRID_API_KEY"] = SENDGRID_API_KEY
+    # Declared SES configuration sets let SDK tests exercise NotFoundException.
+    env["SES_CONFIGURATION_SETS"] = "sqrzl-events"
+    # Declared Azure encryption scopes let SDK tests exercise unknown-scope failures.
+    env["AZURE_ENCRYPTION_SCOPES"] = "tenant-a,tenant-b"
     if enforce_auth:
         env["SQRZL_ACCESS_KEY_ID"] = DEFAULT_ACCESS_KEY
         env["SQRZL_SECRET_ACCESS_KEY"] = DEFAULT_SECRET_KEY

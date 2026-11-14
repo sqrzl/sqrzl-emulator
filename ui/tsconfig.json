@@ -21,6 +21,8 @@
   "include": [
     "src",
     "tests",
+    "e2e",
+    "playwright.config.ts",
     "dev",
     "vite.config.ts",
     "vitest.config.ts",

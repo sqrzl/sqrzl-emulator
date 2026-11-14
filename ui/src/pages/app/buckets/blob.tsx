@@ -50,33 +50,39 @@ export default function Blob({
 
   if (resolvedBlob.error && !resolvedBlob.value) {
     return (
-      <EmptyState
-        title="Blob details could not load"
-        description="Retry the admin API call to see the blob details."
-        actions={<Button onPress={() => resolvedBlob.refresh()}>Retry</Button>}
-      />
+      <Page>
+        <EmptyState
+          title="Blob details could not load"
+          description="Retry the admin API call to see the blob details."
+          action={<Button onPress={() => resolvedBlob.refresh()}>Retry</Button>}
+        />
+      </Page>
     );
   }
 
   if (resolvedBlob.pending && !resolvedBlob.value) {
     return (
-      <Block direction="row" justify="center" align="center">
-        <Spinner />
-      </Block>
+      <Page>
+        <Block direction="row" justify="center" align="center">
+          <Spinner />
+        </Block>
+      </Page>
     );
   }
 
   if (!resolvedBlobKey) {
     return (
-      <EmptyState
-        title="Blob not found"
-        description="The blob id does not match any blob in this bucket."
-        actions={
-          <Button variant="secondary" asChild>
-            <Link href={bucketPath(bucketName)}>Back to bucket</Link>
-          </Button>
-        }
-      />
+      <Page>
+        <EmptyState
+          title="Blob not found"
+          description="The blob id does not match any blob in this bucket."
+          action={
+            <Button variant="secondary" asChild>
+              <Link href={bucketPath(bucketName)}>Back to bucket</Link>
+            </Button>
+          }
+        />
+      </Page>
     );
   }
 

@@ -26,6 +26,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 
+mod copy;
+mod encryption_scope;
+mod user_delegation;
+
 const AZURE_VERSION: &str = "2023-11-03";
 // The partial adapter accepts only these modern wire versions. Their accepted
 // operations share the post-2019-12-12 upload limits and post-2020-12-06 SAS format.
@@ -91,6 +95,8 @@ struct AzureBlockSession {
 struct AzureStagedBlock {
     item: String,
     size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    encryption_scope: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -668,7 +674,16 @@ impl AzureBlobAdapter {
             xml.push_str(&crate::utils::headers::format_last_modified_at(
                 &blob.last_modified,
             ));
-            xml.push_str("</Last-Modified></Properties>");
+            xml.push_str("</Last-Modified>");
+            if let Some(scope) = blob
+                .provider_metadata
+                .get(encryption_scope::AZURE_ENCRYPTION_SCOPE_KEY)
+            {
+                xml.push_str("<ServerEncrypted>true</ServerEncrypted><EncryptionScope>");
+                push_escaped_xml(&mut xml, scope);
+                xml.push_str("</EncryptionScope>");
+            }
+            xml.push_str("</Properties>");
             if req
                 .query_param("include")
                 .is_some_and(|include| include.split(',').any(|value| value.trim() == "metadata"))
@@ -1314,6 +1329,13 @@ impl AzureBlobAdapter {
                 &crate::utils::headers::format_last_modified_at(&blob.last_modified),
             )
             .header("x-ms-blob-type", Self::blob_type(blob));
+        builder =
+            Self::with_encryption_scope_header(builder, encryption_scope::recorded_scope(blob));
+        for (key, header) in copy::COPY_PROPERTY_HEADERS {
+            if let Some(value) = blob.provider_metadata.get(key) {
+                builder = builder.header(header, value);
+            }
+        }
         if let Some(snapshot) = blob.provider_metadata.get(AZURE_SNAPSHOT_TIME_KEY) {
             builder = builder.header("x-ms-snapshot", snapshot);
         }
@@ -1572,12 +1594,11 @@ impl AzureBlobAdapter {
         if config.azure_account() != Some(resource.account.as_str()) {
             return Err("Azure storage account does not match configured credentials".to_string());
         }
-        // Without trusted peer-IP, access-policy, encryption-scope, or override
-        // implementations these signed constraints must fail closed, not vanish.
+        // Without trusted peer-IP, access-policy, agent-delegation, request-binding,
+        // or override implementations these signed constraints must fail closed.
         for field in [
-            "sip", "si", "ses", "rscc", "rscd", "rsce", "rscl", "rsct", "sdd", "ss", "srt",
-            "skoid", "sktid", "skt", "ske", "sks", "skv", "saoid", "suoid", "scid", "skdutid",
-            "sduoid", "srh", "srq",
+            "sip", "si", "rscc", "rscd", "rsce", "rscl", "rsct", "sdd", "ss", "srt", "saoid",
+            "suoid", "scid", "sduoid", "srh", "srq",
         ] {
             if req
                 .query_param(field)
@@ -1662,29 +1683,35 @@ impl AzureBlobAdapter {
         } else {
             format!("/blob/{}/{}", resource.account, container)
         };
-        // All accepted versions use the 2020-12-06 format. Rejected optional
-        // fields stay empty; the accepted protocol is signed exactly as supplied.
-        let string_to_sign = [
-            permissions,
-            starts_on,
-            expires_on,
-            &canonical_resource,
-            "",
-            "",
-            protocol,
-            version,
-            resource_type,
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-        ]
-        .join("\n");
-        let key = Self::shared_key_secret(config)
-            .ok_or_else(|| "Missing Azure shared key".to_string())?;
+        let encryption_scope = req.query_param("ses").unwrap_or("");
+        let (string_to_sign, key) = if user_delegation::is_user_delegation_sas(req) {
+            user_delegation::string_to_sign_and_key(req, config, &canonical_resource, Utc::now())?
+        } else {
+            // All accepted versions use the 2020-12-06 service SAS format. Rejected
+            // optional fields stay empty; accepted fields are signed exactly as supplied.
+            let string_to_sign = [
+                permissions,
+                starts_on,
+                expires_on,
+                &canonical_resource,
+                "",
+                "",
+                protocol,
+                version,
+                resource_type,
+                "",
+                encryption_scope,
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+            .join("\n");
+            let key = Self::shared_key_secret(config)
+                .ok_or_else(|| "Missing Azure shared key".to_string())?;
+            (string_to_sign, key)
+        };
         let expected = sign_hmac_base64(&key, &string_to_sign)?;
         if expected == signature {
             Ok(())
@@ -1790,6 +1817,12 @@ impl AzureBlobAdapter {
     ) -> Result<(), Response<Body>> {
         if !config.azure_auth_enforced() {
             return Ok(());
+        }
+
+        if user_delegation::is_key_request(req, resource) {
+            return user_delegation::authorize_key_request(req, config).map_err(|msg| {
+                Self::error_response(StatusCode::FORBIDDEN, "AuthenticationFailed", &msg)
+            });
         }
 
         if req.query_param("sig").is_some() {
@@ -2278,6 +2311,9 @@ impl AzureBlobAdapter {
             return Ok(response);
         }
 
+        if user_delegation::is_key_request(req, &resource) {
+            return user_delegation::get_user_delegation_key(req, auth_config);
+        }
         if resource.container.is_none() {
             return self.handle_account_request(storage, req, &resource);
         }
@@ -2349,7 +2385,7 @@ impl AzureBlobAdapter {
         {
             return Ok(Self::history_mode_conflict());
         }
-        self.handle_blob_request(storage, req, &resource, &container, &blob_key)
+        self.handle_blob_request(storage, auth_config, req, &resource, &container, &blob_key)
     }
 
     fn handle_account_request(
@@ -2427,6 +2463,15 @@ impl AzureBlobAdapter {
         req: &Request,
         container: &str,
     ) -> Result<Response<Body>, String> {
+        if req.header("x-ms-default-encryption-scope").is_some()
+            || req.header("x-ms-deny-encryption-scope-override").is_some()
+        {
+            return Ok(Self::error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "FeatureNotSupported",
+                "Container default encryption scopes are not implemented by this emulator.",
+            ));
+        }
         if !Self::valid_container_name(container) {
             return Ok(Self::error_response(
                 StatusCode::BAD_REQUEST,
@@ -2810,6 +2855,7 @@ impl AzureBlobAdapter {
     fn handle_blob_request(
         &self,
         storage: &Arc<dyn Storage>,
+        auth_config: &AuthConfig,
         req: &Request,
         resource: &AzureResource,
         container: &str,
@@ -2817,13 +2863,6 @@ impl AzureBlobAdapter {
     ) -> Result<Response<Body>, String> {
         if let Some(response) = Self::unsupported_selected_mutation(req) {
             return Ok(response);
-        }
-        if req.method() == Method::PUT && req.header("x-ms-copy-source").is_some() {
-            return Ok(Self::error_response(
-                StatusCode::NOT_IMPLEMENTED,
-                "FeatureNotSupported",
-                "Azure copy operations are not implemented by this emulator.",
-            ));
         }
         let mutation_lock = matches!(*req.method(), Method::PUT | Method::DELETE)
             .then(|| self.blob_mutation_lock(container, blob_key))
@@ -2839,6 +2878,21 @@ impl AzureBlobAdapter {
             return Ok(response);
         }
         let comp = req.query_param("comp");
+        if let Some(response) =
+            Self::reject_encryption_scope_conflict(storage, auth_config, req, container, blob_key)?
+        {
+            return Ok(response);
+        }
+        if req.method() == Method::PUT && req.header("x-ms-copy-source").is_some() {
+            return self.copy_blob_from_url(
+                storage,
+                auth_config,
+                req,
+                resource,
+                container,
+                blob_key,
+            );
+        }
         if req.method() == Method::PUT && comp == Some("lease") {
             return Self::handle_lease(storage, req, container, blob_key);
         }
@@ -2888,6 +2942,44 @@ impl AzureBlobAdapter {
                 "This Azure blob subresource is not implemented by the emulator.",
             )),
             (_, None) => self.handle_blob_crud(storage, req, resource, container, blob_key),
+        }
+    }
+
+    /// Validates the encryption scope a blob write names. Creating writes bind
+    /// the scope; writes that extend an existing blob must name its scope.
+    fn reject_encryption_scope_conflict(
+        storage: &Arc<dyn Storage>,
+        config: &AuthConfig,
+        req: &Request,
+        container: &str,
+        blob_key: &str,
+    ) -> Result<Option<Response<Body>>, String> {
+        let comp = req.query_param("comp");
+        if req.method() != Method::PUT
+            || !matches!(
+                comp,
+                None | Some(
+                    "block" | "blocklist" | "appendblock" | "page" | "metadata" | "snapshot"
+                )
+            )
+        {
+            return Ok(None);
+        }
+        let scope = match encryption_scope::validate_write_scope(req, config) {
+            Ok(scope) => scope,
+            Err(response) => return Ok(Some(response)),
+        };
+        if scope.is_none() || matches!(comp, None | Some("block" | "blocklist")) {
+            return Ok(None);
+        }
+        match storage.get_object_metadata(container, blob_key) {
+            Ok(blob) if encryption_scope::recorded_scope(&blob) != scope.as_deref() => {
+                Ok(Some(encryption_scope::scope_mismatch("the blob")))
+            }
+            Ok(_) | Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
+                Ok(None)
+            }
+            Err(error) => Err(error.to_string()),
         }
     }
 
@@ -3320,6 +3412,7 @@ impl AzureBlobAdapter {
             AzureStagedBlock {
                 item,
                 size: req.payload_len(),
+                encryption_scope: encryption_scope::write_scope(req),
             },
         );
         state::save_json(
@@ -3333,7 +3426,27 @@ impl AzureBlobAdapter {
             .map_err(|_| "Failed to lock Azure block session state".to_string())?
             .insert(session_key, session);
 
-        Ok(Self::upload_checksum_response(req, Self::response(StatusCode::CREATED), false).empty())
+        Ok(Self::upload_checksum_response(
+            req,
+            Self::with_encryption_scope_header(
+                Self::response(StatusCode::CREATED),
+                encryption_scope::write_scope(req).as_deref(),
+            ),
+            false,
+        )
+        .empty())
+    }
+
+    fn with_encryption_scope_header(
+        builder: ResponseBuilder,
+        scope: Option<&str>,
+    ) -> ResponseBuilder {
+        match scope {
+            Some(scope) => builder
+                .header("x-ms-encryption-scope", scope)
+                .header("x-ms-request-server-encrypted", "true"),
+            None => builder,
+        }
     }
 
     fn validate_transactional_checksum(req: &Request) -> Option<Response<Body>> {
@@ -3485,6 +3598,12 @@ impl AzureBlobAdapter {
         for reference in &block_references {
             let staged = session.blocks.get(&reference.id);
             let previously_committed = committed_by_id.get(reference.id.as_str()).copied();
+            let commit_scope = encryption_scope::write_scope(req);
+            let staged_scope_differs = staged
+                .is_some_and(|block| block.encryption_scope.as_deref() != commit_scope.as_deref());
+            let committed_scope_differs = existing_blob.as_ref().is_some_and(|blob| {
+                encryption_scope::recorded_scope(blob) != commit_scope.as_deref()
+            });
             let resolved = match reference.selector {
                 AzureBlockSelector::Uncommitted => {
                     staged.map(|block| (block.item.clone(), block.size, true))
@@ -3504,6 +3623,14 @@ impl AzureBlobAdapter {
                     &format!("The block list contains unknown block ID {}.", reference.id),
                 ));
             };
+            if (staged_was_used && staged_scope_differs)
+                || (!staged_was_used && committed_scope_differs)
+            {
+                return Ok(encryption_scope::scope_mismatch(&format!(
+                    "block {}",
+                    reference.id
+                )));
+            }
             if staged_was_used {
                 used_uncommitted.insert(reference.id.clone());
             }
@@ -3533,6 +3660,7 @@ impl AzureBlobAdapter {
         object.size = total_size;
         Self::set_blob_type(&mut object, "BlockBlob");
         Self::set_content_properties(req, &mut object);
+        encryption_scope::record_scope(&mut object, encryption_scope::write_scope(req).as_deref());
         if let Some(existing) = existing_blob.as_ref() {
             Self::preserve_active_lease(existing, &mut object);
         }
@@ -3583,6 +3711,8 @@ impl AzureBlobAdapter {
         if let Some(version_id) = stored.version_id.as_deref() {
             response = response.header("x-ms-version-id", version_id);
         }
+        let response =
+            Self::with_encryption_scope_header(response, encryption_scope::recorded_scope(&stored));
         Ok(Self::upload_checksum_response(req, response, false).empty())
     }
 
@@ -4199,6 +4329,7 @@ impl AzureBlobAdapter {
             return Ok(response);
         }
         let mut object = Self::blob_for_type(req, blob_key);
+        encryption_scope::record_scope(&mut object, encryption_scope::write_scope(req).as_deref());
         if let Some(existing) = existing_blob.as_ref() {
             Self::preserve_active_lease(existing, &mut object);
         }
@@ -4268,6 +4399,8 @@ impl AzureBlobAdapter {
         if let Some(version_id) = stored.version_id.as_deref() {
             response = response.header("x-ms-version-id", version_id);
         }
+        let response =
+            Self::with_encryption_scope_header(response, encryption_scope::recorded_scope(&stored));
         Ok(if Self::blob_type(&stored) == "BlockBlob" {
             Self::upload_checksum_response(req, response, true).empty()
         } else {
@@ -10105,5 +10238,388 @@ mod tests {
             .headers()
             .get(name)
             .and_then(|value| value.to_str().ok())
+    }
+
+    async fn copy_request(
+        adapter: &AzureBlobAdapter,
+        storage: &Arc<dyn Storage>,
+        config: &Arc<AuthConfig>,
+        destination: &str,
+        headers: &[(&str, &str)],
+    ) -> Response<Body> {
+        let mut all = vec![
+            ("x-ms-version", AZURE_VERSION),
+            ("x-ms-requires-sync", "true"),
+        ];
+        all.extend_from_slice(headers);
+        adapter
+            .handle_request(
+                storage,
+                config,
+                &parsed_request("PUT", destination, &all, b"").await,
+            )
+            .expect("copy should return an Azure response")
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions()
+    {
+        // Arrange
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        let config = auth_disabled();
+        create_azure_container(&adapter, &storage, "promote").await;
+        let staged = adapter
+            .handle_request(
+                &storage,
+                &config,
+                &parsed_request(
+                    "PUT",
+                    "http://localhost/devstoreaccount1/promote/staging/part.bin",
+                    &[
+                        ("x-ms-version", AZURE_VERSION),
+                        ("x-ms-blob-type", "BlockBlob"),
+                        ("x-ms-meta-stage", "staged"),
+                        ("x-ms-blob-content-type", "text/plain"),
+                    ],
+                    b"verified bytes",
+                )
+                .await,
+            )
+            .unwrap();
+        assert_eq!(staged.status(), StatusCode::CREATED);
+        let source_etag = format!(
+            "\"{}\"",
+            storage
+                .get_object_metadata("promote", "staging/part.bin")
+                .unwrap()
+                .etag
+        );
+        let source = "http://127.0.0.1:9000/devstoreaccount1/promote/staging/part.bin";
+        let destination = "http://localhost/devstoreaccount1/promote/final/v1.bin";
+
+        // Act
+        let source_mismatch = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            destination,
+            &[
+                ("x-ms-copy-source", source),
+                ("x-ms-source-if-match", "\"stale\""),
+            ],
+        )
+        .await;
+        let promoted = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            destination,
+            &[
+                ("x-ms-copy-source", source),
+                ("x-ms-source-if-match", &source_etag),
+                ("if-none-match", "*"),
+                ("x-ms-meta-release", "v1"),
+            ],
+        )
+        .await;
+        let duplicate = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            destination,
+            &[("x-ms-copy-source", source), ("if-none-match", "*")],
+        )
+        .await;
+        let stale_destination = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            destination,
+            &[("x-ms-copy-source", source), ("if-match", "\"stale\"")],
+        )
+        .await;
+        let missing_source = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            "http://localhost/devstoreaccount1/promote/final/v2.bin",
+            &[(
+                "x-ms-copy-source",
+                "http://127.0.0.1:9000/devstoreaccount1/promote/staging/absent.bin",
+            )],
+        )
+        .await;
+        let properties = adapter
+            .handle_request(
+                &storage,
+                &config,
+                &parsed_request("HEAD", destination, &[("x-ms-version", AZURE_VERSION)], b"").await,
+            )
+            .unwrap();
+
+        // Assert
+        assert_eq!(source_mismatch.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            header_value(&source_mismatch, "x-ms-error-code"),
+            Some("SourceConditionNotMet")
+        );
+        assert_eq!(promoted.status(), StatusCode::ACCEPTED);
+        assert_eq!(header_value(&promoted, "x-ms-copy-status"), Some("success"));
+        assert!(header_value(&promoted, "x-ms-copy-id").is_some());
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            header_value(&duplicate, "x-ms-error-code"),
+            Some("BlobAlreadyExists")
+        );
+        assert_eq!(stale_destination.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(missing_source.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            header_value(&missing_source, "x-ms-error-code"),
+            Some("CannotVerifyCopySource")
+        );
+        let copied = storage.get_object("promote", "final/v1.bin").unwrap();
+        assert_eq!(copied.data, b"verified bytes");
+        assert_eq!(copied.content_type, "text/plain");
+        assert_eq!(
+            copied.metadata,
+            HashMap::from([("release".to_string(), "v1".to_string())])
+        );
+        assert_eq!(
+            header_value(&properties, "x-ms-copy-status"),
+            Some("success")
+        );
+        assert!(storage
+            .get_object_metadata("promote", "final/v2.bin")
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url() {
+        // Arrange
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        let config = azure_auth();
+        storage.create_bucket("signed-copy".to_string()).unwrap();
+        storage
+            .put_object(
+                "signed-copy",
+                "staged.bin".to_string(),
+                crate::models::Object::new(
+                    "staged.bin".to_string(),
+                    b"signed".to_vec(),
+                    "application/octet-stream".to_string(),
+                ),
+            )
+            .unwrap();
+        let expiry = "2035-01-01T00:00:00Z";
+        let sas = |resource: &str, permissions: &str| {
+            format!(
+                "sp={permissions}&se={}&sv=2023-11-03&sr=b&sig={}",
+                urlencoding::encode(expiry),
+                urlencoding::encode(&sas_signature(
+                    &format!("/blob/devstoreaccount1/signed-copy/{resource}"),
+                    &config,
+                    permissions,
+                    expiry
+                ))
+            )
+        };
+        let destination = format!(
+            "http://localhost/devstoreaccount1/signed-copy/final.bin?{}",
+            sas("final.bin", "cw")
+        );
+        let source = "http://localhost/devstoreaccount1/signed-copy/staged.bin";
+        let readable = format!("{source}?{}", sas("staged.bin", "r"));
+        let write_only = format!("{source}?{}", sas("staged.bin", "w"));
+
+        // Act
+        let unsigned = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            &destination,
+            &[("x-ms-copy-source", source)],
+        )
+        .await;
+        let unreadable = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            &destination,
+            &[("x-ms-copy-source", &write_only)],
+        )
+        .await;
+        let copied = copy_request(
+            &adapter,
+            &storage,
+            &config,
+            &destination,
+            &[("x-ms-copy-source", &readable)],
+        )
+        .await;
+
+        // Assert
+        assert_eq!(unsigned.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            header_value(&unsigned, "x-ms-error-code"),
+            Some("CannotVerifyCopySource")
+        );
+        assert_eq!(unreadable.status(), StatusCode::FORBIDDEN);
+        assert_eq!(copied.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            storage.get_object("signed-copy", "final.bin").unwrap().data,
+            b"signed"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key() {
+        // Arrange
+        let adapter = AzureBlobAdapter::new();
+        let storage = temp_storage();
+        let config = azure_auth();
+        storage.create_bucket("delegated".to_string()).unwrap();
+        let now = Utc::now();
+        let key_start =
+            (now - chrono::Duration::minutes(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let key_expiry =
+            (now + chrono::Duration::hours(2)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let bearer = format!("Bearer {}", config.azure_account_key().unwrap());
+        let key_uri = "http://localhost/devstoreaccount1?restype=service&comp=userdelegationkey";
+        let key_body =
+            format!("<KeyInfo><Start>{key_start}</Start><Expiry>{key_expiry}</Expiry></KeyInfo>");
+        let shared_key_attempt = adapter
+            .handle_request(
+                &storage,
+                &config,
+                &parsed_request(
+                    "POST",
+                    key_uri,
+                    &[
+                        ("x-ms-version", "2026-10-06"),
+                        ("authorization", "SharedKey devstoreaccount1:x"),
+                    ],
+                    key_body.as_bytes(),
+                )
+                .await,
+            )
+            .unwrap();
+        let issued = adapter
+            .handle_request(
+                &storage,
+                &config,
+                &parsed_request(
+                    "POST",
+                    key_uri,
+                    &[("x-ms-version", "2026-10-06"), ("authorization", &bearer)],
+                    key_body.as_bytes(),
+                )
+                .await,
+            )
+            .unwrap();
+        assert_eq!(issued.status(), StatusCode::OK);
+        let xml = String::from_utf8(
+            issued
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        let field = |name: &str| {
+            let start = xml.find(&format!("<{name}>")).unwrap() + name.len() + 2;
+            xml[start..xml.find(&format!("</{name}>")).unwrap()].to_string()
+        };
+        let (oid, tid, value) = (field("SignedOid"), field("SignedTid"), field("Value"));
+        let sas_expiry =
+            (now + chrono::Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        // Independently spelled 2026-10-06 user delegation string-to-sign.
+        let string_to_sign = [
+            "rcw",
+            "",
+            &sas_expiry,
+            "/blob/devstoreaccount1/delegated/report.txt",
+            &oid,
+            &tid,
+            &key_start,
+            &key_expiry,
+            "b",
+            "2026-10-06",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "2026-10-06",
+            "b",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+        .join("\n");
+        let signature = sign_hmac_base64(&BASE64.decode(&value).unwrap(), &string_to_sign).unwrap();
+        let sas = |expiry: &str| {
+            format!(
+                "sp=rcw&se={}&sv=2026-10-06&sr=b&skoid={oid}&sktid={tid}&skt={}&ske={}&sks=b&skv=2026-10-06&sig={}",
+                urlencoding::encode(&sas_expiry),
+                urlencoding::encode(&key_start),
+                urlencoding::encode(expiry),
+                urlencoding::encode(&signature)
+            )
+        };
+        let blob = "http://localhost/devstoreaccount1/delegated/report.txt";
+
+        // Act
+        let written = adapter
+            .handle_request(
+                &storage,
+                &config,
+                &parsed_request(
+                    "PUT",
+                    &format!("{blob}?{}", sas(&key_expiry)),
+                    &[
+                        ("x-ms-version", "2026-10-06"),
+                        ("x-ms-blob-type", "BlockBlob"),
+                    ],
+                    b"delegated",
+                )
+                .await,
+            )
+            .unwrap();
+        let tampered = adapter
+            .handle_request(
+                &storage,
+                &config,
+                &parsed_request(
+                    "GET",
+                    &format!("{blob}?{}", sas("2099-01-01T00:00:00Z")),
+                    &[("x-ms-version", "2026-10-06")],
+                    b"",
+                )
+                .await,
+            )
+            .unwrap();
+
+        // Assert
+        assert_eq!(shared_key_attempt.status(), StatusCode::FORBIDDEN);
+        assert_eq!(written.status(), StatusCode::CREATED);
+        assert_eq!(
+            storage.get_object("delegated", "report.txt").unwrap().data,
+            b"delegated"
+        );
+        assert_eq!(tampered.status(), StatusCode::FORBIDDEN);
     }
 }
