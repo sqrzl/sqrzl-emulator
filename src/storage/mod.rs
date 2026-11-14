@@ -49,6 +49,14 @@ pub struct MultipartCompletion {
 
 /// Bucket metadata and lifecycle-independent bucket operations.
 pub trait BucketStore: Send + Sync {
+    /// Checks backend readability without changing persisted state.
+    ///
+    /// # Errors
+    /// Returns a persistence/readiness error.
+    fn check_ready(&self) -> Result<()> {
+        self.list_buckets().map(|_| ())
+    }
+
     ///
     /// # Errors
     ///

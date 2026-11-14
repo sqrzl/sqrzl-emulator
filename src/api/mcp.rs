@@ -73,6 +73,11 @@ impl ServerHandler for McpHandler {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        let _work_lease = context
+            .extensions
+            .get::<http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<crate::runtime::WorkLease>())
+            .cloned();
         let Some(spec) = tool_specs()
             .into_iter()
             .find(|spec| spec.name == request.name.as_ref())
@@ -163,9 +168,11 @@ impl ServerHandler for McpHandler {
         }
         let contents = match request.uri.as_str() {
             "sqrzl://health" => {
-                let response = crate::health::response(
+                let response = crate::health::response_with_capture(
                     self.state.storage.as_ref(),
                     self.state.config.as_ref(),
+                    self.state.mail.as_ref(),
+                    self.state.sms.as_ref(),
                 );
                 let bytes = response
                     .into_body()

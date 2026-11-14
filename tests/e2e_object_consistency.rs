@@ -155,7 +155,15 @@ async fn verify_reads(server: &LiveServer, path: &str, headers: &[(&str, &str)])
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn should_return_coherent_object_generations_during_native_http_overwrites() {
     // Arrange
-    let server = Arc::new(LiveServer::start_api(auth_disabled()).await);
+    let mut config = auth_disabled();
+    // This test races five readers and one writer; overload has separate coverage.
+    config.runtime =
+        sqrzl_emulator::runtime::RuntimeControl::new(sqrzl_emulator::runtime::RuntimeLimits {
+            max_requests: 16,
+            max_inflight_bytes: 16 * config.max_request_bytes,
+            ..sqrzl_emulator::runtime::RuntimeLimits::default()
+        });
+    let server = Arc::new(LiveServer::start_api(config).await);
     let response = server
         .request(
             Request::builder()

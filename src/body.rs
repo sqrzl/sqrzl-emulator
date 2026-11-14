@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 
 pub struct Body {
     kind: Kind,
+    work: Option<crate::runtime::WorkLease>,
 }
 
 enum Kind {
@@ -24,9 +25,14 @@ enum Kind {
 }
 
 impl Body {
+    pub fn retain_work(&mut self, work: impl Into<crate::runtime::WorkLease>) {
+        self.work = Some(work.into());
+    }
+
     #[must_use]
     pub fn abort(expected: u64) -> Self {
         Self {
+            work: None,
             kind: Kind::Abort {
                 expected,
                 done: false,
@@ -37,6 +43,7 @@ impl Body {
     #[must_use]
     pub fn truncated(bytes: Bytes, expected: u64) -> Self {
         Self {
+            work: None,
             kind: Kind::Truncated {
                 bytes: Some(bytes),
                 expected,
@@ -57,6 +64,7 @@ impl Body {
         B::Error: std::fmt::Display + Send + Sync + 'static,
     {
         Self {
+            work: None,
             kind: Kind::Stream(
                 body.map_err(|error| io::Error::other(error.to_string()))
                     .boxed_unsync(),
@@ -81,6 +89,7 @@ impl Default for Body {
 impl From<Bytes> for Body {
     fn from(bytes: Bytes) -> Self {
         Self {
+            work: None,
             kind: Kind::Full(Some(bytes)),
         }
     }
@@ -112,7 +121,7 @@ impl hyper::body::Body for Body {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        match &mut self.kind {
+        let frame = match &mut self.kind {
             Kind::Full(bytes) => Poll::Ready(
                 bytes
                     .take()
@@ -144,7 +153,11 @@ impl hyper::body::Body for Body {
                 }
             }
             Kind::Stream(body) => Pin::new(body).poll_frame(cx),
+        };
+        if matches!(frame, Poll::Ready(None | Some(Err(_)))) {
+            self.work.take();
         }
+        frame
     }
 
     fn is_end_stream(&self) -> bool {

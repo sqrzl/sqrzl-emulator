@@ -106,6 +106,8 @@ pub struct Config {
     pub vendor_credentials: VendorCredentials,
     /// Streamable HTTP MCP endpoint authorization settings.
     pub mcp: McpConfig,
+    /// Shared process admission and drain state. Cloned configurations retain one budget.
+    pub runtime: std::sync::Arc<crate::runtime::RuntimeControl>,
 }
 
 /// Settings for the standard Streamable HTTP MCP endpoint.
@@ -211,6 +213,28 @@ impl Config {
             ui_port,
             max_request_bytes,
             smtp_port,
+            runtime: crate::runtime::RuntimeControl::new(crate::runtime::RuntimeLimits {
+                max_connections: lookup("SQRZL_MAX_CONNECTIONS")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(128),
+                max_requests: lookup("SQRZL_MAX_INFLIGHT_REQUESTS")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(4),
+                max_mcp_sessions: lookup("SQRZL_MAX_MCP_SESSIONS")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(128),
+                max_smtp_recipients: lookup("SQRZL_MAX_SMTP_RECIPIENTS")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(1000),
+                max_inflight_bytes: lookup("SQRZL_MAX_INFLIGHT_BYTES")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(512 * 1024 * 1024),
+                drain_timeout: Duration::from_millis(
+                    lookup("SQRZL_DRAIN_TIMEOUT_MS")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(30_000),
+                ),
+            }),
             vendor_credentials,
             mcp,
         }
@@ -256,7 +280,27 @@ impl Config {
                 return Err("SQRZL_LIFECYCLE_HOURS exceeds the supported duration".to_string());
             }
         }
+        for name in [
+            "SQRZL_MAX_CONNECTIONS",
+            "SQRZL_MAX_MCP_SESSIONS",
+            "SQRZL_MAX_SMTP_RECIPIENTS",
+            "SQRZL_MAX_INFLIGHT_REQUESTS",
+            "SQRZL_MAX_INFLIGHT_BYTES",
+            "SQRZL_DRAIN_TIMEOUT_MS",
+        ] {
+            if let Ok(value) = env::var(name) {
+                if value.parse::<usize>().ok().is_none_or(|value| value == 0) {
+                    return Err(format!("{name} must be a positive integer"));
+                }
+            }
+        }
         let config = Self::from_env();
+        if config.runtime.limits.drain_timeout > Duration::from_secs(300) {
+            return Err("SQRZL_DRAIN_TIMEOUT_MS must not exceed 300000".into());
+        }
+        if config.runtime.limits.max_inflight_bytes < config.max_request_bytes {
+            return Err("SQRZL_MAX_INFLIGHT_BYTES must be at least SQRZL_MAX_REQUEST_BYTES".into());
+        }
         config.validate_vendor_credentials()?;
         config.validate_mcp_config()?;
         Ok(config)

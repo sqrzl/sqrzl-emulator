@@ -19,6 +19,7 @@ pub struct SmtpServer {
     mail: Arc<dyn MailStore>,
     port: u16,
     max_message_bytes: usize,
+    runtime: Arc<crate::runtime::RuntimeControl>,
 }
 
 impl SmtpServer {
@@ -28,6 +29,7 @@ impl SmtpServer {
             mail,
             port,
             max_message_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+            runtime: std::sync::Arc::default(),
         }
     }
 
@@ -35,6 +37,13 @@ impl SmtpServer {
     #[must_use]
     pub fn with_max_message_bytes(mut self, max_message_bytes: usize) -> Self {
         self.max_message_bytes = max_message_bytes;
+        self
+    }
+
+    /// Shares process admission and shutdown with the HTTP listeners.
+    #[must_use]
+    pub fn with_runtime(mut self, runtime: Arc<crate::runtime::RuntimeControl>) -> Self {
+        self.runtime = runtime;
         self
     }
 
@@ -50,19 +59,46 @@ impl SmtpServer {
             .map_err(|e| Error::InternalError(e.to_string()))?;
         tracing::info!("SMTP server listening on 0.0.0.0:{}", self.port);
 
+        let mut connections = tokio::task::JoinSet::new();
+        let mut listener_error = None;
         loop {
-            let (stream, _) = listener
-                .accept()
-                .await
-                .map_err(|e| Error::InternalError(e.to_string()))?;
+            let accepted = tokio::select! {
+                biased;
+                () = self.runtime.cancelled() => break,
+                Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+                result = listener.accept() => result,
+            };
+            let (mut stream, _) = match accepted {
+                Ok(connection) => connection,
+                Err(error) => {
+                    self.runtime.begin_drain();
+                    listener_error = Some(crate::Error::InternalError(error.to_string()));
+                    break;
+                }
+            };
+            let Some(connection_guard) = self.runtime.try_connection() else {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_millis(100),
+                    stream.write_all(b"421 Emulator capacity exhausted or draining\r\n"),
+                )
+                .await;
+                continue;
+            };
             let mail = self.mail.clone();
+            let runtime = self.runtime.clone();
             let max_message_bytes = self.max_message_bytes;
-            tokio::spawn(async move {
-                if let Err(err) = handle_session(stream, mail, max_message_bytes).await {
-                    tracing::warn!("SMTP session error: {}", err);
+            connections.spawn(async move {
+                let _connection_guard = connection_guard;
+                if let Err(error) =
+                    handle_session_with_runtime(stream, mail, max_message_bytes, runtime).await
+                {
+                    tracing::warn!("SMTP session error: {error}");
                 }
             });
         }
+        drop(listener);
+        crate::runtime::drain_connections(&mut connections, self.runtime.drain_remaining()).await;
+        listener_error.map_or(Ok(()), Err)
     }
 }
 
@@ -75,11 +111,24 @@ struct Transaction {
 /// Drives one SMTP connection to completion. Generic over the stream type so
 /// tests can exercise it over an in-memory `tokio::io::duplex` pipe instead of a
 /// real socket.
-#[allow(clippy::too_many_lines)] // One SMTP state machine keeps protocol and resource rejection/reset behavior together.
+#[cfg(test)]
 async fn handle_session<S>(
     stream: S,
     mail: Arc<dyn MailStore>,
     max_message_bytes: usize,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    handle_session_with_runtime(stream, mail, max_message_bytes, Arc::default()).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn handle_session_with_runtime<S>(
+    stream: S,
+    mail: Arc<dyn MailStore>,
+    max_message_bytes: usize,
+    runtime: Arc<crate::runtime::RuntimeControl>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -92,7 +141,15 @@ where
     let mut transaction = Transaction::default();
     let mut greeted = false;
 
-    while let Some(line) = next_line(&mut reader).await? {
+    loop {
+        let command = tokio::select! {
+            biased;
+            () = runtime.cancelled() => { write_line(&mut writer, "421 Emulator draining").await?; break; },
+            line = next_line(&mut reader) => line?,
+        };
+        let Some(line) = command else {
+            break;
+        };
         let line = match line {
             CommandLine::Valid(line) => line,
             CommandLine::Invalid(message) => {
@@ -135,6 +192,9 @@ where
                 write_line(&mut writer, "503 Bad sequence of commands").await?;
             }
             "RCPT" => match parse_address(rest, "TO:", false) {
+                Some(_) if transaction.recipients.len() >= runtime.limits.max_smtp_recipients => {
+                    write_line(&mut writer, "452 Too many recipients").await?;
+                }
                 Some(address) => {
                     transaction.recipients.push(address);
                     write_line(&mut writer, "250 OK").await?;
@@ -149,6 +209,10 @@ where
                     write_line(&mut writer, "503 Bad sequence of commands").await?;
                     continue;
                 }
+                let Some(work) = runtime.try_request(max_message_bytes) else {
+                    write_line(&mut writer, "452 Emulator capacity exhausted or draining").await?;
+                    continue;
+                };
                 write_line(&mut writer, "354 Start mail input; end with <CRLF>.<CRLF>").await?;
                 let raw = match read_data(&mut reader, max_message_bytes).await {
                     Ok(Some(raw)) => raw,
@@ -167,7 +231,10 @@ where
                 };
                 let message = build_message(&transaction, &raw);
                 match fan_out(mail.as_ref(), &message) {
-                    Ok(_) => write_line(&mut writer, "250 OK: message accepted").await?,
+                    Ok(_) => {
+                        write_line(&mut writer, "250 OK: message accepted").await?;
+                        work.status(hyper::StatusCode::OK);
+                    }
                     Err(Error::CaptureTooLarge) => {
                         write_line(&mut writer, &format!("552 {}", Error::CaptureTooLarge)).await?;
                     }

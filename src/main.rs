@@ -79,7 +79,7 @@ async fn run(config: Config) -> Result<()> {
     // Start lifecycle executor
     let lifecycle_executor =
         sqrzl_emulator::LifecycleExecutor::new(storage.clone(), config.lifecycle_interval);
-    let _lifecycle_handle = lifecycle_executor.start();
+    let lifecycle_handle = lifecycle_executor.start();
     tracing::info!("Lifecycle executor started");
 
     // Start all three listeners
@@ -92,6 +92,7 @@ async fn run(config: Config) -> Result<()> {
 
     let config = Arc::new(config);
     let metrics = Arc::new(sqrzl_emulator::metrics::UsageMetrics::default());
+    let control = config.runtime.clone();
     let mut listeners = tokio::task::JoinSet::new();
     listeners.spawn({
         let storage = storage.clone();
@@ -126,23 +127,59 @@ async fn run(config: Config) -> Result<()> {
         let mail = mail.clone();
         let port = config.smtp_port;
         let max_message_bytes = config.max_request_bytes;
+        let runtime = control.clone();
         async move {
             SmtpServer::new(mail, port)
                 .with_max_message_bytes(max_message_bytes)
+                .with_runtime(runtime)
                 .start()
                 .await
         }
     });
 
-    let Some(result) = listeners.join_next().await else {
-        return Ok(());
+    let result = tokio::select! {
+        result = listeners.join_next() => listener_result(result),
+        result = shutdown_signal() => result,
     };
-
-    match result {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(err)) => Err(Error::InternalError(err.to_string())),
-        Err(err) => Err(Error::InternalError(err.to_string())),
+    tracing::info!("Stopping admission and draining active work");
+    control.begin_drain();
+    lifecycle_handle.abort();
+    let mut outcome = result;
+    while let Some(result) = listeners.join_next().await {
+        if let Err(error) = listener_result(Some(result)) {
+            outcome = Err(error);
+        }
     }
+    let _ = lifecycle_handle.await;
+    tracing::info!(state = ?control.snapshot(), "Drain complete; waiting for blocking storage writers before releasing ownership");
+    outcome
+}
+
+fn listener_result(
+    result: Option<std::result::Result<Result<()>, tokio::task::JoinError>>,
+) -> Result<()> {
+    match result {
+        None | Some(Ok(Ok(()))) => Ok(()),
+        Some(Ok(Err(error))) => Err(error),
+        Some(Err(error)) => Err(Error::InternalError(error.to_string())),
+    }
+}
+
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|error| Error::InternalError(error.to_string()))?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result.map_err(|error| Error::InternalError(error.to_string())),
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|error| Error::InternalError(error.to_string()))
 }
 
 fn init_logging(log_format: LogFormat) {

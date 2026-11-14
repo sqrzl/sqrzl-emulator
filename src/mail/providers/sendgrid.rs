@@ -218,6 +218,8 @@ impl SendGridAdapter {
             crate::mail::budget::add_message(
                 &mut budget,
                 &plan,
+                crate::mail::budget::summary_bytes(&from, &to, &cc, &bcc, subject, None)
+                    .map_err(|_| ParseMessagesError::CaptureLimit)?,
                 0,
                 to.iter()
                     .chain(cc.iter())

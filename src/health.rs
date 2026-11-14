@@ -15,6 +15,10 @@ struct HealthResponse {
     admin_auth_enforced: bool,
     max_request_bytes: usize,
     storage_ready: bool,
+    mail_ready: Option<bool>,
+    sms_ready: Option<bool>,
+    runtime: crate::runtime::RuntimeSnapshot,
+    runtime_limits: crate::runtime::RuntimeLimits,
     enabled_providers: Vec<&'static str>,
 }
 
@@ -22,7 +26,34 @@ pub fn response(
     storage: &(impl BucketStore + ?Sized),
     config: &crate::Config,
 ) -> hyper::Response<Body> {
-    let storage_ready = storage.list_buckets().is_ok();
+    render(storage, config, None, None)
+}
+
+pub fn response_with_capture(
+    storage: &(impl BucketStore + ?Sized),
+    config: &crate::Config,
+    mail: &dyn crate::mail::MailStore,
+    sms: &dyn crate::sms::SmsStore,
+) -> hyper::Response<Body> {
+    render(
+        storage,
+        config,
+        Some(mail.check_ready().is_ok()),
+        Some(sms.check_ready().is_ok()),
+    )
+}
+
+fn render(
+    storage: &(impl BucketStore + ?Sized),
+    config: &crate::Config,
+    mail_ready: Option<bool>,
+    sms_ready: Option<bool>,
+) -> hyper::Response<Body> {
+    let storage_ready = storage.check_ready().is_ok();
+    let runtime = config.runtime.snapshot();
+    let ready =
+        storage_ready && mail_ready != Some(false) && sms_ready != Some(false) && !runtime.draining;
+
     let vendor = &config.vendor_credentials;
     let auth_enforced_providers = [
         ("s3-family", config.enforce_auth),
@@ -43,7 +74,7 @@ pub fn response(
     .filter_map(|(provider, enforced)| enforced.then_some(provider))
     .collect::<Vec<_>>();
     let body = HealthResponse {
-        status: if storage_ready { "ok" } else { "degraded" },
+        status: if ready { "ok" } else { "degraded" },
         version: env!("CARGO_PKG_VERSION"),
         api_port: config.api_port,
         ui_port: config.ui_port,
@@ -52,6 +83,10 @@ pub fn response(
         admin_auth_enforced: config.admin_auth_enforced(),
         max_request_bytes: config.max_request_bytes,
         storage_ready,
+        mail_ready,
+        sms_ready,
+        runtime,
+        runtime_limits: config.runtime.limits,
         enabled_providers: vec![
             "s3-family",
             "azure-blob",
@@ -68,7 +103,7 @@ pub fn response(
     };
 
     match serde_json::to_vec(&body) {
-        Ok(json) => ResponseBuilder::new(if storage_ready {
+        Ok(json) => ResponseBuilder::new(if ready {
             StatusCode::OK
         } else {
             StatusCode::SERVICE_UNAVAILABLE

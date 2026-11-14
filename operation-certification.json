@@ -1,0 +1,507 @@
+{
+  "schema_version": 1,
+  "interpretation": "Named acceptance scopes for trusted exact-source runners and pinned SDKs, not whole-provider or all-variant certification. Unlisted operations and selectors retain their matrix tier. Resource assertions bound selected paths, not OS RSS.",
+  "profiles": {
+    "local-core-v1": {
+      "operations": {
+        "smtp.Session.smtp.HELO-EHLO": {
+          "selectors": {
+            "protocol": "SMTP/RFC5321-selected-plaintext"
+          },
+          "boundary": "Selected command syntax, sequencing, 512-octet command limit, native status replies; plaintext local capture, default 1000 recipient cap.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_session_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_session_certification"
+              ]
+            },
+            "native-auth": {
+              "not_applicable": "Selected plaintext local SMTP; EHLO explicitly advertises neither AUTH nor STARTTLS. Authenticated or TLS SMTP remains outside this profile."
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_session_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_session_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_session_certification"
+              ]
+            },
+            "process-crash": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            },
+            "resources": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_session_certification"
+              ]
+            },
+            "restart": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            }
+          }
+        },
+        "smtp.Envelope.smtp.default": {
+          "selectors": {
+            "protocol": "SMTP/RFC5321-selected-plaintext"
+          },
+          "boundary": "Selected command syntax, sequencing, 512-octet command limit, native status replies; plaintext local capture, default 1000 recipient cap.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification"
+              ]
+            },
+            "native-auth": {
+              "not_applicable": "Selected plaintext local SMTP; EHLO explicitly advertises neither AUTH nor STARTTLS. Authenticated or TLS SMTP remains outside this profile."
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification"
+              ]
+            },
+            "process-crash": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            },
+            "resources": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification"
+              ]
+            },
+            "restart": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            }
+          }
+        },
+        "smtp.NOOP.smtp.command": {
+          "selectors": {
+            "protocol": "SMTP/RFC5321-selected-plaintext"
+          },
+          "boundary": "Selected command syntax, sequencing, 512-octet command limit, native status replies; plaintext local capture, default 1000 recipient cap.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_noop_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_noop_certification"
+              ]
+            },
+            "native-auth": {
+              "not_applicable": "Selected plaintext local SMTP; EHLO explicitly advertises neither AUTH nor STARTTLS. Authenticated or TLS SMTP remains outside this profile."
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_noop_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_noop_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_noop_certification"
+              ]
+            },
+            "process-crash": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            },
+            "resources": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_noop_certification"
+              ]
+            },
+            "restart": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            }
+          }
+        },
+        "smtp.RSET.smtp.command": {
+          "selectors": {
+            "protocol": "SMTP/RFC5321-selected-plaintext"
+          },
+          "boundary": "Selected command syntax, sequencing, 512-octet command limit, native status replies; plaintext local capture, default 1000 recipient cap.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_rset_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_rset_certification"
+              ]
+            },
+            "native-auth": {
+              "not_applicable": "Selected plaintext local SMTP; EHLO explicitly advertises neither AUTH nor STARTTLS. Authenticated or TLS SMTP remains outside this profile."
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_rset_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_rset_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_rset_certification"
+              ]
+            },
+            "process-crash": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            },
+            "resources": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_rset_certification"
+              ]
+            },
+            "restart": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            }
+          }
+        },
+        "smtp.QUIT.smtp.command": {
+          "selectors": {
+            "protocol": "SMTP/RFC5321-selected-plaintext"
+          },
+          "boundary": "Selected command syntax, sequencing, 512-octet command limit, native status replies; plaintext local capture, default 1000 recipient cap.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_quit_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_quit_certification"
+              ]
+            },
+            "native-auth": {
+              "not_applicable": "Selected plaintext local SMTP; EHLO explicitly advertises neither AUTH nor STARTTLS. Authenticated or TLS SMTP remains outside this profile."
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_quit_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_quit_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_quit_certification"
+              ]
+            },
+            "process-crash": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            },
+            "resources": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_quit_certification"
+              ]
+            },
+            "restart": {
+              "not_applicable": "Ephemeral SMTP session state; this command has no persistent mutation to recover. DATA persistence is certified separately."
+            }
+          }
+        },
+        "smtp.Data.smtp.default": {
+          "selectors": {
+            "protocol": "SMTP/RFC5321-selected-plaintext"
+          },
+          "boundary": "Selected command syntax, sequencing, 512-octet command limit, native status replies; plaintext local capture, default 1000 recipient cap.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_data_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_data_certification"
+              ]
+            },
+            "native-auth": {
+              "not_applicable": "Selected plaintext local SMTP; EHLO explicitly advertises neither AUTH nor STARTTLS. Authenticated or TLS SMTP remains outside this profile."
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_data_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_data_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_smtp_data_certification"
+              ]
+            },
+            "process-crash": {
+              "rust": [
+                {
+                  "test": "runtime_process::should_retain_acknowledged_smtp_mail_after_forced_process_exit",
+                  "assertion": "After DATA 250, SIGKILL and store reopen preserve subject and body."
+                }
+              ]
+            },
+            "resources": {
+              "rust": [
+                {
+                  "test": "mail::smtp::tests::should_bound_raw_smtp_data_before_constructing_capture_copies",
+                  "assertion": "Reject raw DATA above the conservative capture allocation bound before building payload copies."
+                },
+                {
+                  "test": "mail::smtp::tests::should_reject_projected_smtp_capture_and_accept_a_later_transaction",
+                  "assertion": "Projected fanout exceeding the local 64 MiB capture budget returns 552, persists no mail, and permits a later small transaction."
+                }
+              ]
+            },
+            "restart": {
+              "rust": [
+                {
+                  "test": "runtime_process::should_finish_smtp_data_during_sigterm_drain",
+                  "assertion": "SIGTERM during admitted DATA completes with 250; reopening the capture store retains the accepted message."
+                }
+              ]
+            }
+          }
+        },
+        "s3-family.HeadObject.head.current": {
+          "selectors": {
+            "api_version": "2006-03-01",
+            "resource": "current"
+          },
+          "boundary": "Pinned SDK; current-object metadata, 8-byte payload, matching and mismatching ETag conditions, absent object and invalid credential replies, normal and abrupt restart, metadata-only 1 GiB sparse-object HEAD. Historical resources, other API versions, date predicates, tags, leases and customer encryption are outside this profile.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            },
+            "native-auth": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            },
+            "process-crash": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            },
+            "resources": {
+              "rust": [
+                {
+                  "test": "storage::filesystem::consistency_tests::should_serve_current_head_metadata_without_opening_payload_files",
+                  "assertion": "All three selected current-object HEAD routes return 1 GiB sparse-object Content-Length with an empty body; a hook panics if payload materialization is attempted."
+                }
+              ]
+            },
+            "restart": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
+              ]
+            }
+          }
+        },
+        "azure-blob.GetBlobProperties.head.current": {
+          "selectors": {
+            "api_version": "2024-11-04",
+            "resource": "current"
+          },
+          "boundary": "Pinned SDK; current-object metadata, 8-byte payload, matching and mismatching ETag conditions, absent object and invalid credential replies, normal and abrupt restart, metadata-only 1 GiB sparse-object HEAD. Historical resources, other API versions, date predicates, tags, leases and customer encryption are outside this profile.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            },
+            "native-auth": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            },
+            "process-crash": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            },
+            "resources": {
+              "rust": [
+                {
+                  "test": "storage::filesystem::consistency_tests::should_serve_current_head_metadata_without_opening_payload_files",
+                  "assertion": "All three selected current-object HEAD routes return 1 GiB sparse-object Content-Length with an empty body; a hook panics if payload materialization is attempted."
+                }
+              ]
+            },
+            "restart": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
+              ]
+            }
+          }
+        },
+        "oci-object.HeadObject.head.default": {
+          "selectors": {
+            "api_version": "20160918",
+            "resource": "current"
+          },
+          "boundary": "Pinned SDK; current-object metadata, 8-byte payload, matching and mismatching ETag conditions, absent object and invalid credential replies, normal and abrupt restart, metadata-only 1 GiB sparse-object HEAD. Historical resources, other API versions, date predicates, tags, leases and customer encryption are outside this profile.",
+          "gates": {
+            "boundary": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            },
+            "condition": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            },
+            "native-auth": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            },
+            "native-error": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            },
+            "negative": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            },
+            "pages": {
+              "not_applicable": "Command or single-resource HEAD; no paginated response in this scope."
+            },
+            "positive": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            },
+            "process-crash": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            },
+            "resources": {
+              "rust": [
+                {
+                  "test": "storage::filesystem::consistency_tests::should_serve_current_head_metadata_without_opening_payload_files",
+                  "assertion": "All three selected current-object HEAD routes return 1 GiB sparse-object Content-Length with an empty body; a hook panics if payload materialization is attempted."
+                }
+              ]
+            },
+            "restart": {
+              "sdk": [
+                "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

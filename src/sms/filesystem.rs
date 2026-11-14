@@ -336,6 +336,21 @@ impl FilesystemSmsStore {
 }
 
 impl SmsStore for FilesystemSmsStore {
+    fn check_ready(&self) -> Result<()> {
+        std::fs::read_dir(&self.root).map_err(|error| Error::InternalError(error.to_string()))?;
+        for child in [
+            "messages",
+            "conversations",
+            "media",
+            "destinations",
+            "callbacks",
+        ] {
+            std::fs::read_dir(self.root.join(child))
+                .map_err(|error| Error::InternalError(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     fn capture_batch(
         &self,
         messages: Vec<NewSmsMessage>,

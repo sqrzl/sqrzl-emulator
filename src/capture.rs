@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn should_publish_complete_mail_captures_at_every_crash_boundary() {
         // Arrange
-        for (phase, index) in crash_boundaries(14) {
+        for (phase, index) in crash_boundaries(26) {
             let root = temp_root();
             let reader = FilesystemMailStore::open(&root).unwrap();
             // Act
@@ -580,7 +580,7 @@ mod tests {
         let writer = std::thread::spawn(move || {
             PUBLICATION_HOOK.with(|hook| {
                 *hook.borrow_mut() = Some(Box::new(move |phase, index| {
-                    if phase == "file" && index == if mail_domain { 2 } else { 1 } {
+                    if phase == "file" && index == if mail_domain { 4 } else { 1 } {
                         writer_published.wait();
                         writer_selected.wait();
                         return Err(Error::InternalError(

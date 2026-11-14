@@ -14,6 +14,14 @@ pub use model::{
 use crate::error::Result;
 
 pub trait SmsStore: Send + Sync {
+    /// Checks backend readability without changing persisted state.
+    ///
+    /// # Errors
+    /// Returns a persistence/readiness error.
+    fn check_ready(&self) -> Result<()> {
+        self.list_conversations().map(|_| ())
+    }
+
     /// Optional atomic message/repeatability batch publication.
     ///
     /// # Errors

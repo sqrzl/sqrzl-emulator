@@ -22,9 +22,13 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+mod event_index;
+mod summary;
+
 pub struct FilesystemMailStore {
     root: PathBuf,
     capture_lock: Mutex<()>,
+    event_index: std::sync::OnceLock<std::sync::Arc<event_index::EventIndex>>,
 }
 
 type CaptureFiles = Vec<(PathBuf, Vec<u8>)>;
@@ -46,10 +50,26 @@ impl FilesystemMailStore {
         let root = blobs_path.as_ref().join("_mail");
         fs::create_dir_all(&root).map_err(|err| io_err(&err))?;
         capture::recover(&root)?;
-        Ok(Self {
+        let store = Self {
             root,
             capture_lock: Mutex::new(()),
-        })
+            event_index: std::sync::OnceLock::new(),
+        };
+        store.upgrade_summary_index()?;
+        if store
+            .root
+            .join(".ses-events-v1.redb")
+            .try_exists()
+            .map_err(|error| io_err(&error))?
+            || store
+                .root
+                .join(SES_EVENTS_DIR)
+                .try_exists()
+                .map_err(|error| io_err(&error))?
+        {
+            store.event_index()?;
+        }
+        Ok(store)
     }
 
     fn ses_destination_path(&self, configuration_set: &str) -> PathBuf {
@@ -140,6 +160,7 @@ impl FilesystemMailStore {
                 raw_mime.clone(),
             ));
         }
+        files.extend(self.summary_files(&stored)?);
         Ok((stored, files))
     }
 
@@ -162,7 +183,7 @@ impl FilesystemMailStore {
             }
             #[cfg(test)]
             capture::test_listing_phase();
-            let stored = match Self::read_stored(&path) {
+            let mut stored = match Self::read_stored(&path) {
                 Ok(stored) => stored,
                 // Rollback and admin deletion may remove an enumerated entry
                 // before it is opened. It contributes no committed message.
@@ -176,6 +197,7 @@ impl FilesystemMailStore {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
             if id.is_empty() || committed.contains(id) {
+                self.overlay_summary(&mut stored)?;
                 messages.push(stored);
             }
         }
@@ -234,6 +256,19 @@ impl FilesystemMailStore {
 }
 
 impl MailStore for FilesystemMailStore {
+    fn check_ready(&self) -> Result<()> {
+        std::fs::read_dir(&self.root).map_err(|error| Error::InternalError(error.to_string()))?;
+        if let Some(index) = self.event_index.get() {
+            if !self.root.join(".ses-events-v1.redb").is_file() {
+                return Err(Error::InternalError(
+                    "SES event index file is missing".into(),
+                ));
+            }
+            index.check_ready()?;
+        }
+        Ok(())
+    }
+
     fn capture_batch(
         &self,
         messages: &[(String, Message)],
@@ -308,6 +343,7 @@ impl MailStore for FilesystemMailStore {
         if !self.visible(&stored) {
             return Err(Error::MessageNotFound);
         }
+        self.overlay_summary(&mut stored)?;
         let raw_path = self.raw_message_path(mailbox, message_id)?;
         if let Some(raw_mime) = Self::read_raw(&raw_path) {
             stored.message.raw_mime = Some(raw_mime);
@@ -348,6 +384,33 @@ impl MailStore for FilesystemMailStore {
         Err(Error::MessageNotFound)
     }
 
+    fn list_message_summaries(
+        &self,
+        mailbox: &str,
+        params: ListMessagesParams,
+    ) -> Result<ListMessagesResult> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".into()))?;
+        self.summary_page(mailbox, &params)
+    }
+    fn message_cursor(&self, message: &StoredMessage) -> Result<String> {
+        Self::summary_cursor(message)
+    }
+    fn list_mailbox_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+        search: Option<&str>,
+    ) -> Result<super::model::ListMailboxesResult> {
+        let _guard = self
+            .capture_lock
+            .lock()
+            .map_err(|_| Error::InternalError("mail capture lock poisoned".into()))?;
+        self.mailbox_page(after, limit, search)
+    }
+
     fn list_messages(
         &self,
         mailbox: &str,
@@ -368,6 +431,7 @@ impl MailStore for FilesystemMailStore {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(err) => Err(io_err(&err)),
         }?;
+        self.remove_summary(mailbox, message_id)?;
         match fs::remove_file(&raw_path) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -398,54 +462,21 @@ impl MailStore for FilesystemMailStore {
             .capture_lock
             .lock()
             .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
-        let path = self.message_path(mailbox, message_id)?;
-        let mut stored = Self::read_stored(&path)?;
-        stored.delivery_status = status;
-        let data = serde_json::to_vec(&stored).map_err(|e| Error::InternalError(e.to_string()))?;
-        write_atomic(&path, &data)
+        self.update_summary_status(mailbox, message_id, status)
     }
 
     fn list_mailboxes(&self) -> Result<Vec<MailboxInfo>> {
-        let committed = capture::committed_snapshot(&self.root)?;
-        let Ok(entries) = fs::read_dir(&self.root) else {
-            return Ok(Vec::new());
-        };
-
-        let mut mailboxes = Vec::new();
-        for entry in entries.filter_map(std::result::Result::ok) {
-            if !entry.path().is_dir() {
-                continue;
-            }
-            let metadata_path = entry.path().join(MAILBOX_METADATA);
-            let address = match fs::read_to_string(metadata_path) {
-                Ok(address) => address,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    let Some(address) = entry.file_name().to_str().map(str::to_string) else {
-                        continue;
-                    };
-                    address
-                }
-                Err(err) => return Err(io_err(&err)),
+        let mut result = Vec::new();
+        let mut marker = None;
+        loop {
+            let page = self.list_mailbox_page(marker.as_deref(), 500, None)?;
+            result.extend(page.mailboxes);
+            let Some(next) = page.next_marker else {
+                break;
             };
-            if address == ALL_MAILBOX || entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-
-            let result =
-                self.list_messages_snapshot(&address, &ListMessagesParams::default(), &committed)?;
-            // Directory preparation precedes the capture decision. Only
-            // committed messages make a recipient mailbox visible.
-            if result.messages.is_empty() {
-                continue;
-            }
-            mailboxes.push(MailboxInfo {
-                address,
-                message_count: result.messages.len(),
-                last_received_at: result.messages.last().map(|message| message.received_at),
-            });
+            marker = Some(next);
         }
-        mailboxes.sort_by(|a, b| a.address.cmp(&b.address));
-        Ok(mailboxes)
+        Ok(result)
     }
 
     fn ensure_mailbox(&self, mailbox: &str) -> Result<()> {
@@ -506,77 +537,36 @@ impl MailStore for FilesystemMailStore {
     }
 
     fn claim_ses_event(&self, event: &SesEventRecord) -> Result<Option<SesEventRecord>> {
-        let _guard = self
-            .capture_lock
-            .lock()
-            .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
-        match self.get_ses_event(&event.event_id) {
-            Ok(existing) => return Ok(Some(existing)),
-            Err(Error::MessageNotFound) => {}
-            Err(error) => return Err(error),
-        }
-        validate_segment(&event.event_id)?;
-        let path = self
-            .root
-            .join(SES_EVENTS_DIR)
-            .join(format!("{}.json", event.event_id));
-        if write_atomic_mode(&path, &ses_event_bytes(event)?, false)? {
-            Ok(None)
-        } else {
-            self.get_ses_event(&event.event_id).map(Some)
-        }
+        self.event_index()?.put(event, true)
     }
-
     fn get_ses_event(&self, event_id: &str) -> Result<SesEventRecord> {
         validate_segment(event_id)?;
-        let bytes = fs::read(
-            self.root
-                .join(SES_EVENTS_DIR)
-                .join(format!("{event_id}.json")),
-        )
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Error::MessageNotFound
-            } else {
-                io_err(&error)
-            }
-        })?;
-        serde_json::from_slice(&bytes).map_err(|error| Error::InternalError(error.to_string()))
+        self.event_index()?.get(event_id)
     }
-
     fn record_ses_event(&self, event: &SesEventRecord) -> Result<()> {
-        validate_segment(&event.event_id)?;
-        write_atomic(
-            &self
-                .root
-                .join(SES_EVENTS_DIR)
-                .join(format!("{}.json", event.event_id)),
-            &ses_event_bytes(event)?,
-        )
+        self.event_index()?.put(event, false)?;
+        Ok(())
     }
-
     fn list_ses_event_page(
         &self,
         message_id: Option<&str>,
         after: Option<&str>,
         limit: usize,
     ) -> Result<crate::mail::ses_events::SesEventPage> {
-        crate::mail::ses_events::event_page(
-            ses_event_records(&self.root)?,
-            message_id,
-            after,
-            limit,
-        )
+        self.event_index()?.page(message_id, after, limit)
     }
-
     fn list_ses_events(&self, message_id: Option<&str>) -> Result<Vec<SesEventRecord>> {
-        let mut events = ses_event_records(&self.root)?.collect::<Result<Vec<_>>>()?;
-        events.retain(|event| message_id.is_none_or(|id| event.message_id == id));
-        events.sort_by(|a, b| {
-            a.created_at
-                .cmp(&b.created_at)
-                .then_with(|| a.event_id.cmp(&b.event_id))
-        });
+        let index = self.event_index()?;
+        let mut events = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = index.page(message_id, cursor.as_deref(), 500)?;
+            events.extend(page.items);
+            let Some(next) = page.next else {
+                break;
+            };
+            cursor = Some(next);
+        }
         Ok(events)
     }
 }
@@ -692,7 +682,7 @@ fn io_err(err: &std::io::Error) -> Error {
 mod tests {
     use super::*;
     use crate::mail::model::{Address, SourceProtocol};
-    use crate::mail::{fan_out, generate_message_id};
+    use crate::mail::{fan_out, generate_message_id, DeliveryState};
 
     fn temp_store() -> FilesystemMailStore {
         let dir = std::env::temp_dir().join(format!("sqrzl-mailstore-{}", uuid::Uuid::new_v4()));
@@ -1156,7 +1146,11 @@ mod tests {
         }
         // Act
         let first = store.list_ses_event_page(Some("message"), None, 3).unwrap();
-        fs::remove_file(store.root.join(super::SES_EVENTS_DIR).join("event-2.json")).unwrap();
+        store
+            .event_index()
+            .unwrap()
+            .remove_for_test("event-2")
+            .unwrap();
         let second = store
             .list_ses_event_page(Some("message"), first.next.as_deref(), 3)
             .unwrap();
@@ -1191,5 +1185,180 @@ mod tests {
             invalid_limit,
             Err(crate::Error::InvalidRequest(_))
         ));
+    }
+    #[test]
+    fn should_list_message_summaries_without_reading_payload_files() {
+        // Arrange
+        let store = temp_store();
+        let mailbox = "summary@example.com";
+        let mut message = sample_message(mailbox);
+        message.body_text = Some("large body".repeat(32_768));
+        let stored = store
+            .store_message(mailbox, "message-one", message)
+            .unwrap();
+        fs::write(
+            store.message_path(mailbox, &stored.message_id).unwrap(),
+            b"payload must not be read for metadata",
+        )
+        .unwrap();
+        // Act
+        let page = store.list_message_summaries(
+            mailbox,
+            ListMessagesParams {
+                limit: Some(1),
+                marker: None,
+            },
+        );
+        let mailboxes = store.list_mailbox_page(None, 1, None);
+        // Assert
+        let page = page.unwrap();
+        assert_eq!(page.messages[0].message.subject, "hello");
+        assert!(page.messages[0].message.body_text.is_none());
+        assert!(page.messages[0].message.attachments.is_empty());
+        assert_eq!(mailboxes.unwrap().mailboxes[0].message_count, 1);
+        assert!(store.get_message(mailbox, &stored.message_id).is_err());
+    }
+
+    #[test]
+    fn should_continue_summary_pagination_after_the_boundary_message_is_deleted() {
+        // Arrange
+        let store = temp_store();
+        let mailbox = "summary@example.com";
+        for index in 0..4 {
+            store
+                .store_message(
+                    mailbox,
+                    &format!("message-{index}"),
+                    sample_message(mailbox),
+                )
+                .unwrap();
+        }
+        let first = store
+            .list_message_summaries(
+                mailbox,
+                ListMessagesParams {
+                    limit: Some(2),
+                    marker: None,
+                },
+            )
+            .unwrap();
+        // Act
+        store
+            .delete_message(mailbox, &first.messages.last().unwrap().message_id)
+            .unwrap();
+        let second = store
+            .list_message_summaries(
+                mailbox,
+                ListMessagesParams {
+                    limit: Some(2),
+                    marker: first.next_marker,
+                },
+            )
+            .unwrap();
+        // Assert
+        assert_eq!(second.messages[0].message_id, "message-2");
+        assert_eq!(second.messages.len(), 2);
+        assert!(second.next_marker.is_none());
+    }
+
+    #[test]
+    fn should_persist_delivery_metadata_without_rewriting_captured_payloads() {
+        // Arrange
+        let store = temp_store();
+        let mailbox = "summary@example.com";
+        let root = store.root.parent().unwrap().to_path_buf();
+        store
+            .store_message(mailbox, "immutable-body", sample_message(mailbox))
+            .unwrap();
+        let path = store.message_path(mailbox, "immutable-body").unwrap();
+        let original = fs::read(&path).unwrap();
+        // Act
+        store
+            .update_delivery_status(
+                mailbox,
+                "immutable-body",
+                DeliveryStatus {
+                    state: DeliveryState::Delivered,
+                    detail: Some("accepted".into()),
+                    updated_at: Utc::now(),
+                },
+            )
+            .unwrap();
+        drop(store);
+        let reopened = FilesystemMailStore::open(root).unwrap();
+        let detail = reopened.get_message(mailbox, "immutable-body").unwrap();
+        let page = reopened
+            .list_message_summaries(mailbox, ListMessagesParams::default())
+            .unwrap();
+        // Assert
+        assert_eq!(original, fs::read(path).unwrap());
+        assert!(matches!(
+            detail.delivery_status.state,
+            DeliveryState::Delivered
+        ));
+        assert!(matches!(
+            page.messages[0].delivery_status.state,
+            DeliveryState::Delivered
+        ));
+    }
+
+    #[test]
+    fn should_upgrade_legacy_captures_into_payload_free_summary_pages() {
+        // Arrange
+        let store = temp_store();
+        let mailbox = "legacy@example.com";
+        let root = store.root.parent().unwrap().to_path_buf();
+        store
+            .store_message(mailbox, "legacy", sample_message(mailbox))
+            .unwrap();
+        let mailbox_dir = store.mailbox_dir(mailbox).unwrap();
+        fs::remove_dir_all(mailbox_dir.join(".summaries")).unwrap();
+        fs::remove_dir_all(mailbox_dir.join(".summary-index")).unwrap();
+        drop(store);
+        // Act
+        let reopened = FilesystemMailStore::open(root).unwrap();
+        fs::write(
+            reopened.message_path(mailbox, "legacy").unwrap(),
+            b"large legacy body is no longer read by listings",
+        )
+        .unwrap();
+        let page = reopened
+            .list_message_summaries(mailbox, ListMessagesParams::default())
+            .unwrap();
+        // Assert
+        assert_eq!(page.messages[0].message_id, "legacy");
+        assert!(page.messages[0].message.body_text.is_none());
+        assert_eq!(
+            reopened
+                .list_mailbox_page(None, 50, None)
+                .unwrap()
+                .mailboxes[0]
+                .message_count,
+            1
+        );
+    }
+
+    #[test]
+    fn should_read_only_requested_ses_event_payloads_given_an_unrelated_archive() {
+        // Arrange
+        let store = temp_store();
+        let created = Utc::now();
+        for index in 0..100 {
+            let event: SesEventRecord = serde_json::from_value(serde_json::json!({
+                "event_id": format!("event-{index:04}"), "message_id": if index == 42 { "target" } else { "unrelated" },
+                "event_type":"Delivery", "created_at":created, "record":{"padding":"x".repeat(4096)}, "notification":{},
+            })).unwrap();
+            store.record_ses_event(&event).unwrap();
+        }
+        crate::mail::ses_events::take_event_decode_count();
+        // Act
+        let result = store.list_ses_event_page(Some("target"), None, 1).unwrap();
+        let reads = crate::mail::ses_events::take_event_decode_count();
+        // Assert
+        assert_eq!(result.items.len(), 1);
+        assert!(
+            reads <= 2,
+            "a one-record page deserialized {reads} event payloads"
+        );
     }
 }

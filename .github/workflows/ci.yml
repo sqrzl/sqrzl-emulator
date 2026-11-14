@@ -86,7 +86,9 @@ jobs:
           python -m unittest discover -s scripts -p 'test_release_checks.py'
 
       - name: Contract evidence validator boundary checks
-        run: python -m unittest discover -s scripts -p 'test_contract_evidence.py'
+        run: |
+          python -m unittest discover -s scripts -p 'test_contract_evidence.py'
+          python -m unittest discover -s scripts -p 'test_operation_certification.py'
 
       - name: Measured campaign oracle checks
         run: python sdk-tests/campaign_checks.py
@@ -99,14 +101,14 @@ jobs:
           SQRZL_SDK_ENFORCE_AUTH: "1"
           SQRZL_SDK_PROVIDERS: s3,azure,gcs,oci
           SQRZL_SDK_LANE: storage-auth
-        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_gcs_dotnet_sdk.py sdk-tests/test_oci_sdk.py sdk-tests/test_storage_acceptance.py sdk-tests/test_storage_auth_acceptance.py
+        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_gcs_dotnet_sdk.py sdk-tests/test_oci_sdk.py sdk-tests/test_storage_acceptance.py sdk-tests/test_storage_auth_acceptance.py sdk-tests/test_operation_certification.py
 
       - name: Authenticated messaging SDK tests
         env:
           SQRZL_SDK_MESSAGING_AUTH: "1"
           SQRZL_SDK_PROVIDERS: email,twilio,sns,aws-sms-voice-v2
           SQRZL_SDK_LANE: messaging-auth
-        run: python -m pytest sdk-tests/test_email_sdk.py sdk-tests/test_sms_sdk.py sdk-tests/test_messaging_acceptance.py
+        run: python -m pytest sdk-tests/test_email_sdk.py sdk-tests/test_sms_sdk.py sdk-tests/test_messaging_acceptance.py sdk-tests/test_operation_certification.py
 
       - name: Validate exact operation references and qualification results
         run: |
@@ -116,6 +118,7 @@ jobs:
             --sdk-evidence target/sdk-evidence/storage-auth.json \
             --sdk-evidence target/sdk-evidence/messaging-auth.json \
             --results-source-sha "$(git rev-parse HEAD)" \
+            --require-certified-profile local-core-v1 \
             --output target/contract-acceptance.json
 
       - name: Preserve SDK qualification evidence
@@ -163,14 +166,14 @@ jobs:
           SQRZL_SDK_ENFORCE_AUTH: "1"
           SQRZL_SDK_PROVIDERS: s3,azure,gcs,oci
           SQRZL_SDK_LANE: upgrade-storage-auth
-        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_gcs_dotnet_sdk.py sdk-tests/test_oci_sdk.py sdk-tests/test_storage_acceptance.py sdk-tests/test_storage_auth_acceptance.py
+        run: python -m pytest sdk-tests/test_s3_sdk.py sdk-tests/test_azure_sdk.py sdk-tests/test_gcs_sdk.py sdk-tests/test_gcs_dotnet_sdk.py sdk-tests/test_oci_sdk.py sdk-tests/test_storage_acceptance.py sdk-tests/test_storage_auth_acceptance.py sdk-tests/test_operation_certification.py
       - name: Candidate messaging authentication
         env:
           SQRZL_SDK_ALLOW_UPGRADE: "1"
           SQRZL_SDK_MESSAGING_AUTH: "1"
           SQRZL_SDK_PROVIDERS: email,twilio,sns,aws-sms-voice-v2
           SQRZL_SDK_LANE: upgrade-messaging-auth
-        run: python -m pytest sdk-tests/test_email_sdk.py sdk-tests/test_sms_sdk.py sdk-tests/test_messaging_acceptance.py
+        run: python -m pytest sdk-tests/test_email_sdk.py sdk-tests/test_sms_sdk.py sdk-tests/test_messaging_acceptance.py sdk-tests/test_operation_certification.py
       - name: Preserve upgrade qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
