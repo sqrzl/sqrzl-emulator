@@ -237,7 +237,12 @@ impl AzureBlobAdapter {
             condition = Some(ObjectCondition::Missing);
         }
 
-        let source_object = match storage.get_object(source_container, source_blob) {
+        let source_object = match crate::providers::bounded_copy_source(
+            storage.as_ref(),
+            source_container,
+            source_blob,
+            super::AZURE_MAX_MATERIALIZED_MUTATION_BYTES,
+        ) {
             Ok(object) => object,
             Err(crate::error::Error::KeyNotFound | crate::error::Error::BucketNotFound) => {
                 return Ok(cannot_verify_source(
@@ -247,6 +252,9 @@ impl AzureBlobAdapter {
             }
             Err(error) => return Err(error.to_string()),
         };
+        if source_object.size > super::AZURE_MAX_MATERIALIZED_MUTATION_BYTES {
+            return Ok(Self::materialized_extent_unsupported());
+        }
         // The source may have changed between the condition check and the read.
         if source_object.etag != source_metadata.etag
             && !source_conditions_match(req, &source_object)

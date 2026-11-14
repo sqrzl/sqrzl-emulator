@@ -210,39 +210,28 @@ impl GcsAdapter {
         if_generation_match: Option<&str>,
         if_generation_not_match: Option<&str>,
     ) -> Result<crate::models::Object, Rejection> {
-        let head = match storage.get_object_metadata(bucket, name) {
-            Ok(head) => head,
-            Err(crate::error::Error::KeyNotFound) => {
-                return Err(Box::new(Self::json_not_found(name)));
-            }
-            Err(crate::error::Error::BucketNotFound) => {
-                return Err(Box::new(Self::json_bucket_not_found(bucket)));
-            }
-            Err(error) => {
-                return Err(Box::new(Self::json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "backendError",
-                    &error.to_string(),
-                )));
-            }
-        };
-        if head.size > MATERIALIZATION_LIMIT {
+        let object = crate::providers::bounded_copy_source(
+            storage.as_ref(),
+            bucket,
+            name,
+            MATERIALIZATION_LIMIT,
+        )
+        .map_err(|error| match error {
+            crate::error::Error::KeyNotFound => Box::new(Self::json_not_found(name)),
+            crate::error::Error::BucketNotFound => Box::new(Self::json_bucket_not_found(bucket)),
+            error => Box::new(Self::json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "backendError",
+                &error.to_string(),
+            )),
+        })?;
+        if object.size > MATERIALIZATION_LIMIT {
             return Err(Box::new(Self::json_error(
                 StatusCode::NOT_IMPLEMENTED,
                 "notImplemented",
                 "This emulator copies at most 64 MiB per GCS compose or rewrite request.",
             )));
         }
-        let object = storage
-            .get_object(bucket, name)
-            .map_err(|error| match error {
-                crate::error::Error::KeyNotFound => Box::new(Self::json_not_found(name)),
-                error => Box::new(Self::json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "backendError",
-                    &error.to_string(),
-                )),
-            })?;
         let current = Self::generation(&object);
         if let Some(selected) = generation {
             if selected.parse::<u64>().is_err() {
@@ -441,6 +430,11 @@ impl GcsAdapter {
             let preconditions = source
                 .get("objectPreconditions")
                 .filter(|value| !value.is_null());
+            if preconditions.is_some_and(|value| !value.is_object()) {
+                return Err(Self::invalid_argument(
+                    "objectPreconditions must be a JSON object",
+                ));
+            }
             if let Some(field) = preconditions
                 .and_then(serde_json::Value::as_object)
                 .and_then(|fields| fields.keys().find(|field| *field != "ifGenerationMatch"))

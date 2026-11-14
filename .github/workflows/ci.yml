@@ -234,9 +234,7 @@ jobs:
         run: |
           docker run --rm -d \
             --name sqrzl-emulator-smoke \
-            -p 9000:9000 \
-            -p 9001:9001 \
-            -p 2525:2525 \
+            --network host \
             -e SQRZL_ADMIN_AUTH_DISABLED=true \
             -e SQRZL_TWILIO_ACCOUNT_SID=AC00000000000000000000000000000001 \
             -e SQRZL_TWILIO_AUTH_TOKEN=sqrzl-twilio-token \

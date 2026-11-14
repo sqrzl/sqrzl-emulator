@@ -2188,6 +2188,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_decode_all_gzip_members_before_applying_the_body_limit() {
+        // Arrange
+        let mut compressed = gzip(br#"{"name":"multi-member"}"#);
+        compressed.extend(gzip(&vec![b' '; 2048]));
+        let request = parsed_request(
+            "POST",
+            "http://localhost/storage/v1/b?project=test-project",
+            &[("content-encoding", "gzip")],
+            &compressed,
+        )
+        .await;
+
+        // Act
+        let response = GcsAdapter::decode_json_content_encoding(&request, 1024);
+
+        // Assert
+        assert_eq!(
+            response.err().unwrap().status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
+    #[tokio::test]
+    async fn should_reject_malformed_compose_preconditions_without_writing() {
+        // Arrange
+        let storage = temp_storage();
+        let adapter = GcsAdapter::new();
+        seed_compose_bucket(&storage, &adapter).await;
+        let mut outcomes = Vec::new();
+
+        // Act
+        for preconditions in [
+            serde_json::json!(false),
+            serde_json::json!("bad"),
+            serde_json::json!([]),
+        ] {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "sourceObjects": [{"name": "part-1", "objectPreconditions": preconditions}]
+            }))
+            .unwrap();
+            outcomes.push(
+                send_json(
+                    &storage,
+                    &adapter,
+                    "POST",
+                    "http://localhost/storage/v1/b/assembly/o/rejected/compose",
+                    &body,
+                )
+                .await
+                .0,
+            );
+        }
+
+        // Assert
+        assert_eq!(outcomes, vec![StatusCode::BAD_REQUEST; 3]);
+        assert!(storage.get_object_metadata("assembly", "rejected").is_err());
+    }
+
+    #[tokio::test]
     async fn should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects() {
         // Arrange
         let storage = temp_storage();
@@ -6986,7 +7045,7 @@ impl GcsAdapter {
         let limit = u64::try_from(max_request_bytes)
             .unwrap_or(u64::MAX)
             .saturating_add(1);
-        if let Err(error) = flate2::read::GzDecoder::new(req.body.as_ref())
+        if let Err(error) = flate2::read::MultiGzDecoder::new(req.body.as_ref())
             .take(limit)
             .read_to_end(&mut decoded)
         {
