@@ -12,6 +12,10 @@ use sqrzl_emulator::utils::validation::validate_bucket_name;
 use sqrzl_emulator::{Config, Error};
 
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("sqrzl-emulator {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     // Load configuration from environment variables
     let config = Config::try_from_env().map_err(Error::InvalidRequest)?;
     let log_format = Config::log_format_from_env();
@@ -19,7 +23,10 @@ fn main() -> Result<()> {
     // Initialize structured logging
     init_logging(log_format);
 
-    tracing::info!(version = "0.1.0", "Sqrzl Emulator started");
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "Sqrzl Emulator started"
+    );
     tracing::info!("Provider-compatible object storage emulator");
 
     // Log authentication status

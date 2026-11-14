@@ -5933,6 +5933,113 @@
           "positive"
         ]
       }
+    },
+    "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow": {
+      "provider": "gcs",
+      "operations": [
+        "gcs.CreateBucket.post.json",
+        "gcs.GetBucket.get.json",
+        "gcs.InsertObject.post.json-resumable",
+        "gcs.UploadChunk.put.resumable",
+        "gcs.GetObject.get.json-download",
+        "gcs.GetObject.get.json-metadata",
+        "gcs.DeleteObject.delete.json",
+        "gcs.DeleteBucket.delete.json"
+      ],
+      "checks": [
+        "positive",
+        "negative"
+      ],
+      "auth_mode": "local-bearer-or-anonymous-convenience",
+      "scope": "Google.Cloud.Storage.V1 5.0.0 default gzip bucket creation, default CMEK metadata, resumable byte roundtrip, missing object and cleanup only. No OAuth qualification.",
+      "operation_checks": {
+        "gcs.CreateBucket.post.json": [
+          "positive"
+        ],
+        "gcs.GetBucket.get.json": [
+          "positive"
+        ],
+        "gcs.InsertObject.post.json-resumable": [
+          "positive"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
+        ],
+        "gcs.GetObject.get.json-metadata": [
+          "negative"
+        ],
+        "gcs.DeleteObject.delete.json": [
+          "positive"
+        ],
+        "gcs.DeleteBucket.delete.json": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "gcs.CreateBucket.post.json",
+        "gcs.GetBucket.get.json",
+        "gcs.InsertObject.post.json-resumable",
+        "gcs.UploadChunk.put.resumable",
+        "gcs.GetObject.get.json-download",
+        "gcs.GetObject.get.json-metadata",
+        "gcs.DeleteObject.delete.json",
+        "gcs.DeleteBucket.delete.json"
+      ],
+      "operation_id_aliases": {
+        "gcs.CreateBucket.post.json": [
+          "gcs.CreateBucket.post.json"
+        ],
+        "gcs.GetBucket.get.json": [
+          "gcs.GetBucket.get.json"
+        ],
+        "gcs.InsertObject.post.json-resumable": [
+          "gcs.InsertObject.post.json-resumable"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "gcs.UploadChunk.put.resumable"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "gcs.GetObject.get.json-download"
+        ],
+        "gcs.GetObject.get.json-metadata": [
+          "gcs.GetObject.get.json-metadata"
+        ],
+        "gcs.DeleteObject.delete.json": [
+          "gcs.DeleteObject.delete.json"
+        ],
+        "gcs.DeleteBucket.delete.json": [
+          "gcs.DeleteBucket.delete.json"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.CreateBucket.post.json": [
+          "positive"
+        ],
+        "gcs.GetBucket.get.json": [
+          "positive"
+        ],
+        "gcs.InsertObject.post.json-resumable": [
+          "positive"
+        ],
+        "gcs.UploadChunk.put.resumable": [
+          "positive"
+        ],
+        "gcs.GetObject.get.json-download": [
+          "positive"
+        ],
+        "gcs.GetObject.get.json-metadata": [
+          "negative"
+        ],
+        "gcs.DeleteObject.delete.json": [
+          "positive"
+        ],
+        "gcs.DeleteBucket.delete.json": [
+          "positive"
+        ]
+      }
     }
   }
 }

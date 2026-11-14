@@ -27,6 +27,90 @@ pub(crate) const MAIL_CALLBACK_POLICY: CallbackPolicy = CallbackPolicy {
 const ACCOUNT_ID: &str = "000000000000";
 const REGION: &str = "us-east-1";
 
+/// A bounded oldest-first page of simulated events.
+#[derive(Debug, Serialize)]
+pub struct SesEventPage {
+    pub items: Vec<SesEventRecord>,
+    pub next: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EventCursor {
+    message_id: Option<String>,
+    created_at: DateTime<Utc>,
+    event_id: String,
+}
+
+pub(crate) fn event_page(
+    records: impl Iterator<Item = Result<SesEventRecord>>,
+    message_id: Option<&str>,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<SesEventPage> {
+    if !(1..=500).contains(&limit) {
+        return Err(Error::InvalidRequest(
+            "limit must be between 1 and 500".into(),
+        ));
+    }
+    let cursor = after
+        .map(serde_json::from_str::<EventCursor>)
+        .transpose()
+        .map_err(|_| Error::InvalidRequest("invalid SES event cursor".into()))?;
+    if cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.message_id.as_deref() != message_id)
+    {
+        return Err(Error::InvalidRequest(
+            "SES event cursor does not match message filter".into(),
+        ));
+    }
+    let marker = cursor.map(|cursor| (cursor.created_at, cursor.event_id));
+    let mut selected = BTreeMap::new();
+    for record in records {
+        let record = record?;
+        if message_id.is_some_and(|id| id != record.message_id) {
+            continue;
+        }
+        let key = (record.created_at, record.event_id.clone());
+        if marker.as_ref().is_some_and(|marker| &key <= marker) {
+            continue;
+        }
+        if selected.len() == limit + 1 {
+            if selected
+                .last_key_value()
+                .is_some_and(|(last, _)| &key >= last)
+            {
+                continue;
+            }
+            selected.pop_last();
+        }
+        selected.insert(key, record);
+    }
+    let more = selected.len() > limit;
+    if more {
+        selected.pop_last();
+    }
+    let next = if more {
+        selected
+            .last_key_value()
+            .map(|((created_at, event_id), _)| {
+                serde_json::to_string(&EventCursor {
+                    message_id: message_id.map(str::to_owned),
+                    created_at: *created_at,
+                    event_id: event_id.clone(),
+                })
+            })
+            .transpose()
+            .map_err(|error| Error::InternalError(error.to_string()))?
+    } else {
+        None
+    };
+    Ok(SesEventPage {
+        items: selected.into_values().collect(),
+        next,
+    })
+}
+
 /// SES event-publishing event types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SesEventType {

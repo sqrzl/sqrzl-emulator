@@ -15,6 +15,7 @@ const environment = Object.fromEntries(
   )
 );
 Object.assign(environment, {
+  SES_CONFIGURATION_SETS: 'browser-events',
   SQRZL_BLOBS_PATH: resolve(root, 'blobs'),
   SQRZL_API_PORT: authenticated ? '19002' : '19000',
   SQRZL_UI_PORT: authenticated ? '19003' : '19001',

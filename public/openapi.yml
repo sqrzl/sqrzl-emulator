@@ -1244,6 +1244,8 @@ paths:
       operationId: listSesEvents
       summary: List simulated SES event-publishing records
       parameters:
+        - $ref: '#/components/parameters/Next'
+        - $ref: '#/components/parameters/Limit'
         - name: message_id
           in: query
           required: false
@@ -1257,8 +1259,10 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [items]
+                required: [items, next]
                 properties:
+                  next:
+                    type: [string, 'null']
                   items:
                     type: array
                     items:

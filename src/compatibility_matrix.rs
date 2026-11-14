@@ -318,6 +318,7 @@ mod tests {
             "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing",
             "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions",
             "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow",
             "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key",
             "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",
             "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[xml]",

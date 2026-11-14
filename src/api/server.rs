@@ -335,16 +335,10 @@ async fn handle_ui_request(
         return Ok(json_error_response(&Error::RouteNotFound(path)));
     }
 
-    let has_static = Path::new("./static").exists() || Path::new("/app/ui/dist").exists();
-
-    if has_static {
-        let static_dir = if Path::new("./static").exists() {
-            "./static"
-        } else {
-            "/app/ui/dist"
-        };
-
-        return Ok(serve_static_content(Path::new(static_dir), &path).await);
+    let working = std::env::current_dir().unwrap_or_default();
+    let executable = std::env::current_exe().ok();
+    if let Some(static_dir) = find_static_directory(&working, executable.as_deref()) {
+        return Ok(serve_static_content(&static_dir, &path).await);
     }
 
     let default_content =
@@ -667,6 +661,17 @@ fn admin_payload_too_large_response(max_request_bytes: usize) -> Response<Body> 
     json_response(StatusCode::PAYLOAD_TOO_LARGE, &body)
 }
 
+fn find_static_directory(working: &Path, executable: Option<&Path>) -> Option<std::path::PathBuf> {
+    let mut candidates = vec![working.join("static")];
+    if let Some(parent) = executable.and_then(Path::parent) {
+        candidates.push(parent.join("static"));
+    }
+    candidates.push(std::path::PathBuf::from("/app/ui/dist"));
+    candidates
+        .into_iter()
+        .find(|path| path.join("index.html").is_file())
+}
+
 async fn serve_static_content(static_dir: &Path, request_path: &str) -> Response<Body> {
     let normalized_path = request_path.trim_start_matches('/');
     let is_spa_route = normalized_path == "admin"
@@ -930,6 +935,22 @@ mod tests {
 
         // Assert
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn should_resolve_packaged_static_assets_beside_executable_from_another_working_directory() {
+        // Arrange
+        let root = temp_static_dir();
+        let package = root.join("package");
+        let working = root.join("working");
+        fs::create_dir_all(package.join("static")).unwrap();
+        fs::create_dir_all(&working).unwrap();
+        fs::write(package.join("static/index.html"), "packaged UI").unwrap();
+        // Act
+        let found = super::find_static_directory(&working, Some(&package.join("sqrzl-emulator")));
+        // Assert
+        assert_eq!(found, Some(package.join("static")));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

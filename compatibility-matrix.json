@@ -505,7 +505,8 @@
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
+          "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
         ],
         "limitations": [
           "Certification is suspended pending authenticated positive, negative, pagination, restart-durability, and provider error-response contract gates."
@@ -552,7 +553,8 @@
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-          "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_xml_upload_integrity_headers",
+          "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
         ],
         "limitations": [
           "The accepted JSON upload checksum subset validates base64 big-endian CRC32C supplied in multipart object metadata and in X-Goog-Hash on media or final resumable requests. Malformed, conflicting, mismatched, and unsupported checksum algorithms fail before mutation; a failed final resumable checksum leaves the session retriable. A separate third JSON multipart checksum part and JSON MD5 validation remain explicitly rejected rather than approximated. Current-generation JSON metadata, media, and delete selectors are accepted only when they equal the stored generation; historical generation access remains unsupported.",

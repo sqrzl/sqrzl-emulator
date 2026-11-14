@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { expect, test } from '@playwright/test';
 
 test('open-mode storage journey survives dotted folder reloads', async ({
@@ -20,13 +22,11 @@ test('open-mode storage journey survives dotted folder reloads', async ({
   await page
     .getByLabel('Blob key', { exact: true })
     .fill('nested/folder.with.dot/sample.txt');
-  await page
-    .getByLabel('File', { exact: true })
-    .setInputFiles({
-      name: 'sample.txt',
-      mimeType: 'text/plain',
-      buffer: Buffer.from('browser regression'),
-    });
+  await page.getByLabel('File', { exact: true }).setInputFiles({
+    name: 'sample.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('browser regression'),
+  });
   await page.getByRole('button', { name: 'Upload blob', exact: true }).click();
   await page.getByRole('link', { name: 'nested/', exact: true }).click();
   await page
@@ -120,4 +120,85 @@ test('unknown routes offer a working return-home action', async ({ page }) => {
   await expect(
     page.getByRole('heading', { name: 'Buckets', exact: true })
   ).toBeVisible();
+});
+
+test('SES admin configures a destination, simulates delivery and retains history', async ({
+  page,
+  request,
+}) => {
+  const callbacks: string[] = [];
+  const receiver = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    callbacks.push(body);
+    res.writeHead(200);
+    res.end('accepted');
+  });
+  await new Promise<void>((resolve) =>
+    receiver.listen(0, '127.0.0.1', resolve)
+  );
+  try {
+    const port = (receiver.address() as AddressInfo).port;
+    const mailbox = `ses-browser-${randomUUID()}@example.com`;
+    const response = await request.post(
+      'http://127.0.0.1:19000/v2/email/outbound-emails',
+      {
+        data: {
+          FromEmailAddress: 'sender@example.com',
+          Destination: { ToAddresses: [mailbox] },
+          ConfigurationSetName: 'browser-events',
+          Content: {
+            Simple: {
+              Subject: { Data: 'SES event UI' },
+              Body: { Text: { Data: 'Local event test' } },
+            },
+          },
+        },
+      }
+    );
+    expect(response.ok()).toBeTruthy();
+    await page.goto(`/admin/mailboxes/${encodeURIComponent(mailbox)}`);
+    await page.getByText('SES event UI', { exact: true }).click();
+    const panel = page.getByRole('region', { name: 'SES event publishing' });
+    await expect(panel).toBeVisible();
+    await panel
+      .getByLabel('SES callback URL', { exact: true })
+      .fill(`http://127.0.0.1:${port}/events`);
+    await panel
+      .getByRole('button', { name: 'Save destination', exact: true })
+      .click();
+    await expect(
+      panel.getByText('Destination saved.', { exact: true })
+    ).toBeVisible();
+    await panel
+      .getByRole('button', { name: 'Simulate event', exact: true })
+      .click();
+    await expect(
+      panel.getByText('Event recorded.', { exact: true })
+    ).toBeVisible();
+    await expect(panel.getByText(/Callback: succeeded/)).toBeVisible();
+    expect(callbacks).toHaveLength(1);
+    expect(JSON.parse(callbacks[0]).Type).toBe('Notification');
+    await panel.getByText('Event payload', {exact:true}).click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width);
+    await page.reload();
+    await page.getByText('SES event UI', { exact: true }).click();
+    await expect(panel.getByText(/Callback: succeeded/)).toBeVisible();
+    expect(callbacks).toHaveLength(1);
+    await panel
+      .getByRole('button', { name: 'Remove destination', exact: true })
+      .click();
+    await expect(page.getByRole('alertdialog')).toBeVisible();
+    await page
+      .getByRole('button', { name: 'Confirm removal', exact: true })
+      .click();
+    await expect(
+      panel.getByText('No callback destination configured.', { exact: true })
+    ).toBeVisible();
+    await expect(panel.getByText(/Callback: succeeded/)).toBeVisible();
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      receiver.close((error) => (error ? reject(error) : resolve()))
+    );
+  }
 });

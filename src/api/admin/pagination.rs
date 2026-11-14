@@ -29,6 +29,7 @@ pub(crate) enum PageTokenKind {
     Messages,
     TextConversations,
     TextMessages,
+    SesEvents,
 }
 
 impl PageTokenKind {
@@ -42,6 +43,7 @@ impl PageTokenKind {
             Self::Messages => "messages",
             Self::TextConversations => "text-conversations",
             Self::TextMessages => "text-messages",
+            Self::SesEvents => "ses-events",
         }
     }
 }

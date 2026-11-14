@@ -4,6 +4,7 @@
 //! - `POST /admin/v1/ses-events` simulates one event for a captured message.
 //! - `GET /admin/v1/ses-events[?message_id=...]` lists simulated records.
 
+use crate::api::admin::pagination::{encode_object_next, parse_object_page_params, PageTokenKind};
 use crate::body::Body;
 use crate::error::{Error, Result};
 use crate::mail::ses_events::{
@@ -106,8 +107,19 @@ where
                             .map(std::borrow::Cow::into_owned)
                     })
                 });
-                let items = mail.list_ses_events(message_id.as_deref())?;
-                Ok(json_response(StatusCode::OK, &json!({ "items": items })))
+                let page = parse_object_page_params(
+                    request.uri().query().unwrap_or(""),
+                    PageTokenKind::SesEvents,
+                )?;
+                let result = mail.list_ses_event_page(
+                    message_id.as_deref(),
+                    page.next.as_deref(),
+                    page.limit,
+                )?;
+                Ok(json_response(
+                    StatusCode::OK,
+                    &json!({ "items": result.items, "next": encode_object_next(result.next, PageTokenKind::SesEvents) }),
+                ))
             }
             _ => Err(Error::MethodNotAllowed(format!("{method} {path}"))),
         };

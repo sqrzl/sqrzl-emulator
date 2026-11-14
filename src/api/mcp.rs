@@ -726,8 +726,8 @@ fn tool_specs() -> Vec<ToolSpec> {
             "sqrzl:read",
             "GET",
             "/admin/v1/ses-events",
-            r#"{"type":"object","properties":{"message_id":{"type":"string"}}}"#,
-            query &["message_id"]
+            r#"{"type":"object","properties":{"message_id":{"type":"string"},"next":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":500}}}"#,
+            query &["message_id", "next", "limit"]
         ),
         ToolSpec {
             name: "usage_query",

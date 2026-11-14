@@ -212,6 +212,24 @@ pub trait MailStore: Send + Sync {
         ))
     }
 
+    /// Lists at most `limit` SES records using a stable, filter-bound cursor.
+    ///
+    /// # Errors
+    /// Returns invalid cursor, read, or persistence errors.
+    fn list_ses_event_page(
+        &self,
+        message_id: Option<&str>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<ses_events::SesEventPage> {
+        ses_events::event_page(
+            self.list_ses_events(message_id)?.into_iter().map(Ok),
+            message_id,
+            after,
+            limit,
+        )
+    }
+
     /// Lists simulated SES events, optionally for one message, oldest first.
     ///
     /// # Errors

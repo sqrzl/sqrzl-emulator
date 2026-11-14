@@ -555,28 +555,23 @@ impl MailStore for FilesystemMailStore {
         )
     }
 
+    fn list_ses_event_page(
+        &self,
+        message_id: Option<&str>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<crate::mail::ses_events::SesEventPage> {
+        crate::mail::ses_events::event_page(
+            ses_event_records(&self.root)?,
+            message_id,
+            after,
+            limit,
+        )
+    }
+
     fn list_ses_events(&self, message_id: Option<&str>) -> Result<Vec<SesEventRecord>> {
-        let entries = match fs::read_dir(self.root.join(SES_EVENTS_DIR)) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(io_err(&error)),
-        };
-        let mut events = Vec::new();
-        for entry in entries.filter_map(std::result::Result::ok) {
-            if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
-                continue;
-            }
-            let bytes = match fs::read(entry.path()) {
-                Ok(bytes) => bytes,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(io_err(&err)),
-            };
-            let event: SesEventRecord = serde_json::from_slice(&bytes)
-                .map_err(|err| Error::InternalError(err.to_string()))?;
-            if message_id.is_none_or(|id| event.message_id.eq_ignore_ascii_case(id)) {
-                events.push(event);
-            }
-        }
+        let mut events = ses_event_records(&self.root)?.collect::<Result<Vec<_>>>()?;
+        events.retain(|event| message_id.is_none_or(|id| event.message_id == id));
         events.sort_by(|a, b| {
             a.created_at
                 .cmp(&b.created_at)
@@ -584,6 +579,31 @@ impl MailStore for FilesystemMailStore {
         });
         Ok(events)
     }
+}
+
+fn ses_event_records(root: &Path) -> Result<impl Iterator<Item = Result<SesEventRecord>>> {
+    let entries = match fs::read_dir(root.join(SES_EVENTS_DIR)) {
+        Ok(entries) => Some(entries),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_err(&error)),
+    };
+    Ok(entries.into_iter().flatten().filter_map(|entry| {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => return Some(Err(io_err(&error))),
+        };
+        if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+            return None;
+        }
+        let bytes = match fs::read(entry.path()) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => return Some(Err(io_err(&error))),
+        };
+        Some(
+            serde_json::from_slice(&bytes).map_err(|error| Error::InternalError(error.to_string())),
+        )
+    }))
 }
 
 fn mailbox_storage_key(mailbox: &str) -> String {
@@ -1120,5 +1140,56 @@ mod tests {
 
         // Assert
         assert_eq!(owners, 1, "more than one store claimed callback delivery");
+    }
+    #[test]
+    fn should_continue_ses_event_pages_given_deleted_boundary_record() {
+        // Arrange
+        let root = std::env::temp_dir().join(format!("sqrzl-ses-page-{}", uuid::Uuid::new_v4()));
+        let store = FilesystemMailStore::open(&root).unwrap();
+        let created = Utc::now();
+        for index in 0..8 {
+            let event: SesEventRecord = serde_json::from_value(serde_json::json!({
+                "event_id": format!("event-{index}"), "message_id": "message", "event_type": "Delivery",
+                "record": {}, "notification": {}, "created_at": created,
+            })).unwrap();
+            store.record_ses_event(&event).unwrap();
+        }
+        // Act
+        let first = store.list_ses_event_page(Some("message"), None, 3).unwrap();
+        fs::remove_file(store.root.join(super::SES_EVENTS_DIR).join("event-2.json")).unwrap();
+        let second = store
+            .list_ses_event_page(Some("message"), first.next.as_deref(), 3)
+            .unwrap();
+        let last = store
+            .list_ses_event_page(Some("message"), second.next.as_deref(), 3)
+            .unwrap();
+        // Assert
+        assert_eq!(first.items.len(), 3);
+        assert_eq!(second.items[0].event_id, "event-3");
+        assert_eq!(last.items.len(), 2);
+        assert!(last.next.is_none());
+        assert!(store
+            .list_ses_event_page(Some("other-message"), first.next.as_deref(), 3)
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn should_reject_invalid_ses_event_page_parameters_before_reading_records() {
+        // Arrange
+        let records =
+            || std::iter::once_with(|| panic!("records read before parameter validation"));
+        // Act
+        let invalid_cursor =
+            crate::mail::ses_events::event_page(records(), None, Some("garbage"), 3);
+        let invalid_limit = crate::mail::ses_events::event_page(records(), None, None, 501);
+        // Assert
+        assert!(matches!(
+            invalid_cursor,
+            Err(crate::Error::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            invalid_limit,
+            Err(crate::Error::InvalidRequest(_))
+        ));
     }
 }

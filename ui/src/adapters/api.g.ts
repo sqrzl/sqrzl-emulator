@@ -540,12 +540,14 @@ export function createAdapter(client: FetchClient): {
    *
    * @param query - Query parameters
    * @param options - Request options (signal, timeout, operationId)
-   * @returns Promise resolving to FetchResponse<{ items: Array<SesEventRecord> }>
+   * @returns Promise resolving to FetchResponse<{ items: Array<SesEventRecord>; next: string | null }>
    */
   listSesEvents: (
-    query?: { message_id?: string },
+    query?: { next?: string; limit?: number; message_id?: string },
     options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
-  ) => Promise<FetchResponse<{ items: Array<SesEventRecord> }>>;
+  ) => Promise<
+    FetchResponse<{ items: Array<SesEventRecord>; next: string | null }>
+  >;
   /**
    * Emit an SES event-publishing record for a captured SES message
    *
@@ -1317,9 +1319,11 @@ export function createAdapter(client: FetchClient): {
       );
     },
     listSesEvents: (
-      query?: { message_id?: string },
+      query?: { next?: string; limit?: number; message_id?: string },
       options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
-    ): Promise<FetchResponse<{ items: Array<SesEventRecord> }>> => {
+    ): Promise<
+      FetchResponse<{ items: Array<SesEventRecord>; next: string | null }>
+    > => {
       const finalOptions = {
         ...options,
         operationId: options?.operationId ?? 'listSesEvents',
