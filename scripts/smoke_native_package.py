@@ -42,6 +42,8 @@ def smoke(package: Path):
                     if child.poll() is not None: raise RuntimeError('Packaged server exited during startup')
                     try:
                         with urllib.request.urlopen(api + '/healthz', timeout=1) as response: health = json.load(response)
+                        with urllib.request.urlopen(ui + '/admin/buckets', timeout=1) as response: index = response.read()
+                        if index != (package / 'static/index.html').read_bytes(): raise ValueError('Packaged SPA was not served')
                         if health['status'] == 'ok' and health['version'] == manifest['version']: break
                     except (OSError, urllib.error.URLError): pass
                     if time.monotonic() >= deadline: raise TimeoutError('Packaged server never became ready')
