@@ -96,7 +96,7 @@ async fn create_upload_session(server: &LiveServer, init_url: &str, object: &str
         .to_string()
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(
         component = "provider_api",
@@ -148,7 +148,7 @@ fn multipart_stream_upload(ctx: &mut StressContext) {
             response.status()
         })
         .collect::<Vec<_>>();
-    ctx.record_external(start.elapsed(), count_as_u64(PART_COUNT));
+    ctx.record_external("external", start.elapsed(), count_as_u64(PART_COUNT));
     let completed = count_as_u64(
         statuses
             .iter()

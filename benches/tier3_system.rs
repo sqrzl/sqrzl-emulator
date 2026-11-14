@@ -63,7 +63,7 @@ fn direct_request(method: Method, uri: &str, body: &[u8]) -> RequestExt {
     }
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
     metadata(
         component = "adapter_registry",
@@ -87,7 +87,7 @@ fn direct_put_object(ctx: &mut StressContext) {
     let body = Bytes::from_static(b"hello from the system bench");
 
     ctx.parameter("payload_size_bytes", body.len());
-    let completed = ctx.measure_workload(|| {
+    let completed = ctx.measure_batch("operation", 1, || {
         let request = direct_request(
             Method::PUT,
             "http://localhost/bench/item.txt",
@@ -103,9 +103,8 @@ fn direct_put_object(ctx: &mut StressContext) {
     cleanup(&base);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
-    mode = "fixed_duration",
     metadata(
         component = "adapter_registry",
         provider = "s3",
@@ -139,7 +138,7 @@ fn direct_get_object(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", 1024);
     ctx.parameter("operations_per_batch", DIRECT_GET_BATCH_OPS);
-    let completed = ctx.measure_batch(DIRECT_GET_BATCH_OPS, || {
+    let completed = ctx.measure_batch("batch", DIRECT_GET_BATCH_OPS, || {
         for _ in 0..DIRECT_GET_BATCH_OPS {
             let request = direct_request(Method::GET, "http://localhost/bench/item.txt", &[]);
             let response = runtime
@@ -153,7 +152,7 @@ fn direct_get_object(ctx: &mut StressContext) {
     cleanup(&base);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
     metadata(
         component = "adapter_registry",
@@ -190,7 +189,7 @@ fn direct_list_objects(ctx: &mut StressContext) {
     let registry = Arc::new(AdapterRegistry::default());
 
     ctx.parameter("object_count", 64);
-    let completed = ctx.measure_workload(|| {
+    let completed = ctx.measure_batch("operation", 1, || {
         let request = direct_request(Method::GET, "http://localhost/bench?list-type=2", &[]);
         let response = runtime
             .block_on(registry.handle(storage.clone(), auth_config.clone(), request))

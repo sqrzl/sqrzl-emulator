@@ -6,12 +6,13 @@ use std::collections::HashMap;
 fn measure_compute_etag(ctx: &mut StressContext, payload_size_bytes: usize) {
     let payload = vec![b'a'; payload_size_bytes];
     ctx.parameter("payload_size_bytes", payload_size_bytes);
-    ctx.measure_micro(|| black_box(compute_etag(black_box(payload.as_slice()))));
+    ctx.measure("operation", || {
+        black_box(compute_etag(black_box(payload.as_slice())))
+    });
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "object",
         operation = "compute_etag",
@@ -23,9 +24,8 @@ fn compute_etag_empty_payload(ctx: &mut StressContext) {
     measure_compute_etag(ctx, 0);
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "object",
         operation = "compute_etag",
@@ -37,9 +37,8 @@ fn compute_etag_64b_payload(ctx: &mut StressContext) {
     measure_compute_etag(ctx, 64);
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "object",
         operation = "compute_etag",
@@ -51,9 +50,8 @@ fn compute_etag_1k_payload(ctx: &mut StressContext) {
     measure_compute_etag(ctx, 1024);
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "object",
         operation = "compute_etag",
@@ -79,12 +77,11 @@ fn build_tags(tag_count: usize) -> HashMap<String, String> {
 fn measure_render_tagging_xml(ctx: &mut StressContext, tag_count: usize) {
     let tags = build_tags(tag_count);
     ctx.parameter("tag_count", tag_count);
-    ctx.measure_micro(|| black_box(tagging_xml(black_box(&tags))));
+    ctx.measure("operation", || black_box(tagging_xml(black_box(&tags))));
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "xml",
         operation = "render_tagging_xml",
@@ -96,9 +93,8 @@ fn render_tagging_xml_single_tag(ctx: &mut StressContext) {
     measure_render_tagging_xml(ctx, 1);
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "xml",
         operation = "render_tagging_xml",
@@ -110,9 +106,8 @@ fn render_tagging_xml_eight_tags(ctx: &mut StressContext) {
     measure_render_tagging_xml(ctx, 8);
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "xml",
         operation = "render_tagging_xml",
@@ -124,9 +119,8 @@ fn render_tagging_xml_thirty_two_tags(ctx: &mut StressContext) {
     measure_render_tagging_xml(ctx, 32);
 }
 
-#[stress_test(
+#[stress(
     tier = 1,
-    mode = "micro",
     metadata(
         component = "xml",
         operation = "parse_acl_xml",
@@ -152,7 +146,7 @@ fn parse_acl_xml_single_grant(ctx: &mut StressContext) {
 </AccessControlPolicy>"#;
 
     ctx.parameter("grant_count", 1);
-    ctx.measure_micro(|| {
+    ctx.measure("operation", || {
         black_box(parse_acl_xml(black_box(acl_xml)).expect("acl xml should parse"))
     });
 }

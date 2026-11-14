@@ -156,7 +156,7 @@ async fn prepare_commit_state(
     }
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(
         component = "provider_api",
@@ -174,7 +174,7 @@ fn multipart_init(ctx: &mut StressContext) {
 
     let multipart_url = format!("{}/n/{}/b/{}/u/{}", server.base_url, TENANT, bucket, object);
     let mut upload_ids = Vec::new();
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let request = multipart_init_request(&init_url, object);
         let (status, body) = runtime.block_on(server.response_bytes_with_status(request));
         assert_eq!(status, StatusCode::OK);
@@ -198,7 +198,7 @@ fn multipart_init(ctx: &mut StressContext) {
     }
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(
         component = "provider_api",
@@ -219,7 +219,7 @@ fn multipart_part_upload(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", part.len());
     ctx.parameter("operations_per_batch", PART_UPLOAD_BATCH_OPS);
-    let operations = ctx.measure_batch(PART_UPLOAD_BATCH_OPS, || {
+    let operations = ctx.measure_batch("batch", PART_UPLOAD_BATCH_OPS, || {
         for _ in 0..PART_UPLOAD_BATCH_OPS {
             let request = multipart_part_request(&multipart_url, &upload_id, 1, &part);
             let response = runtime.block_on(server.request(request));
@@ -236,7 +236,7 @@ fn multipart_part_upload(ctx: &mut StressContext) {
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(
         component = "provider_api",
@@ -287,7 +287,7 @@ fn multipart_commit(ctx: &mut StressContext) {
         black_box(response.headers().get("etag").cloned());
     }
     let elapsed = start.elapsed();
-    ctx.record_external(elapsed, COMMIT_BATCH_OPS);
+    ctx.record_external("external", elapsed, COMMIT_BATCH_OPS);
 }
 
 stress_main!();
