@@ -6040,6 +6040,417 @@
           "positive"
         ]
       }
+    },
+    "sdk-tests/test_operation_certification.py::test_smtp_session_certification": {
+      "provider": "smtp",
+      "operations": [
+        "Session"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "resources"
+      ],
+      "auth_mode": "selected-plaintext",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "Session": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      },
+      "operation_ids": [
+        "smtp.Session.smtp.HELO-EHLO"
+      ],
+      "operation_id_aliases": {
+        "Session": [
+          "smtp.Session.smtp.HELO-EHLO"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.Session.smtp.HELO-EHLO": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification": {
+      "provider": "smtp",
+      "operations": [
+        "Envelope"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "resources"
+      ],
+      "auth_mode": "selected-plaintext",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "Envelope": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      },
+      "operation_ids": [
+        "smtp.Envelope.smtp.default"
+      ],
+      "operation_id_aliases": {
+        "Envelope": [
+          "smtp.Envelope.smtp.default"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.Envelope.smtp.default": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_smtp_noop_certification": {
+      "provider": "smtp",
+      "operations": [
+        "NOOP"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "resources"
+      ],
+      "auth_mode": "selected-plaintext",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "NOOP": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      },
+      "operation_ids": [
+        "smtp.NOOP.smtp.command"
+      ],
+      "operation_id_aliases": {
+        "NOOP": [
+          "smtp.NOOP.smtp.command"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.NOOP.smtp.command": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_smtp_rset_certification": {
+      "provider": "smtp",
+      "operations": [
+        "RSET"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "resources"
+      ],
+      "auth_mode": "selected-plaintext",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "RSET": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      },
+      "operation_ids": [
+        "smtp.RSET.smtp.command"
+      ],
+      "operation_id_aliases": {
+        "RSET": [
+          "smtp.RSET.smtp.command"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.RSET.smtp.command": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_smtp_quit_certification": {
+      "provider": "smtp",
+      "operations": [
+        "QUIT"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "resources"
+      ],
+      "auth_mode": "selected-plaintext",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "QUIT": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      },
+      "operation_ids": [
+        "smtp.QUIT.smtp.command"
+      ],
+      "operation_id_aliases": {
+        "QUIT": [
+          "smtp.QUIT.smtp.command"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.QUIT.smtp.command": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "resources"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_smtp_data_certification": {
+      "provider": "smtp",
+      "operations": [
+        "Data"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error"
+      ],
+      "auth_mode": "selected-plaintext",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "Data": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error"
+        ]
+      },
+      "operation_ids": [
+        "smtp.Data.smtp.default"
+      ],
+      "operation_id_aliases": {
+        "Data": [
+          "smtp.Data.smtp.default"
+        ]
+      },
+      "operation_id_checks": {
+        "smtp.Data.smtp.default": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_s3_current_head_certification": {
+      "provider": "s3",
+      "operations": [
+        "HeadObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "restart",
+        "process-crash",
+        "native-auth"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "HeadObject": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "restart",
+          "process-crash",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "s3-family.HeadObject.head.current"
+      ],
+      "operation_id_aliases": {
+        "HeadObject": [
+          "s3-family.HeadObject.head.current"
+        ]
+      },
+      "operation_id_checks": {
+        "s3-family.HeadObject.head.current": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "restart",
+          "process-crash",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_azure_current_head_certification": {
+      "provider": "azure",
+      "operations": [
+        "GetBlobProperties"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "restart",
+        "process-crash",
+        "native-auth"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "GetBlobProperties": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "restart",
+          "process-crash",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.GetBlobProperties.head.current"
+      ],
+      "operation_id_aliases": {
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "restart",
+          "process-crash",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_operation_certification.py::test_oci_current_head_certification": {
+      "provider": "oci",
+      "operations": [
+        "HeadObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition",
+        "boundary",
+        "native-error",
+        "restart",
+        "process-crash",
+        "native-auth"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "local-core-v1 selected operation assertions; exact selector receipt required.",
+      "operation_checks": {
+        "HeadObject": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "restart",
+          "process-crash",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "oci-object.HeadObject.head.default"
+      ],
+      "operation_id_aliases": {
+        "HeadObject": [
+          "oci-object.HeadObject.head.default"
+        ]
+      },
+      "operation_id_checks": {
+        "oci-object.HeadObject.head.default": [
+          "positive",
+          "negative",
+          "condition",
+          "boundary",
+          "native-error",
+          "restart",
+          "process-crash",
+          "native-auth"
+        ]
+      }
     }
   }
 }

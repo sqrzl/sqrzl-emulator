@@ -149,10 +149,15 @@ impl UsageMetrics {
         let Ok(mut series) = self.series.lock() else {
             return;
         };
-        let key = if series.contains_key(&labels) || series.len() < MAX_SERIES {
+        let key = if series.contains_key(&labels) || series.len() < MAX_SERIES - 1 {
             labels
         } else {
-            Labels(provider, "overflow".into(), "overflow".into(), operation)
+            Labels(
+                "overflow".into(),
+                "overflow".into(),
+                "overflow".into(),
+                "overflow".into(),
+            )
         };
         let row_labels = key.clone();
         let counters = series.entry(key).or_default();
@@ -754,5 +759,16 @@ mod tests {
         assert_eq!(create.list_requests, 0);
         let prometheus = metrics.render_prometheus(1);
         assert!(prometheus.contains("sqrzl_request_size_bytes_sum"));
+    }
+    #[test]
+    fn should_bound_usage_cardinality_given_arbitrary_operation_labels() {
+        // Arrange
+        let metrics = UsageMetrics::default();
+        // Act
+        for index in 0..super::MAX_SERIES + 64 {
+            metrics.record_mcp_tool(&format!("unknown-{index}"), None, "client", 0, 0, 0);
+        }
+        // Assert
+        assert!(metrics.snapshot(0, 0).len() <= super::MAX_SERIES);
     }
 }

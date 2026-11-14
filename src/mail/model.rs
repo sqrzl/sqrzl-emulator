@@ -139,6 +139,50 @@ pub struct StoredMessage {
     pub received_at: DateTime<Utc>,
 }
 
+impl StoredMessage {
+    pub(crate) fn metadata_only(&self) -> Self {
+        Self {
+            message_id: self.message_id.clone(),
+            mailbox: self.mailbox.clone(),
+            received_at: self.received_at,
+            delivery_status: self.delivery_status.clone(),
+            message: Message {
+                source_protocol: self.message.source_protocol,
+                from: self.message.from.clone(),
+                to: self.message.to.clone(),
+                cc: self.message.cc.clone(),
+                bcc: self.message.bcc.clone(),
+                reply_to: Vec::new(),
+                subject: self.message.subject.clone(),
+                headers: HashMap::new(),
+                body_text: None,
+                body_html: None,
+                attachments: Vec::new(),
+                raw_mime: None,
+                thread_id: self.message.thread_id.clone(),
+                user_engagement_tracking_disabled: None,
+                provider_metadata: self
+                    .message
+                    .provider_metadata
+                    .get(crate::capture::TRANSACTION_METADATA)
+                    .map(|id| {
+                        HashMap::from([(
+                            crate::capture::TRANSACTION_METADATA.to_string(),
+                            id.clone(),
+                        )])
+                    })
+                    .unwrap_or_default(),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ListMailboxesResult {
+    pub mailboxes: Vec<MailboxInfo>,
+    pub next_marker: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ListMessagesParams {
     pub marker: Option<String>,

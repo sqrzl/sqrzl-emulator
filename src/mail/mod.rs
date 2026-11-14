@@ -36,6 +36,59 @@ pub const ALL_MAILBOX: &str = "_all";
 /// [`fan_out`], which every capture path (SMTP, and later SendGrid/SES/ACS
 /// adapters) should go through rather than calling `store_message` directly.
 pub trait MailStore: Send + Sync {
+    /// Checks backend readability without changing persisted state.
+    ///
+    /// # Errors
+    /// Returns a persistence/readiness error.
+    fn check_ready(&self) -> Result<()> {
+        self.list_mailboxes().map(|_| ())
+    }
+
+    /// Reads payload-free message metadata, retaining at most the requested page.
+    ///
+    /// # Errors
+    /// Returns pagination or persistence errors.
+    fn list_message_summaries(
+        &self,
+        mailbox: &str,
+        params: ListMessagesParams,
+    ) -> Result<ListMessagesResult> {
+        self.list_messages(mailbox, params)
+    }
+    /// Creates an exclusive cursor for a previously returned summary.
+    ///
+    /// # Errors
+    /// Returns a cursor serialization error.
+    fn message_cursor(&self, message: &StoredMessage) -> Result<String> {
+        Ok(message.message_id.clone())
+    }
+    /// Reads a bounded mailbox page using an exclusive address marker.
+    ///
+    /// # Errors
+    /// Returns pagination or persistence errors.
+    fn list_mailbox_page(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+        search: Option<&str>,
+    ) -> Result<model::ListMailboxesResult> {
+        let mut mailboxes = self.list_mailboxes()?;
+        mailboxes.retain(|mailbox| {
+            after.is_none_or(|marker| mailbox.address.as_str() > marker)
+                && search.is_none_or(|search| mailbox.address.to_ascii_lowercase().contains(search))
+        });
+        mailboxes.sort_by(|a, b| a.address.cmp(&b.address));
+        let more = mailboxes.len() > limit;
+        mailboxes.truncate(limit);
+        let next_marker = more
+            .then(|| mailboxes.last().map(|mailbox| mailbox.address.clone()))
+            .flatten();
+        Ok(model::ListMailboxesResult {
+            mailboxes,
+            next_marker,
+        })
+    }
+
     /// Optional atomic batch publication used by durable capture backends.
     /// `None` asks the caller to use the legacy rollback-capable path.
     ///

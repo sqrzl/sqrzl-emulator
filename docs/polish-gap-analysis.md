@@ -5,22 +5,26 @@ transactional persistence, native error contracts, official SDK tests, and an
 admin UI. It is not yet a fully qualified cloud emulator. A passing workflow
 establishes its declared assertions; it does not establish provider parity.
 
-This analysis and the fixes remain in PR #94. The source of truth for supported
+The original polish fixes shipped in PR #94. The runtime and certification
+completion builds on that merged work. The source of truth for supported
 boundaries is [the compatibility matrix](../compatibility-matrix.json). The
 machine-readable test scope is [the acceptance manifest](../sdk-tests/acceptance-manifest.json).
 
 ## Current qualification boundary
 
-The matrix contains 207 operation variants: 196 partial, 10 unsupported and
-one deferred. None is certified. Across the ten proof categories, 1,956 gates
-remain pending and 114 are not applicable. Pending means acceptance has not
-been reviewed and established; it does not mean 1,956 demonstrated defects.
+The matrix contains 207 operation variants: 196 partial, 10 unsupported and one
+deferred. Broad tiers remain unchanged. The versioned `local-core-v1` policy
+selects nine narrower operation/selector scopes: six plaintext SMTP command
+contracts and current-object HEAD for selected S3, Azure and OCI API versions.
+Certification is established only by the exact-source acceptance artifact;
+matrix links alone are eligibility. Everything outside those scopes retains its
+partial, unsupported or deferred status.
 
-CI records exact source and binary identities, collected test results, explicit
-per-operation SDK assertions, and measured upload receipts. The contract
-validator rejects missing, stale, mismatched and uncollected evidence. It does
-not automatically promote a family to certified. See [SDK qualification](sdk-qualification.md)
-and [large-upload qualification](large-upload-qualification.md).
+CI records source/binary identities, pinned SDK versions, operation assertion
+receipts and measured upload results. Its required certification gate rejects
+missing categories, unscoped candidates, selector mismatch, anonymous native-auth
+proof, skipped results and dirty or upgrade-candidate builds. See
+[support qualification](support-certification.md) for boundaries and commands.
 
 ## Addressed in PR #94
 
@@ -35,26 +39,36 @@ and [large-upload qualification](large-upload-qualification.md).
 | SES simulation could deliver before durable intent | Create-only durable intent claim precedes mutation/callback. Stable request IDs detect changed payloads and replay without resending an uncertain callback. Case-distinct IDs remain distinct on case-insensitive filesystems. |
 | Pending SES state was invisible | API and UI expose pending intent/callback state. Lost-response retry retains the original request payload and identity. |
 | SES admin publishing was absent | Real destination editing/removal, seven event types, simulation, callback details, payloads and paginated history. Component tests and desktop/mobile real-server callback journeys. |
-| SES history retained every event payload | At most `limit + 1` candidates retained while scanning; filter-bound stable cursors survive deletion of the previous boundary. API defaults to 50 and caps at 500. Archive scan I/O remains linear. |
+| SES history retained every event payload | Transactional B-tree payload/global/message indexes, 8 MiB cache and bounded range pages; filtered pages decode selected records rather than the archive. Atomic-commit crash tests and real persistence-failure callback replay checks. |
 | Google .NET default gzip was not qualified | Locked Google.Cloud.Storage.V1 5.0.0/.NET 11.0.100 test observes default gzip, bucket CMEK metadata, resumable initiation/completion, complete byte readback, missing-object response and cleanup. Anonymous/local-bearer CI lanes; not Google OAuth. |
 | Admin direct links and error recovery were incomplete | Dotted routes, open-mode entry, visible retry/home actions and one main landmark; real browser journeys run in CI. |
 | Native artifacts omitted the UI | Native bundles include built UI, manifest, version/source identity, payload/archive checksums and instructions. Asset discovery supports an executable launched from another directory. |
 | Distribution could bypass qualification | Distribution checks require successful CI and automatic full measured campaigns for the exact commit. Narrow manual campaigns cannot qualify release. Both Linux architectures build and smoke natively; no cross-built executable is treated as smoke-tested. |
 
-## Remaining engineering gaps
+## Runtime and resource completion
 
-These are explicit follow-up boundaries, not closed acceptance claims.
+| Area | Implemented boundary and regression evidence |
+| --- | --- |
+| Graceful draining | Shared admission closure and one deadline across owned API/UI/SMTP connections and MCP workers. Real process tests cover idle connections, upload ownership, SMTP DATA, SES callbacks, stalled clients and acknowledged mail after SIGKILL. Blocking filesystem writes retain ownership until completion, so an OS-blocked write can extend exit. |
+| Aggregate admission | Configurable shared connection, request and encoded-byte reservations, nonqueued overload replies, bounded retained MCP sessions and SMTP recipients. A separate single probe slot preserves diagnostics during request saturation. Body EOF/drop and worker lifetime tests protect reservation refund. These are admission bounds, not a hard OS RSS cap. |
+| Mail listing resources | Metadata-only summaries and index records publish in the capture transaction; all 26 publication boundaries receive crash recovery checks. Deleted-boundary cursors remain stable. Corrupt-payload regressions prove listing/counts do not read captured attachments. Delivery status updates only rewrite metadata. |
+| SES history resources | Durable redb index commits intent, payload and both indexes together. Range reads, migration, concurrent claims, before/after-commit interruption and final-outcome I/O failure have focused regressions. |
+| Diagnostics | Blob/mail/SMS readability and drain state determine health; fixed status/duration counters, active connections/requests/probes/MCP sessions, reserved bytes and rejection totals are exposed. Arbitrary operation-name flood cannot grow usage metrics beyond the global cap. Readability is not a free-space or write-readiness guarantee. |
+| Operation certification | Reviewed `local-core-v1` gates cover nine selected scopes, with authenticated storage SDK receipts and explicit applicability reasons. All other operation/selector combinations retain their existing status. Jev review remains advisory; executable assertions establish acceptance. |
 
-| Priority | Gap and impact | Completion test |
-| --- | --- | --- |
-| P1 | Process signals do not yet coordinate listener shutdown and request/session draining. Normal storage-writer teardown waits for blocking writers, but default SIGTERM handling is not a graceful drain contract. | Real process tests send SIGTERM during active upload, callback and SMTP sessions; verify admission stops, acknowledged work survives restart, a bounded deadline applies, and root ownership remains held until writers finish. |
-| P1 | Ordinary mailbox listings deserialize full stored messages and attachments before pagination; mailbox summaries can scan messages repeatedly. Cost grows with captured payload volume. | Metadata-only summaries/index with crash-consistent publication; large attachment fixtures prove bounded retained memory and bounded payload reads for first/next pages and mailbox counts. |
-| P1 | Aggregate connection, request and background-work admission is not comprehensively qualified. Per-request byte limits alone do not bound process memory under concurrency. | Saturate API/UI/SMTP and callback workloads; measure aggregate RSS, spool bytes, queued jobs and recovery; prove native overload errors and cleanup without lost acknowledged work. |
-| P1 | Operation-specific acceptance remains incomplete. Family smoke tests cannot prove native auth, errors, conditions, paging, crash recovery and resources for every variant. | Review each operation's exact assertions and artifacts; close individual proof categories only after positive and adversarial cases pass on the recorded binary. Keep unsupported variants explicit. |
-| P2 | SES page scans still read every event record. The retained result is bounded, but archive latency and disk reads scale with archive size. | A durable metadata index or directory layout supporting bounded lookup, tie ordering, interrupted publication and backward-compatible recovery; count reads under a large archive. |
-| P2 | Some callback/admission controls still read environment settings at runtime. Startup configuration is not yet a single immutable typed snapshot for every subsystem. | Table-driven startup validation and tests proving runtime requests do not observe later environment changes; retain provider-prefixed vendor settings. |
-| P2 | Operational diagnostics do not yet provide a complete status/latency/active-job view or health checks for every storage/capture subsystem. | Inject per-subsystem failures; verify actionable health status and bounded-cardinality diagnostics without secrets or message contents. |
-| P2 | Packaging is prepared and locally exercised; hosted native builds and current-head qualification remain separate required evidence. There is no claim that a GitHub release has been published. | Successful exact-head Linux x86_64/arm64 bundle builds, smoke receipts, downloadable checksum verification and deliberate release publication/readback. |
+## Explicit boundaries retained
+
+Mailbox index scans remain linear; substring search can rescan batches. Public
+bulk library methods remain bulk operations. Admission reservations cover encoded
+input, while decoding, caches and provider fanout add memory; a hard RSS/disk
+boundary belongs in the container/runtime configuration. Existing callback policy
+settings are not all consolidated into a single immutable startup snapshot.
+Power-loss survival, universal operation certification and cloud parity are not
+claimed. These boundaries do not weaken the selected certification policy.
+
+Native bundle construction and release qualification are distinct from publishing
+a GitHub release. Release checks still require successful exact-commit CI and
+all automatic measured provider campaigns. This work does not publish a release.
 
 ## Intentional emulator limits
 

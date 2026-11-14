@@ -36,9 +36,38 @@ where
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     S::Future: Send + 'static,
 {
-    hyper::server::conn::http1::Builder::new()
-        .serve_connection(Compat::new(stream), service)
-        .await
+    serve_h1_connection_until(
+        stream,
+        service,
+        crate::runtime::RuntimeControl::new(crate::runtime::RuntimeLimits::default()),
+    )
+    .await
+}
+
+/// Serves an HTTP connection until completion or coordinated graceful shutdown.
+///
+/// # Errors
+/// Returns HTTP protocol and transport errors.
+pub async fn serve_h1_connection_until<S>(
+    stream: tokio::net::TcpStream,
+    service: S,
+    control: Arc<crate::runtime::RuntimeControl>,
+) -> Result<(), hyper::Error>
+where
+    S: Service<hyper::Request<hyper::body::Incoming>, Response = Response<Body>> + Send + 'static,
+    S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    S::Future: Send + 'static,
+{
+    let connection =
+        hyper::server::conn::http1::Builder::new().serve_connection(Compat::new(stream), service);
+    tokio::pin!(connection);
+    tokio::select! {
+        result = &mut connection => result,
+        () = control.cancelled() => {
+            connection.as_mut().graceful_shutdown();
+            connection.await
+        }
+    }
 }
 
 fn simple_text_response(status: StatusCode, body: &str) -> Response<Body> {
@@ -145,6 +174,8 @@ impl Server {
                     "Failed to clean stale request spool files: {error}"
                 ))
             })?;
+        let control = self.auth_config.runtime.clone();
+        let reservation = self.auth_config.max_request_bytes;
         let state = RequestState {
             storage: self.storage,
             auth_config: self.auth_config,
@@ -164,21 +195,91 @@ impl Server {
             .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
         tracing::info!("S3 API listening on http://0.0.0.0:{}", api_port);
 
+        let mut connections = tokio::task::JoinSet::new();
+        let mut listener_error = None;
         loop {
-            let (stream, _) = listener
-                .accept()
-                .await
-                .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
-            let state = state.clone();
-
-            tokio::spawn(async move {
-                let service = service_fn(move |req| handle_request(state.clone(), req));
-
-                if let Err(e) = serve_h1_connection(stream, service).await {
-                    error!("HTTP connection error: {}", e);
+            let accepted = tokio::select! {
+                biased;
+                () = control.cancelled() => break,
+                Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+                result = listener.accept() => result,
+            };
+            let (stream, _) = match accepted {
+                Ok(connection) => connection,
+                Err(error) => {
+                    control.begin_drain();
+                    listener_error = Some(crate::Error::InternalError(error.to_string()));
+                    break;
                 }
-            });
+            };
+            let Some(connection_guard) = control.try_connection() else {
+                drop(stream);
+                continue;
+            };
+            let state = state.clone();
+            let control = control.clone();
+            connections.spawn(serve_api_connection(
+                stream,
+                state,
+                control,
+                connection_guard,
+                reservation,
+            ));
         }
+        drop(listener);
+        crate::runtime::drain_connections(&mut connections, control.drain_remaining()).await;
+        listener_error.map_or(Ok(()), Err)
+    }
+}
+
+async fn serve_api_connection(
+    stream: tokio::net::TcpStream,
+    state: RequestState,
+    control: Arc<crate::runtime::RuntimeControl>,
+    connection_guard: crate::runtime::ConnectionGuard,
+    reservation: usize,
+) {
+    let _connection_guard = connection_guard;
+    let admission = control.clone();
+    let service = service_fn(move |mut req| {
+        let state = state.clone();
+        let admission = admission.clone();
+        async move {
+            let work = if req.method() == Method::GET && req.uri().path() == "/healthz" {
+                admission.try_probe()
+            } else {
+                admission.try_request(reservation)
+            };
+            let Some(work) = work else {
+                return Ok::<_, std::io::Error>(crate::runtime::overloaded(
+                    state
+                        .sms_adapters
+                        .resolve_by_head(req.method(), req.uri(), req.headers())
+                        .or_else(|| {
+                            state.mail_adapters.resolve_by_head(
+                                req.method(),
+                                req.uri(),
+                                req.headers(),
+                            )
+                        })
+                        .or_else(|| {
+                            state
+                                .adapters
+                                .resolve_by_head(req.method(), req.uri(), req.headers())
+                        }),
+                    req.uri(),
+                ));
+            };
+            let work = crate::runtime::WorkLease::from(work);
+            req.extensions_mut().insert(work.clone());
+            let mut response = handle_request(state, req).await?;
+            work.status(response.status());
+            response.body_mut().retain_work(work);
+            Ok(response)
+        }
+    });
+    if let Err(error) = serve_h1_connection_until(stream, service, control).await {
+        error!("HTTP connection error: {error}");
     }
 }
 
@@ -251,7 +352,12 @@ where
 async fn route_parsed_request(state: RequestState, parsed_req: RequestExt) -> Response<Body> {
     if parsed_req.path() == "/healthz" {
         return if parsed_req.method() == Method::GET {
-            crate::health::response(state.storage.as_ref(), state.auth_config.as_ref())
+            crate::health::response_with_capture(
+                state.storage.as_ref(),
+                state.auth_config.as_ref(),
+                state.mail.as_ref(),
+                state.sms.as_ref(),
+            )
         } else {
             simple_text_response(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed")
         };
@@ -374,6 +480,7 @@ mod adapter_routing_tests {
             ui_port: 9001,
             max_request_bytes,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            runtime: std::sync::Arc::default(),
             vendor_credentials: crate::config::VendorCredentials::default(),
             mcp: crate::config::McpConfig::default(),
         })
@@ -405,6 +512,7 @@ mod adapter_routing_tests {
             ui_port: 0,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            runtime: std::sync::Arc::default(),
             vendor_credentials: crate::config::VendorCredentials::default(),
             mcp: crate::config::McpConfig::default(),
         });

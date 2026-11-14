@@ -5,7 +5,7 @@ use crate::body::{Body, RequestBody};
 use crate::error::{Error, Result};
 use crate::mail::MailStore;
 use crate::metrics::UsageMetrics;
-use crate::server::{serve_h1_connection, ResponseBuilder};
+use crate::server::{serve_h1_connection_until, ResponseBuilder};
 use crate::services::{json_error_response, json_response};
 use crate::sms::{FilesystemSmsStore, SmsStore};
 use crate::storage::Storage;
@@ -23,6 +23,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::fs as async_fs;
 use tower::ServiceExt;
+
+struct McpHttp {
+    service: StreamableHttpService<McpHandler, LocalSessionManager>,
+    sessions: Arc<LocalSessionManager>,
+    initialization: tokio::sync::Mutex<()>,
+}
 
 /// Launches the UI-focused server (port 9001) that exposes the JSON API and optionally serves the web UI.
 ///
@@ -93,6 +99,7 @@ pub async fn start_ui_server_with_sms_and_metrics(
         .with_allowed_hosts(allowed_hosts)
         .with_allowed_origins(allowed_origins)
         .enforce_origin_validation();
+    let mcp_shutdown = mcp_http_config.cancellation_token.clone();
     let mcp_state = McpState {
         storage: storage.clone(),
         mail: mail.clone(),
@@ -100,22 +107,57 @@ pub async fn start_ui_server_with_sms_and_metrics(
         config: config.clone(),
         metrics: metrics.clone(),
     };
+    let mcp_sessions = Arc::new(LocalSessionManager::default());
     let mcp_service = StreamableHttpService::new(
         move || Ok(McpHandler::new(mcp_state.clone())),
-        Arc::new(LocalSessionManager::default()),
+        mcp_sessions.clone(),
         mcp_http_config,
     );
+    let mcp_service = Arc::new(McpHttp {
+        service: mcp_service,
+        sessions: mcp_sessions.clone(),
+        initialization: tokio::sync::Mutex::new(()),
+    });
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
     tracing::info!("UI server listening on http://0.0.0.0:{}", ui_port);
 
+    let control = config.runtime.clone();
+    let mut connections = tokio::task::JoinSet::new();
+    let mut listener_error = None;
+    connections.spawn({
+        let control = control.clone();
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop { tokio::select! {
+                biased;
+                () = control.cancelled() => break,
+                _ = interval.tick() => control.mcp_sessions(mcp_sessions.sessions.read().await.len()),
+            }}
+        }
+    });
     loop {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
+        let accepted = tokio::select! {
+            biased;
+            () = control.cancelled() => break,
+            Some(_) = connections.join_next(), if !connections.is_empty() => continue,
+            result = listener.accept() => result,
+        };
+        let (stream, _) = match accepted {
+            Ok(connection) => connection,
+            Err(error) => {
+                control.begin_drain();
+                listener_error = Some(crate::Error::InternalError(error.to_string()));
+                break;
+            }
+        };
+        let Some(connection_guard) = control.try_connection() else {
+            drop(stream);
+            continue;
+        };
+        let connection_control = control.clone();
         let storage = storage.clone();
         let mail = mail.clone();
         let sms = sms.clone();
@@ -125,8 +167,9 @@ pub async fn start_ui_server_with_sms_and_metrics(
         let mcp_auth = mcp_auth.clone();
         let mcp_service = mcp_service.clone();
 
-        tokio::spawn(async move {
-            let service = service_fn(move |req| {
+        connections.spawn(async move {
+            let _connection_guard = connection_guard;
+            let service = service_fn(move |mut req| {
                 let storage = storage.clone();
                 let mail = mail.clone();
                 let sms = sms.clone();
@@ -136,12 +179,27 @@ pub async fn start_ui_server_with_sms_and_metrics(
                 let mcp_auth = mcp_auth.clone();
                 let mcp_service = mcp_service.clone();
                 async move {
+                    let diagnostic = req.method() == Method::GET
+                        && matches!(req.uri().path(), "/healthz" | "/metrics");
+                    let work = if diagnostic {
+                        config.runtime.try_probe()
+                    } else {
+                        config.runtime.try_request(config.max_request_bytes)
+                    };
+                    let Some(work) = work else {
+                        return Ok::<_, Infallible>(crate::runtime::overloaded(
+                            Some("admin"),
+                            req.uri(),
+                        ));
+                    };
+                    let work = crate::runtime::WorkLease::from(work);
+                    req.extensions_mut().insert(work.clone());
                     let observed_request_bytes = Arc::new(AtomicU64::new(request_size(&req)));
                     let method = req.method().clone();
                     let uri = req.uri().clone();
                     let headers = req.headers().clone();
                     if req.uri().path() == "/mcp" {
-                        let response = handle_mcp_request(
+                        let mut response = handle_mcp_request(
                             req,
                             config,
                             mcp_auth,
@@ -157,9 +215,11 @@ pub async fn start_ui_server_with_sms_and_metrics(
                             &response,
                             None,
                         );
+                        work.status(response.status());
+                        response.body_mut().retain_work(work);
                         Ok::<Response<Body>, Infallible>(response)
                     } else {
-                        let response = handle_ui_request(
+                        let mut response = handle_ui_request(
                             storage,
                             mail,
                             sms,
@@ -178,16 +238,24 @@ pub async fn start_ui_server_with_sms_and_metrics(
                             &response,
                             None,
                         );
+                        work.status(response.status());
+                        response.body_mut().retain_work(work);
                         Ok(response)
                     }
                 }
             });
 
-            if let Err(e) = serve_h1_connection(stream, service).await {
+            if let Err(e) = serve_h1_connection_until(stream, service, connection_control).await {
                 tracing::error!("UI connection error: {}", e);
             }
         });
     }
+    drop(listener);
+    crate::runtime::drain_connections(&mut connections, control.drain_remaining()).await;
+    let _ = control.wait_idle().await;
+    mcp_shutdown.cancel();
+    control.mcp_sessions(0);
+    listener_error.map_or(Ok(()), Err)
 }
 
 // This is the single routing boundary for the UI and admin API.
@@ -206,7 +274,12 @@ async fn handle_ui_request(
 
     if path == "/healthz" {
         if req.method() == Method::GET {
-            return Ok(crate::health::response(storage.as_ref(), config.as_ref()));
+            return Ok(crate::health::response_with_capture(
+                storage.as_ref(),
+                config.as_ref(),
+                mail.as_ref(),
+                sms.as_ref(),
+            ));
         }
         return Ok(json_error_response(&Error::MethodNotAllowed(format!(
             "{} /healthz",
@@ -241,7 +314,7 @@ async fn handle_ui_request(
             query_u64(req.uri().query().unwrap_or_default(), "min_requests").unwrap_or(0);
         return Ok(ResponseBuilder::new(StatusCode::OK)
             .content_type("text/plain; version=0.0.4; charset=utf-8")
-            .body_str(&metrics.render_prometheus(threshold))
+            .body_str(&(metrics.render_prometheus(threshold) + &config.runtime.render_prometheus()))
             .build());
     }
 
@@ -365,7 +438,7 @@ async fn handle_mcp_request(
     req: Request<RequestBody>,
     config: Arc<crate::Config>,
     auth: Arc<McpAuth>,
-    service: StreamableHttpService<McpHandler, LocalSessionManager>,
+    service: Arc<McpHttp>,
     observed_request_bytes: Arc<AtomicU64>,
 ) -> Response<Body> {
     let origin = req
@@ -397,7 +470,7 @@ async fn handle_mcp_request_inner(
     req: Request<RequestBody>,
     config: Arc<crate::Config>,
     auth: Arc<McpAuth>,
-    service: StreamableHttpService<McpHandler, LocalSessionManager>,
+    service: Arc<McpHttp>,
     observed_request_bytes: Arc<AtomicU64>,
 ) -> Response<Body> {
     let mut principal = if config.mcp_auth_enforced() {
@@ -458,8 +531,22 @@ async fn handle_mcp_request_inner(
     }
     parts.headers.remove("authorization");
     parts.extensions.insert(principal);
+    let initializing =
+        serde_json::from_slice::<serde_json::Value>(&body_bytes).is_ok_and(|value| {
+            value.get("method").and_then(serde_json::Value::as_str) == Some("initialize")
+        });
+    let _initialization = if initializing {
+        Some(service.initialization.lock().await)
+    } else {
+        None
+    };
+    if initializing
+        && service.sessions.sessions.read().await.len() >= config.runtime.limits.max_mcp_sessions
+    {
+        return crate::runtime::overloaded(Some("admin"), &parts.uri);
+    }
     let request = Request::from_parts(parts, Body::from(body_bytes));
-    match service.oneshot(request).await {
+    match service.service.clone().oneshot(request).await {
         Ok(response) => response.map(Body::from_stream),
         Err(never) => match never {},
     }

@@ -1,12 +1,41 @@
 use crate::capture::budget::{json_bytes, CaptureBudget, ENVELOPE_BYTES};
 use crate::capture::RepeatabilityRecord;
 use crate::error::Result;
-use crate::mail::{Message, ALL_MAILBOX};
+use crate::mail::{Address, Message, ALL_MAILBOX};
 use serde::Serialize;
+
+/// Measures retained summary fields without copying bodies or attachments.
+pub(crate) fn summary_bytes(
+    from: &Address,
+    to: &[Address],
+    cc: &[Address],
+    bcc: &[Address],
+    subject: &str,
+    thread_id: Option<&str>,
+) -> Result<u64> {
+    #[derive(Serialize)]
+    struct Summary<'a> {
+        from: &'a Address,
+        to: &'a [Address],
+        cc: &'a [Address],
+        bcc: &'a [Address],
+        subject: &'a str,
+        thread_id: Option<&'a str>,
+    }
+    json_bytes(&Summary {
+        from,
+        to,
+        cc,
+        bcc,
+        subject,
+        thread_id,
+    })
+}
 
 pub(crate) fn add_message(
     budget: &mut CaptureBudget,
     message: &impl Serialize,
+    summary_bytes: u64,
     raw_bytes: u64,
     recipients: impl Iterator<Item = String>,
 ) -> Result<()> {
@@ -22,8 +51,9 @@ pub(crate) fn add_message(
         .chain(std::iter::once(ALL_MAILBOX))
     {
         budget.add(bytes)?;
+        budget.copies(summary_bytes, 2)?;
         // Stored envelope, transaction metadata, generated identifiers and paths.
-        budget.add(ENVELOPE_BYTES + target.len() as u64)?;
+        budget.add(ENVELOPE_BYTES * 3 + target.len() as u64)?;
         budget.add(raw_bytes)?;
         if target != ALL_MAILBOX {
             budget.add(bytes)?;
@@ -41,6 +71,14 @@ pub(crate) fn check_messages<'a>(
         add_message(
             &mut budget,
             message,
+            summary_bytes(
+                &message.from,
+                &message.to,
+                &message.cc,
+                &message.bcc,
+                &message.subject,
+                message.thread_id.as_deref(),
+            )?,
             message.raw_mime.as_ref().map_or(0, |raw| raw.len() as u64),
             message
                 .recipients()
@@ -55,6 +93,17 @@ pub(crate) fn check_single_copy(message: &Message, mailbox: &str, id: &str) -> R
     let mut budget = CaptureBudget::default();
     // Input message, prepared result and serialized JSON buffer.
     budget.copies(json_bytes(message)?, 3)?;
+    budget.copies(
+        summary_bytes(
+            &message.from,
+            &message.to,
+            &message.cc,
+            &message.bcc,
+            &message.subject,
+            message.thread_id.as_deref(),
+        )?,
+        2,
+    )?;
     budget.add(message.raw_mime.as_ref().map_or(0, |raw| raw.len() as u64))?;
-    budget.add(ENVELOPE_BYTES + mailbox.len() as u64 + id.len() as u64)
+    budget.add(ENVELOPE_BYTES * 3 + mailbox.len() as u64 + id.len() as u64)
 }

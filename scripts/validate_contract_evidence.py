@@ -14,6 +14,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from operation_certification import certify
 from campaign_evidence import SCOPES, campaign_rejection_reason
 from sdk_evidence import validate_campaign_processes, validate_sdk_lane
 
@@ -265,6 +266,7 @@ def main() -> int:
         "--require-measured-providers",
         help="Comma-separated providers requiring eligible measured-upload passes; unrelated references may remain unproven",
     )
+    parser.add_argument("--require-certified-profile", action="append", default=[])
     args = parser.parse_args()
     head = command(["git", "rev-parse", "HEAD"]).strip()
     if (
@@ -302,6 +304,7 @@ def main() -> int:
         if args.rust_results
         else {}
     )
+    validated_lanes = []
     lane_evidence = []
     verified_sdk_results = {}
     sdk_lane_results = {}
@@ -314,6 +317,7 @@ def main() -> int:
     for path in args.sdk_evidence:
         lane = json.loads(path.read_text())
         validate_sdk_lane(lane, head, source_tree, tracked_file)
+        validated_lanes.append(lane)
         lane_evidence.append(
             {key: value for key, value in lane.items() if key != "results"}
         )
@@ -361,6 +365,14 @@ def main() -> int:
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     matrix = json.loads((ROOT / "compatibility-matrix.json").read_text())
     report = evaluate(matrix, manifest, set(rust) | sdk, results)
+    report["operation_certification"] = certify(
+        json.loads((ROOT / "operation-certification.json").read_text()),
+        matrix,
+        manifest,
+        set(rust) | sdk,
+        results,
+        validated_lanes,
+    )
     for node, assertion in report["scoped_sdk_assertions"].items():
         assertion["result"] = verified_sdk_results.get(node, "no-verified-lane-result")
         assertion["lane_results"] = sdk_lane_results.get(node, {})
@@ -375,6 +387,14 @@ def main() -> int:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
+    for profile in args.require_certified_profile:
+        if (
+            report["operation_certification"].get(profile, {}).get("status")
+            != "certified"
+        ):
+            raise ValueError(
+                f"Certification profile incomplete: {profile}; inspect {args.output}"
+            )
     if args.require_measured_providers is not None:
         require_measured_campaigns(report, args.require_measured_providers)
     print(

@@ -3,7 +3,8 @@
 `compatibility-matrix.json` is the source of truth for the selected local model.
 Its family entries provide navigation; `operation_contracts.entries` gives each
 operation, HTTP method or SMTP command, route, variant and explicit boundary.
-All implemented families remain **partial**. Gmail is **deferred**.
+All broad implemented families remain **partial**. Gmail is **deferred**. Named
+certified subsets are separate, selector-specific contracts.
 
 Partial breadth does not relax the contract of an accepted request. Typed fields,
 conditions, checksums, authentication, status codes and provider error envelopes
@@ -47,6 +48,7 @@ python scripts/validate_contract_evidence.py \
   --sdk-evidence target/sdk-evidence/storage-auth.json \
   --sdk-evidence target/sdk-evidence/messaging-auth.json \
   --results-source-sha "$SOURCE_SHA" \
+  --require-certified-profile local-core-v1 \
   --output /tmp/sqrzl-contract-acceptance.json
 ```
 
@@ -211,3 +213,33 @@ WORM administration, provider-owned history and recovery, delivery/event timing
 and callback networks remain selected local models. The operation matrix lists
 the accepted and rejected variants; an unsupported cloud feature is not by
 itself an emulator defect.
+
+## Versioned local-core-v1 subset
+
+[operation-certification.json](../operation-certification.json) is the reviewed
+acceptance policy. It selects six plaintext SMTP command scopes (session,
+envelope, DATA, RSET, NOOP and QUIT), plus current-object HEAD metadata for S3
+API `2006-03-01`, Azure API `2024-11-04` and OCI API `20160918`. The exact tested
+boundaries are recorded per operation. Other headers, API versions, historical
+resources, PAR access and authenticated/TLS SMTP are outside this certificate.
+
+A matrix `certified_subsets` link names eligibility, not a passing receipt. The
+`operation_certification` section of the exact-source acceptance artifact must
+report `certified` for the selected profile. CI requires this result. The broad
+operation tiers stay partial because their other selectors are unqualified.
+
+Every selected operation accounts for all ten categories. Core request,
+negative, condition, boundary, native error and resource gates cannot be waived.
+Single-object/command pagination and ephemeral command restart gates have
+explicit applicability reasons. Plaintext SMTP authentication is deliberately
+not applicable; it is not counted as authenticated SMTP evidence. DATA requires
+acknowledged capture recovery after SIGTERM and SIGKILL. Storage HEAD requires
+normal and abrupt restart plus rejected native credentials through pinned SDKs.
+
+SDK proofs require exact operation/category mappings and a runtime receipt with
+matching profile and selectors from a validated, clean-source, pinned-dependency
+lane. Anonymous results cannot establish native authentication. JUnit, remote
+smoke endpoints, skipped results and upgrade candidates cannot establish these
+proofs. Reviewed Rust assertions cover payload-free 1 GiB HEAD and SMTP capture
+limits. The certificate does not claim whole-provider parity, hard OS RSS bounds,
+power-loss survival, or external callback delivery guarantees.

@@ -2804,6 +2804,7 @@ mod tests {
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            runtime: std::sync::Arc::default(),
             vendor_credentials: crate::config::VendorCredentials::default(),
             mcp: crate::config::McpConfig::default(),
         })
@@ -2821,6 +2822,7 @@ mod tests {
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            runtime: std::sync::Arc::default(),
             vendor_credentials: crate::config::VendorCredentials::default(),
             mcp: crate::config::McpConfig::default(),
         })
@@ -2838,6 +2840,7 @@ mod tests {
             ui_port: 9001,
             max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
             smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
+            runtime: std::sync::Arc::default(),
             vendor_credentials: crate::config::VendorCredentials {
                 oci_tenancy_ocid: Some("ocid1.tenancy".to_string()),
                 oci_user_ocid: Some("ocid1.user".to_string()),

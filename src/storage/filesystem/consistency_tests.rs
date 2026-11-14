@@ -375,6 +375,7 @@ async fn wire_get(
         ui_port: 0,
         max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: 0,
+        runtime: std::sync::Arc::default(),
         vendor_credentials: crate::config::VendorCredentials::default(),
         mcp: crate::config::McpConfig::default(),
     });
@@ -693,6 +694,7 @@ async fn should_admit_s3_replacements_and_subresources_without_loading_existing_
         ui_port: 0,
         max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: 0,
+        runtime: std::sync::Arc::default(),
         vendor_credentials: crate::config::VendorCredentials::default(),
         mcp: crate::config::McpConfig::default(),
     });
@@ -771,6 +773,7 @@ async fn should_bound_s3_current_and_historical_materialization_before_payload_r
         ui_port: 0,
         max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
         smtp_port: 0,
+        runtime: std::sync::Arc::default(),
         vendor_credentials: crate::config::VendorCredentials::default(),
         mcp: crate::config::McpConfig::default(),
     });
@@ -1095,4 +1098,81 @@ fn should_bound_copy_snapshots_when_source_grows_after_metadata_admission() {
     assert_eq!(snapshot.size, 64 * 1024 * 1024 + 3);
     assert_eq!(snapshot.data.len(), usize::try_from(limit).unwrap());
     fs::remove_dir_all(base).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_serve_current_head_metadata_without_opening_payload_files() {
+    // Arrange
+    use http_body_util::{BodyExt as _, Full};
+    let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
+    *storage.test_hook.lock().unwrap() = None;
+    let object_id = FilesystemStorage::compute_object_id("coherent", "lease");
+    let metadata_path = storage.object_metadata_path("coherent", &object_id);
+    let mut object = FilesystemStorage::read_object_metadata(&metadata_path).unwrap();
+    object.size = 1024 * 1024 * 1024;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(storage.object_data_path("coherent", &object_id))
+        .unwrap()
+        .set_len(object.size)
+        .unwrap();
+    FilesystemStorage::atomic_write(&metadata_path, &serde_json::to_vec(&object).unwrap()).unwrap();
+    *storage.test_hook.lock().unwrap() = Some(Arc::new(|phase| {
+        assert!(
+            !matches!(
+                phase,
+                TestPhase::FullPayload | TestPhase::ReadPayloadMetadata
+            ),
+            "HEAD opened a payload file"
+        );
+    }));
+    let config = Arc::new(crate::Config {
+        access_key_id: None,
+        secret_access_key: None,
+        enforce_auth: false,
+        admin_auth_disabled: false,
+        blobs_path: base.to_string_lossy().to_string(),
+        lifecycle_interval: Duration::from_hours(1),
+        api_port: 0,
+        ui_port: 0,
+        max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
+        smtp_port: 0,
+        runtime: Arc::default(),
+        vendor_credentials: crate::config::VendorCredentials::default(),
+        mcp: crate::config::McpConfig::default(),
+    });
+    // Act
+    let mut results = Vec::new();
+    for (path, azure) in [
+        ("/coherent/lease", false),
+        ("/devstoreaccount1/coherent/lease", true),
+        ("/n/sqrzl-emulator/b/coherent/o/lease", false),
+    ] {
+        let mut builder = hyper::Request::builder()
+            .method("HEAD")
+            .uri(path)
+            .header("host", "localhost");
+        if azure {
+            builder = builder.header("x-ms-version", "2024-11-04");
+        }
+        let req = crate::server::RequestExt::from_hyper(
+            builder.body(Full::new(bytes::Bytes::new())).unwrap(),
+        )
+        .await
+        .unwrap();
+        let response = crate::providers::AdapterRegistry::default()
+            .handle(storage.clone(), config.clone(), req)
+            .await
+            .unwrap();
+        let status = response.status();
+        let length = response.headers().get("content-length").cloned();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        results.push((status, length, body));
+    }
+    // Assert
+    for (status, length, body) in results {
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(length.unwrap(), "1073741824");
+        assert!(body.is_empty());
+    }
 }

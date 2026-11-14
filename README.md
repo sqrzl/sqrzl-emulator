@@ -161,10 +161,16 @@ policy. Vendor credentials and resource settings use their provider prefix
 | `SQRZL_MCP_ALLOWED_HOSTS` | Comma-separated HTTP Host values | Loopback hosts | Adds Host values accepted by the MCP transport. |
 | `SQRZL_MCP_ALLOWED_ORIGINS` | Comma-separated origins | `http://localhost:<SQRZL_UI_PORT>`, `http://127.0.0.1:<SQRZL_UI_PORT>` | Origins accepted by the MCP transport. Requests without an `Origin` header are allowed for non-browser MCP clients. |
 | `SQRZL_BLOBS_PATH` | Writable container path | `/app/blobs` in Docker; `./blobs` natively | Storage format v2 root. Mount a volume here for persistence. |
-| `SQRZL_LIFECYCLE_HOURS` | Positive integer hours | `1` | Interval between lifecycle-rule passes. Invalid or zero values use the default. |
+| `SQRZL_LIFECYCLE_HOURS` | Positive integer hours | `1` | Interval between lifecycle-rule passes. Invalid, zero or overflowing values fail startup before storage is created. |
 | `SQRZL_API_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9000` | Storage API listener inside the container. Normally keep this at `9000` and change only the host side of the Docker port mapping. |
 | `SQRZL_UI_PORT` | Unsigned 16-bit port (`0`–`65535`) | `9001` | Admin UI listener inside the container. Normally keep this at `9001`. |
-| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum bytes in one HTTP request body or SMTP `DATA` payload. S3 PUT/UploadPart, Azure Put Blob/Put Block, GCS data uploads/resumable chunks, and OCI PutObject/UploadPart stream to disk while enforcing this per-request cap. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values use the default. |
+| `SQRZL_MAX_REQUEST_BYTES` | Positive integer byte count | `134217728` (128 MiB) | Maximum bytes in one HTTP request body or SMTP `DATA` payload. S3 PUT/UploadPart, Azure Put Blob/Put Block, GCS data uploads/resumable chunks, and OCI PutObject/UploadPart stream to disk while enforcing this per-request cap. Oversized provider requests receive a provider-shaped `413`; SMTP receives `552`. Zero and invalid values fail startup before storage is created. |
+| `SQRZL_MAX_CONNECTIONS` | Positive integer | `128` | Shared API/UI/SMTP connection cap; excess connections close (SMTP replies `421` where possible). |
+| `SQRZL_MAX_INFLIGHT_REQUESTS` | Positive integer | `4` | Shared nonqueued HTTP, MCP tool and SMTP DATA work budget. HTTP overload returns `503`/`Retry-After`; SMTP DATA returns `452`. |
+| `SQRZL_MAX_INFLIGHT_BYTES` | Positive integer bytes, at least `SQRZL_MAX_REQUEST_BYTES` | `536870912` (512 MiB) | Conservative encoded-input reservation: each admitted request reserves the configured maximum body size until its response/worker finishes. This is not an OS RSS limit. |
+| `SQRZL_MAX_MCP_SESSIONS` | Positive integer | `128` | Maximum retained MCP sessions; initialization beyond the cap returns `503`. |
+| `SQRZL_MAX_SMTP_RECIPIENTS` | Positive integer | `1000` | Maximum accepted RCPT commands per transaction; excess recipients receive `452` while the accepted envelope remains usable. |
+| `SQRZL_DRAIN_TIMEOUT_MS` | Integer `1`–`300000` | `30000` | One shared SIGINT/SIGTERM drain deadline across listeners; admitted work completes, then stalled async connections are cancelled. Blocking filesystem writes retain storage ownership until they finish. |
 | `SQRZL_BUCKET_LIST` | Comma-separated bucket names | Empty | Buckets created at startup. Whitespace and empty entries are ignored. Names use the Amazon S3 general-purpose rules: 3–63 lowercase letters, digits, periods, or hyphens; an alphanumeric first and last character; no adjacent periods, IP-address form, or AWS-reserved affix. |
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
 | `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
@@ -606,7 +612,7 @@ docker compose ps
 docker compose logs --follow sqrzl
 ```
 
-`/healthz` reports listener ports, storage readiness, request-size limit,
+`/healthz` reports listener ports, blob/mail/SMS readability, runtime admission counts and limits, request-size limit,
 enabled providers, and authentication state. A healthy instance returns
 `200 OK`; unreadable storage returns `503 Service Unavailable`.
 
@@ -648,3 +654,45 @@ STRESS_PROFILE=smoke cargo test --workspace --all-targets --all-features
 ## License
 
 Sqrzl is licensed under the [Apache License 2.0](LICENSE).
+
+### Runtime draining and diagnostics
+
+SIGINT and SIGTERM stop admission across API, UI, MCP and SMTP. Active uploads,
+SMTP DATA and callbacks share one drain deadline. Idle SMTP sessions receive
+`421`; work admitted before shutdown can finish. A deadline cancels stalled
+async work. Uninterruptible blocking storage operations may extend process exit;
+the writer lock remains held until those writes finish. Callback outcomes lost
+during cancellation remain pending and are never automatically resent.
+
+`/healthz` returns `503` while draining or when a storage/capture root becomes
+unreadable. Readability does not guarantee free disk space or writable media.
+One separate probe slot keeps health and UI `/metrics` available during request
+saturation, subject to the shared connection cap. Metrics include active work,
+reserved bytes, rejections, fixed HTTP status classes and duration buckets.
+There are no path, credential or message-content labels. SMTP work uses the same
+counters; cancelled/unclassified work has status class zero.
+
+Admission bounds active counts and encoded input reservations. Decoding,
+provider fanout, storage caches and OS page cache consume additional memory;
+use container memory/disk limits when a hard process boundary is required.
+There is no unbounded admission queue. Mail capture separately enforces its
+64 MiB projected allocation budget.
+
+Admin mailbox pages use transaction-published metadata summaries, so listing or
+changing delivery state does not deserialize or rewrite attachments. Pages hold
+at most 500 items and normally at most 8 MiB of summaries; one large summary can
+use up to 64 MiB. Mailbox index scans remain linear, and substring search may
+scan multiple batches. Explicit bulk library methods remain bulk operations.
+Existing mail is indexed once at startup, one payload at a time.
+
+SES event intent, payload and global/message indexes commit together in
+`.ses-events-v1.redb` with an 8 MiB database cache. Existing `.ses-events` JSON
+records migrate idempotently; retained JSON files are backups, and the database
+becomes authoritative. Back up the entire storage root while the emulator is
+stopped. Do not downgrade to a writer that only understands the legacy JSON
+archive. Event pages seek the selected index and decode only selected records.
+
+The versioned [local-core-v1 certification policy](operation-certification.json)
+defines nine selected operation scopes. Exact-source CI produces their gate
+receipts; other operations and selectors retain the matrix's partial,
+unsupported or deferred status. See [support qualification](docs/support-certification.md).

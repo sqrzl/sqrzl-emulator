@@ -35,10 +35,10 @@ pub struct SesEventPage {
 }
 
 #[derive(Serialize, Deserialize)]
-struct EventCursor {
-    message_id: Option<String>,
-    created_at: DateTime<Utc>,
-    event_id: String,
+pub(crate) struct EventCursor {
+    pub(crate) message_id: Option<String>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) event_id: String,
 }
 
 pub(crate) fn event_page(
@@ -109,6 +109,20 @@ pub(crate) fn event_page(
         items: selected.into_values().collect(),
         next,
     })
+}
+
+#[cfg(test)]
+thread_local! { static EVENT_DECODE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+fn count_event_decode<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    EVENT_DECODE_COUNT.with(|count| count.set(count.get() + 1));
+    String::deserialize(deserializer)
+}
+#[cfg(test)]
+pub(crate) fn take_event_decode_count() -> usize {
+    EVENT_DECODE_COUNT.with(|count| count.replace(0))
 }
 
 /// SES event-publishing event types.
@@ -206,6 +220,7 @@ pub struct SesEventRecord {
     pub request_id: Option<String>,
     #[serde(default, skip_serializing, rename = "__sqrzl_request_fingerprint")]
     pub(crate) request_fingerprint: Option<String>,
+    #[cfg_attr(test, serde(deserialize_with = "count_event_decode"))]
     pub event_id: String,
     pub message_id: String,
     pub event_type: SesEventType,
@@ -1025,12 +1040,11 @@ mod tests {
             .clone();
         let fail_root = root.clone();
         let (url, receiver) = callback_receiver_with(move || {
-            std::fs::rename(
-                fail_root.join("_mail/.ses-events"),
-                fail_root.join("_mail/.saved-events"),
+            std::fs::write(
+                fail_root.join("_mail/.ses-writes-fail"),
+                b"inject durable commit failure",
             )
             .unwrap();
-            std::fs::write(fail_root.join("_mail/.ses-events"), b"outcome failure").unwrap();
         })
         .await;
         let now = Utc::now();
@@ -1051,12 +1065,7 @@ mod tests {
             .simulate(event_request.clone())
             .await;
         receiver.await.unwrap();
-        std::fs::remove_file(root.join("_mail/.ses-events")).unwrap();
-        std::fs::rename(
-            root.join("_mail/.saved-events"),
-            root.join("_mail/.ses-events"),
-        )
-        .unwrap();
+        std::fs::remove_file(root.join("_mail/.ses-writes-fail")).unwrap();
         let reopened: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
         let replay = SesEventSimulator::new(reopened.clone())
             .simulate(event_request)

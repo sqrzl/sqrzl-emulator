@@ -9,6 +9,10 @@ fn should_reject_invalid_runtime_configuration_before_opening_storage() {
         ("TWILIO_ACCOUNT_SID", "AC00000000000000000000000000000001"),
         ("TWILIO_API_KEY_SECRET", "synthetic-secret"),
         ("SENDGRID_API_KEY", ""),
+        ("SQRZL_MAX_CONNECTIONS", "0"),
+        ("SQRZL_MAX_INFLIGHT_REQUESTS", "invalid"),
+        ("SQRZL_MAX_INFLIGHT_BYTES", "1"),
+        ("SQRZL_DRAIN_TIMEOUT_MS", "0"),
         ("ACS_CONNECTION_STRING", "not-a-connection-string"),
         ("SQRZL_LIFECYCLE_HOURS", "18446744073709551615"),
     ];

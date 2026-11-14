@@ -96,6 +96,12 @@ struct BucketIdentity {
 }
 
 impl BucketStore for FilesystemStorage {
+    fn check_ready(&self) -> Result<()> {
+        std::fs::read_dir(&self.base_path)
+            .map_err(|error| Error::InternalError(error.to_string()))?;
+        Ok(())
+    }
+
     fn create_bucket(&self, name: String) -> Result<()> {
         let lock = self.bucket_lock(&name)?;
         let _guard = lock

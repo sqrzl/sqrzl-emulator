@@ -1605,14 +1605,16 @@
             "server::handlers::object::s3_contract_tests::should_replace_copy_content_type_and_metadata_without_changing_copy_semantics",
             "server::handlers::object::s3_contract_tests::should_return_empty_not_found_for_missing_current_head",
             "server::handlers::object::s3_contract_tests::should_return_not_found_for_ranged_get_of_missing_object",
-            "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface"
+            "server::adapter_routing_tests::should_preserve_s3_object_key_identity_through_the_http_surface",
+            "storage::filesystem::consistency_tests::should_serve_current_head_metadata_without_opening_payload_files"
           ],
           "sdk": [
             "sdk-tests/test_large_upload_qualification.py::test_s3_large_multipart_qualification",
             "sdk-tests/test_s3_sdk.py::test_s3_core_bucket_object_and_metadata_workflows",
             "sdk-tests/test_s3_sdk.py::test_s3_direct_put_native_checksums_and_rejection",
             "sdk-tests/test_s3_sdk.py::test_s3_http_properties_copy_and_plain_multipart",
-            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows"
+            "sdk-tests/test_s3_sdk.py::test_s3_multipart_and_versioning_workflows",
+            "sdk-tests/test_operation_certification.py::test_s3_current_head_certification"
           ]
         },
         "acceptance_gates": {
@@ -1626,7 +1628,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "s3-family.DeleteObject.delete.current",
@@ -4481,7 +4486,8 @@
             "providers::azure::tests::should_update_metadata_return_block_list_and_support_ranges",
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
             "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head",
-            "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes"
+            "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes",
+            "storage::filesystem::consistency_tests::should_serve_current_head_metadata_without_opening_payload_files"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
@@ -4492,7 +4498,8 @@
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
             "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
-            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas",
+            "sdk-tests/test_operation_certification.py::test_azure_current_head_certification"
           ]
         },
         "acceptance_gates": {
@@ -4506,7 +4513,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "azure-blob.DeleteBlob.delete.current",
@@ -7226,11 +7236,13 @@
           "rust": [
             "providers::oci::tests::should_round_trip_oci_metadata_and_prefix_listing",
             "interop_oci::should_return_custom_metadata_given_oci_metadata_headers_when_requesting_object_head",
-            "interop_oci::should_echo_oci_client_request_id_and_use_http_dates"
+            "interop_oci::should_echo_oci_client_request_id_and_use_http_dates",
+            "storage::filesystem::consistency_tests::should_serve_current_head_metadata_without_opening_payload_files"
           ],
           "sdk": [
             "sdk-tests/test_large_upload_qualification.py::test_oci_large_multipart_qualification",
-            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows"
+            "sdk-tests/test_oci_sdk.py::test_oci_core_object_workflows",
+            "sdk-tests/test_operation_certification.py::test_oci_current_head_certification"
           ]
         },
         "acceptance_gates": {
@@ -7244,7 +7256,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "oci-object.DeleteObject.delete.default",
@@ -7964,7 +7979,8 @@
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
           "sdk": [
-            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary",
+            "sdk-tests/test_operation_certification.py::test_smtp_session_certification"
           ]
         },
         "acceptance_gates": {
@@ -7978,7 +7994,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "smtp.Envelope.smtp.default",
@@ -7999,7 +8018,8 @@
           ],
           "sdk": [
             "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message",
-            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary",
+            "sdk-tests/test_operation_certification.py::test_smtp_envelope_certification"
           ]
         },
         "acceptance_gates": {
@@ -8013,7 +8033,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "smtp.Data.smtp.default",
@@ -8030,12 +8053,17 @@
             "interop_email::should_capture_message_when_sending_over_a_smtp_session",
             "e2e_email::should_capture_message_when_sending_over_a_real_smtp_socket",
             "mail::smtp::tests::should_accept_the_rfc_5321_null_reverse_path",
-            "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
+            "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails",
+            "runtime_process::should_retain_acknowledged_smtp_mail_after_forced_process_exit",
+            "mail::smtp::tests::should_bound_raw_smtp_data_before_constructing_capture_copies",
+            "mail::smtp::tests::should_reject_projected_smtp_capture_and_accept_a_later_transaction",
+            "runtime_process::should_finish_smtp_data_during_sigterm_drain"
           ],
           "sdk": [
             "sdk-tests/test_email_sdk.py::test_smtp_sdk_rejects_projected_capture_limit",
             "sdk-tests/test_email_sdk.py::test_smtp_sdk_sends_message",
-            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary",
+            "sdk-tests/test_operation_certification.py::test_smtp_data_certification"
           ]
         },
         "acceptance_gates": {
@@ -8049,7 +8077,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "sendgrid.Send.post.personalizations",
@@ -8879,7 +8910,9 @@
             "mail::smtp::tests::should_accept_the_rfc_5321_null_reverse_path",
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_operation_certification.py::test_smtp_rset_certification"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8892,7 +8925,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "smtp.NOOP.smtp.command",
@@ -8912,7 +8948,8 @@
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
           "sdk": [
-            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary"
+            "sdk-tests/test_messaging_acceptance.py::test_smtp_data_argument_and_line_boundary",
+            "sdk-tests/test_operation_certification.py::test_smtp_noop_certification"
           ]
         },
         "acceptance_gates": {
@@ -8926,7 +8963,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "smtp.QUIT.smtp.command",
@@ -8945,7 +8985,9 @@
             "mail::smtp::tests::should_accept_the_rfc_5321_null_reverse_path",
             "mail::tests::should_leave_no_captured_copies_when_fan_out_validation_fails"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_operation_certification.py::test_smtp_quit_certification"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -8958,7 +9000,10 @@
           "native-auth": "pending",
           "process-crash": "pending",
           "resources": "pending"
-        }
+        },
+        "certified_subsets": [
+          "local-core-v1"
+        ]
       },
       {
         "id": "aws-sms-voice-v2.SendMediaMessage.post.DryRun",

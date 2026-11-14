@@ -2,10 +2,7 @@
 
 use crate::api::admin::{
     mail_dto::{mailbox_to_info, message_summaries, stored_to_detail, stored_to_summary},
-    pagination::{
-        contains_search, encode_next, encode_object_next, parse_object_page_params,
-        parse_page_params, PageTokenKind,
-    },
+    pagination::{contains_search, encode_object_next, parse_object_page_params, PageTokenKind},
 };
 use crate::body::Body;
 use crate::error::{Error, Result};
@@ -76,21 +73,15 @@ fn decode_path_segment(value: &str) -> Option<String> {
 }
 
 fn list_mailboxes(mail: &Arc<dyn MailStore>, query: &str) -> Result<Response<Body>> {
-    let page = parse_page_params(query, PageTokenKind::Mailboxes)?;
-    let mut mailboxes = tokio::task::block_in_place(|| mail.list_mailboxes())?;
-    mailboxes.sort_by(|left, right| left.address.cmp(&right.address));
-    let items: Vec<_> = mailboxes
-        .into_iter()
-        .map(mailbox_to_info)
-        .filter(|mailbox| contains_search(&mailbox.address, page.search.as_deref()))
-        .collect();
-    let (items, next) = crate::api::admin::pagination::paginate(items, &page);
-
+    let page = parse_object_page_params(query, PageTokenKind::Mailboxes)?;
+    let result = tokio::task::block_in_place(|| {
+        mail.list_mailbox_page(page.next.as_deref(), page.limit, page.search.as_deref())
+    })?;
     Ok(json_response(
         StatusCode::OK,
         &crate::api::models::ListMailboxesResponse {
-            items,
-            next: encode_next(next, PageTokenKind::Mailboxes),
+            items: result.mailboxes.into_iter().map(mailbox_to_info).collect(),
+            next: encode_object_next(result.next_marker, PageTokenKind::Mailboxes),
         },
     ))
 }
@@ -100,7 +91,7 @@ fn list_messages(mail: &Arc<dyn MailStore>, mailbox: &str, query: &str) -> Resul
 
     if page.search.is_none() {
         let result = tokio::task::block_in_place(|| {
-            mail.list_messages(
+            mail.list_message_summaries(
                 mailbox,
                 ListMessagesParams {
                     marker: page.next,
@@ -124,7 +115,7 @@ fn list_messages(mail: &Arc<dyn MailStore>, mailbox: &str, query: &str) -> Resul
 
     while page_items.len() < page.limit {
         let result = tokio::task::block_in_place(|| {
-            mail.list_messages(
+            mail.list_message_summaries(
                 mailbox,
                 ListMessagesParams {
                     marker: cursor.clone(),
@@ -157,9 +148,14 @@ fn list_messages(mail: &Arc<dyn MailStore>, mailbox: &str, query: &str) -> Resul
     // Object markers are exclusive. When filtering spans multiple storage
     // batches, resume after the last item actually returned, not after the last
     // item fetched, or unreturned matches from the final batch are skipped.
-    let next = has_more
-        .then(|| page_items.last().map(|message| message.message_id.clone()))
-        .flatten();
+    let next = if has_more {
+        page_items
+            .last()
+            .map(|message| mail.message_cursor(message))
+            .transpose()?
+    } else {
+        None
+    };
 
     let items = page_items
         .into_iter()
