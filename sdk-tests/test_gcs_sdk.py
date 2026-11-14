@@ -328,6 +328,72 @@ def test_gcs_cmek_default_and_explicit_key_names(sqrzl_server):
     bucket.delete()
 
 
+def test_gcs_compose_rewrite_and_copy_with_preconditions(sqrzl_server):
+    sqrzl_server.require_provider("gcs")
+    exceptions = pytest.importorskip("google.api_core.exceptions")
+    import google_crc32c
+
+    client = _client(sqrzl_server)
+    tenant_key = "projects/sqrzl/locations/us/keyRings/tenants/cryptoKeys/tenant-a"
+    bucket = client.bucket(sqrzl_server.bucket_name("sdk-gcs-compose"))
+    bucket.create()
+    parts = []
+    for index, chunk in enumerate([b"alpha-", b"beta-", b"gamma"]):
+        part = bucket.blob(f"staging/part-{index}")
+        part.upload_from_string(chunk)
+        parts.append(part)
+
+    staged = bucket.blob("staging/joined", kms_key_name=tenant_key)
+    staged.content_type = "text/plain"
+    staged.metadata = {"stage": "staged"}
+    staged.compose(
+        parts,
+        if_generation_match=0,
+        if_source_generation_match=[part.generation for part in parts],
+    )
+    assert staged.size == len(b"alpha-beta-gamma")
+    assert staged.component_count == 3
+    assert staged.kms_key_name == f"{tenant_key}/cryptoKeyVersions/1"
+    expected_crc = base64.b64encode(
+        google_crc32c.Checksum(b"alpha-beta-gamma").digest()
+    ).decode()
+    assert staged.crc32c == expected_crc
+
+    with pytest.raises(exceptions.PreconditionFailed):
+        bucket.blob("staging/joined").compose(parts, if_generation_match=0)
+    with pytest.raises(exceptions.PreconditionFailed):
+        bucket.blob("staging/stale").compose(
+            parts, if_source_generation_match=[1, 1, 1]
+        )
+    assert bucket.get_blob("staging/stale") is None
+
+    published = bucket.blob("published/joined")
+    published.metadata = {"stage": "published"}
+    token, rewritten, total = published.rewrite(
+        staged,
+        if_generation_match=0,
+        if_source_generation_match=staged.generation,
+    )
+    assert token is None
+    assert rewritten == total == len(b"alpha-beta-gamma")
+    published.reload()
+    assert published.metadata == {"stage": "published"}
+    assert published.download_as_bytes() == b"alpha-beta-gamma"
+
+    with pytest.raises(exceptions.PreconditionFailed):
+        bucket.blob("published/joined").rewrite(staged, if_generation_match=0)
+
+    copied = bucket.copy_blob(
+        staged, bucket, "published/copy", if_generation_match=0
+    )
+    assert copied.download_as_bytes() == b"alpha-beta-gamma"
+    assert copied.metadata == {"stage": "staged"}
+
+    for blob in client.list_blobs(bucket):
+        blob.delete()
+    bucket.delete()
+
+
 def test_gcs_resumable_upload_workflow(sqrzl_server):
     sqrzl_server.require_provider("gcs")
     client = _client(sqrzl_server)

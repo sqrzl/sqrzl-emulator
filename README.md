@@ -318,6 +318,16 @@ ETags can be fed back into later conditional requests. Conditional operations
 target the current object; historical GCS generation retrieval and the full
 HTTP conditional-header matrix remain outside this local emulator contract.
 
+GCS JSON `objects.compose` (up to 32 same-bucket sources), `objects.rewrite`,
+and `objects.copy` support the "upload parts, compose, verify, then publish
+only if absent" flow: per-source `generation` and `ifGenerationMatch`,
+`ifSourceGenerationMatch`/`ifSourceGenerationNotMatch`, and destination
+`ifGenerationMatch` (including `0`) are checked atomically with the write and
+fail with `412` without mutation. Composed objects report CRC32C and
+`componentCount`; rewrites always finish in one call with `done: true`.
+Sources are materialized locally up to 64 MiB. `rewriteToken` continuation,
+destination ACLs, and other unsupported destination fields are rejected.
+
 ## Protocol conformance and deterministic failures
 
 Sqrzl keeps mutation responses provider-specific: S3 object PUT/DELETE use

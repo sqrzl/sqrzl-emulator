@@ -54,6 +54,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent",
+            "providers::gcs::tests::should_compose_gcs_sources_with_generation_preconditions",
             "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects",
             "e2e_gcs::should_accept_gzip_encoded_json_metadata_given_live_server_when_using_gcs_json_api",
             "providers::gcs::tests::should_decode_gzip_json_metadata_and_reject_unsupported_content_encodings",
@@ -298,6 +300,7 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions",
             "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
             "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key",
             "sdk-tests/test_s3_sdk.py::test_s3_crc32c_full_object_multipart_contract",

@@ -664,16 +664,20 @@
           "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
           "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
           "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object",
-          "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects"
+          "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects",
+          "providers::gcs::tests::should_compose_gcs_sources_with_generation_preconditions",
+          "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-          "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
+          "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+          "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
         ],
         "limitations": [
           "Unlocked bucket-retention and 7-to-less-than-90-day soft-delete configuration are locally covered and are mutually exclusive with S3 or Azure data-protection ownership of the bucket; conflicting activation returns FAILED_PRECONDITION 409 without mutation. Retention-policy locking, per-object retention, writable server-owned policy fields, and disabling an enabled soft-delete policy are explicitly rejected and are not claimed as compatible.",
-          "Customer-managed encryption is modelled without cryptography: bucket encryption.defaultKmsKeyName is accepted on insert/patch and returned on get; kmsKeyName on JSON uploads (and x-goog-encryption-kms-key-name on XML uploads) must match projects/*/locations/*/keyRings/*/cryptoKeys/*, otherwise the request fails before mutation. The bucket default applies when an upload names no key, and object resources report the key with a /cryptoKeyVersions/1 suffix. KMS key existence, IAM, rotation, and encryption-enforcement configs are not modelled; enforcement configs are rejected with 501."
+          "Customer-managed encryption is modelled without cryptography: bucket encryption.defaultKmsKeyName is accepted on insert/patch and returned on get; kmsKeyName on JSON uploads (and x-goog-encryption-kms-key-name on XML uploads) must match projects/*/locations/*/keyRings/*/cryptoKeys/*, otherwise the request fails before mutation. The bucket default applies when an upload names no key, and object resources report the key with a /cryptoKeyVersions/1 suffix. KMS key existence, IAM, rotation, and encryption-enforcement configs are not modelled; enforcement configs are rejected with 501.",
+          "objects.compose, objects.rewrite, and objects.copy are supported for same-emulator sources up to 64 MiB, completing in one call; source and destination generation preconditions return 412 on mismatch without mutation. rewriteToken continuation, destination ACLs, source metageneration preconditions, and writable destination fields beyond contentType, metadata, and kmsKeyName are rejected."
         ]
       }
     },
@@ -6662,39 +6666,27 @@
         "method": "POST",
         "path": "/storage/v1/b/{bucket}/o/{object}/compose",
         "variant": "json",
-        "support_tier": "unsupported",
-        "boundary": "Native compose/rewrite is not implemented; POST reaches the explicit unsupported-method response and does not mutate data. Resumable assembly is a different local operation.",
+        "support_tier": "partial",
+        "boundary": "Up to 32 same-bucket sources with optional per-source generation and ifGenerationMatch, destination ifGenerationMatch/ifGenerationNotMatch (including 0) evaluated atomically with the write, replaced destination contentType/metadata, kmsKeyName, composed CRC32C and componentCount. Materialized locally up to 64 MiB; destination ACLs and other writable fields are rejected.",
         "evidence_candidates": {
           "rust": [
-            "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
-            "providers::gcs::tests::should_increment_generation_on_overwrite_and_patch_metageneration",
-            "providers::gcs::tests::should_enforce_gcs_generation_and_metageneration_preconditions",
-            "providers::gcs::tests::should_reject_retained_overwrite_and_invalid_generation_preconditions",
-            "providers::gcs::tests::should_reject_unsupported_or_invalid_bucket_retention_configuration_without_mutation",
-            "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
-            "providers::gcs::tests::should_apply_resumable_json_metadata_and_body_name_without_silent_fields",
-            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version",
-            "providers::gcs::tests::should_serialize_conflicting_s3_and_gcs_data_protection_activation",
-            "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation",
-            "lifecycle::tests::should_not_eagerly_expire_objects_from_gcs_retained_buckets",
-            "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
-            "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
-            "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "providers::gcs::tests::should_compose_gcs_sources_with_generation_preconditions"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
+          ]
         },
         "acceptance_gates": {
-          "positive": "not-applicable",
+          "positive": "pending",
           "negative": "pending",
-          "boundary": "not-applicable",
-          "condition": "not-applicable",
+          "boundary": "pending",
+          "condition": "pending",
           "pages": "not-applicable",
-          "restart": "not-applicable",
+          "restart": "pending",
           "native-error": "pending",
-          "native-auth": "not-applicable",
-          "process-crash": "not-applicable",
-          "resources": "not-applicable"
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
         }
       },
       {
@@ -6705,39 +6697,58 @@
         "method": "POST",
         "path": "/storage/v1/b/{bucket}/o/{object}/rewriteTo/...",
         "variant": "json",
-        "support_tier": "unsupported",
-        "boundary": "Native compose/rewrite is not implemented; POST reaches the explicit unsupported-method response and does not mutate data. Resumable assembly is a different local operation.",
+        "support_tier": "partial",
+        "boundary": "Same-emulator source and destination completed in one call (done: true) with sourceGeneration, ifSourceGenerationMatch/NotMatch, destination ifGenerationMatch/NotMatch (including 0) evaluated atomically with the write, replaced metadata/contentType, and destinationKmsKeyName. rewriteToken continuation, destinationPredefinedAcl, and source metageneration preconditions are rejected; materialized locally up to 64 MiB.",
         "evidence_candidates": {
           "rust": [
-            "providers::gcs::tests::should_support_gcs_json_api_bucket_and_media_flows",
-            "providers::gcs::tests::should_increment_generation_on_overwrite_and_patch_metageneration",
-            "providers::gcs::tests::should_enforce_gcs_generation_and_metageneration_preconditions",
-            "providers::gcs::tests::should_reject_retained_overwrite_and_invalid_generation_preconditions",
-            "providers::gcs::tests::should_reject_unsupported_or_invalid_bucket_retention_configuration_without_mutation",
-            "providers::gcs::tests::should_preserve_binary_multipart_media_bytes_exactly",
-            "providers::gcs::tests::should_apply_resumable_json_metadata_and_body_name_without_silent_fields",
-            "providers::gcs::tests::should_patch_protected_object_metadata_without_creating_a_new_version",
-            "providers::gcs::tests::should_serialize_conflicting_s3_and_gcs_data_protection_activation",
-            "providers::tests::should_serialize_conflicting_azure_and_gcs_protection_creation",
-            "lifecycle::tests::should_not_eagerly_expire_objects_from_gcs_retained_buckets",
-            "lifecycle::tests::should_not_expire_gcs_soft_delete_history_through_s3_lifecycle",
-            "provider_conformance::should_reject_s3_versioning_changes_on_foreign_protected_bucket",
-            "provider_conformance::should_reject_gcs_data_protection_activation_on_s3_versioned_bucket",
-            "interop_gcs::should_complete_resumable_upload_given_json_api_session_when_finalizing_media_object"
+            "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
+          ]
         },
         "acceptance_gates": {
-          "positive": "not-applicable",
+          "positive": "pending",
           "negative": "pending",
-          "boundary": "not-applicable",
-          "condition": "not-applicable",
+          "boundary": "pending",
+          "condition": "pending",
           "pages": "not-applicable",
-          "restart": "not-applicable",
+          "restart": "pending",
           "native-error": "pending",
-          "native-auth": "not-applicable",
-          "process-crash": "not-applicable",
-          "resources": "not-applicable"
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "gcs.CopyObject.post.json",
+        "provider": "gcs",
+        "family": "json_api_breadth",
+        "operation": "CopyObject",
+        "method": "POST",
+        "path": "/storage/v1/b/{bucket}/o/{object}/copyTo/b/{destinationBucket}/o/{destinationObject}",
+        "variant": "json",
+        "support_tier": "partial",
+        "boundary": "Same semantics as the local rewrite subset, returning the destination object resource; kmsKeyName selects the destination key.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent"
+          ],
+          "sdk": [
+            "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "not-applicable",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
         }
       },
       {

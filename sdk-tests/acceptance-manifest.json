@@ -5608,6 +5608,65 @@
           "positive"
         ]
       }
+    },
+    "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions": {
+      "provider": "gcs",
+      "operations": [
+        "ComposeObject",
+        "RewriteObject",
+        "CopyObject"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "condition"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "ComposeObject": [
+          "positive",
+          "negative",
+          "condition"
+        ],
+        "RewriteObject": [
+          "positive",
+          "condition"
+        ],
+        "CopyObject": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "gcs.ComposeObject.post.json",
+        "gcs.RewriteObject.post.json",
+        "gcs.CopyObject.post.json"
+      ],
+      "operation_id_aliases": {
+        "ComposeObject": [
+          "gcs.ComposeObject.post.json"
+        ],
+        "RewriteObject": [
+          "gcs.RewriteObject.post.json"
+        ],
+        "CopyObject": [
+          "gcs.CopyObject.post.json"
+        ]
+      },
+      "operation_id_checks": {
+        "gcs.ComposeObject.post.json": [
+          "positive",
+          "negative",
+          "condition"
+        ],
+        "gcs.RewriteObject.post.json": [
+          "positive",
+          "condition"
+        ],
+        "gcs.CopyObject.post.json": [
+          "positive"
+        ]
+      }
     }
   }
 }

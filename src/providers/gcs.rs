@@ -29,12 +29,14 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 
 mod bounded;
+mod compose;
 
 const GCS_GENERATION_KEY: &str = "__sqrzl_gcs_generation";
 const GCS_METAGENERATION_KEY: &str = "__sqrzl_gcs_metageneration";
 const GCS_UPDATED_KEY: &str = "__sqrzl_gcs_updated";
 const GCS_CRC32C_KEY: &str = "__sqrzl_gcs_crc32c";
 const GCS_KMS_KEY_NAME_KEY: &str = "__sqrzl_gcs_kms_key_name";
+const GCS_COMPONENT_COUNT_KEY: &str = "__sqrzl_gcs_component_count";
 const GCS_DEFAULT_KMS_KEY_NAME_KEY: &str = "gcs_default_kms_key_name";
 /// Local CMEK model: no cryptography, a single primary key version per key.
 const GCS_KMS_PRIMARY_VERSION: &str = "1";
@@ -393,6 +395,7 @@ impl GcsAdapter {
                         | GCS_METAGENERATION_KEY
                         | GCS_UPDATED_KEY
                         | GCS_KMS_KEY_NAME_KEY
+                        | GCS_COMPONENT_COUNT_KEY
                 )
             })
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -2276,6 +2279,173 @@ mod tests {
         assert!(patched["metadata"].get(GCS_KMS_KEY_NAME_KEY).is_none());
         assert!(cleared.get("encryption").is_none());
         assert!(plain.get("kmsKeyName").is_none());
+    }
+
+    async fn send_json(
+        storage: &Arc<dyn Storage>,
+        adapter: &GcsAdapter,
+        method: &str,
+        uri: &str,
+        body: &[u8],
+    ) -> (StatusCode, serde_json::Value) {
+        let request = parsed_request(method, uri, &[], body).await;
+        let response = adapter
+            .handle_request(storage, &auth_disabled(), &request)
+            .unwrap();
+        let status = response.status();
+        let bytes = read_test_body(response).await;
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    async fn seed_compose_bucket(storage: &Arc<dyn Storage>, adapter: &GcsAdapter) -> [String; 2] {
+        storage.create_bucket("assembly".to_string()).unwrap();
+        let mut generations = Vec::new();
+        for (name, body) in [("part-1", "hello "), ("part-2", "world")] {
+            let (status, resource) = send_json(
+                storage,
+                adapter,
+                "POST",
+                &format!(
+                    "http://localhost/upload/storage/v1/b/assembly/o?uploadType=media&name={name}"
+                ),
+                body.as_bytes(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            generations.push(resource["generation"].as_str().unwrap().to_string());
+        }
+        [generations[0].clone(), generations[1].clone()]
+    }
+
+    #[tokio::test]
+    async fn should_compose_gcs_sources_with_generation_preconditions() {
+        // Arrange
+        let storage = temp_storage();
+        let adapter = GcsAdapter::new();
+        let [first, second] = seed_compose_bucket(&storage, &adapter).await;
+        let compose_uri =
+            "http://localhost/storage/v1/b/assembly/o/joined/compose?ifGenerationMatch=0";
+        let request = |first_precondition: &str| {
+            serde_json::to_vec(&serde_json::json!({
+                "kind": "storage#composeRequest",
+                "sourceObjects": [
+                    {"name": "part-1", "generation": first, "objectPreconditions": {"ifGenerationMatch": first_precondition}},
+                    {"name": "part-2", "generation": second.clone()}
+                ],
+                "destination": {"name": "joined", "contentType": "text/plain", "metadata": {"stage": "composed"}}
+            }))
+            .unwrap()
+        };
+
+        // Act
+        let (stale_status, _) =
+            send_json(&storage, &adapter, "POST", compose_uri, &request("1")).await;
+        let (status, composed) =
+            send_json(&storage, &adapter, "POST", compose_uri, &request(&first)).await;
+        let (repeat_status, _) =
+            send_json(&storage, &adapter, "POST", compose_uri, &request(&first)).await;
+        let too_many = serde_json::json!({
+            "sourceObjects": vec![serde_json::json!({"name": "part-1"}); 33]
+        });
+        let (too_many_status, _) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/many/compose",
+            &serde_json::to_vec(&too_many).unwrap(),
+        )
+        .await;
+        let (method_status, _) = send_json(
+            &storage,
+            &adapter,
+            "GET",
+            "http://localhost/storage/v1/b/assembly/o/joined/compose",
+            b"",
+        )
+        .await;
+
+        // Assert
+        assert_eq!(stale_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(composed["size"], "11");
+        assert_eq!(composed["componentCount"], 2);
+        assert_eq!(composed["contentType"], "text/plain");
+        assert_eq!(composed["metadata"]["stage"], "composed");
+        assert_eq!(
+            composed["crc32c"],
+            GcsAdapter::encoded_crc32c(b"hello world")
+        );
+        assert_eq!(
+            storage.get_object("assembly", "joined").unwrap().data,
+            b"hello world"
+        );
+        assert_eq!(repeat_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(too_many_status, StatusCode::BAD_REQUEST);
+        assert!(storage.get_object_metadata("assembly", "many").is_err());
+        assert_eq!(method_status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent() {
+        // Arrange
+        let storage = temp_storage();
+        let adapter = GcsAdapter::new();
+        let [first, _] = seed_compose_bucket(&storage, &adapter).await;
+        let rewrite_uri = format!(
+            "http://localhost/storage/v1/b/assembly/o/part-1/rewriteTo/b/assembly/o/{}?ifGenerationMatch=0&ifSourceGenerationMatch={first}",
+            urlencoding::encode("final/part-1")
+        );
+        let body = br#"{"name":"final/part-1","metadata":{"published":"yes"}}"#;
+
+        // Act
+        let (status, rewritten) = send_json(&storage, &adapter, "POST", &rewrite_uri, body).await;
+        let (repeat_status, _) = send_json(&storage, &adapter, "POST", &rewrite_uri, body).await;
+        let (stale_source_status, _) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/part-1/rewriteTo/b/assembly/o/other?ifSourceGenerationMatch=1",
+            b"",
+        )
+        .await;
+        let (token_status, _) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/part-1/rewriteTo/b/assembly/o/other?rewriteToken=abc",
+            b"",
+        )
+        .await;
+        let (copy_status, copied) = send_json(
+            &storage,
+            &adapter,
+            "POST",
+            "http://localhost/storage/v1/b/assembly/o/part-2/copyTo/b/assembly/o/copy?ifGenerationMatch=0",
+            b"",
+        )
+        .await;
+
+        // Assert
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(rewritten["kind"], "storage#rewriteResponse");
+        assert_eq!(rewritten["done"], true);
+        assert_eq!(rewritten["totalBytesRewritten"], "6");
+        assert_eq!(rewritten["resource"]["name"], "final/part-1");
+        assert_eq!(rewritten["resource"]["metadata"]["published"], "yes");
+        assert_eq!(
+            storage.get_object("assembly", "final/part-1").unwrap().data,
+            b"hello "
+        );
+        assert_eq!(repeat_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(stale_source_status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(token_status, StatusCode::NOT_IMPLEMENTED);
+        assert!(storage.get_object_metadata("assembly", "other").is_err());
+        assert_eq!(copy_status, StatusCode::OK);
+        assert_eq!(copied["kind"], "storage#object");
+        assert_eq!(copied["size"], "5");
     }
 
     #[tokio::test]
@@ -8551,22 +8721,29 @@ impl GcsAdapter {
                 "contentType": stored.content_type,
                 "metadata": Self::public_metadata(&stored.metadata),
                 "kmsKeyName": Self::kms_key_resource(&stored.metadata),
+                "componentCount": Self::component_count_field(&stored.metadata),
             }))
             .to_string(),
         )
     }
 
-    /// GCS omits `kmsKeyName` for objects without a customer-managed key.
+    /// GCS omits `kmsKeyName` for objects without a customer-managed key and
+    /// `componentCount` for objects that were not composed.
     fn omit_absent_kms_key(mut resource: serde_json::Value) -> serde_json::Value {
         if let Some(fields) = resource.as_object_mut() {
-            if fields
-                .get("kmsKeyName")
-                .is_some_and(serde_json::Value::is_null)
-            {
-                fields.remove("kmsKeyName");
+            for field in ["kmsKeyName", "componentCount"] {
+                if fields.get(field).is_some_and(serde_json::Value::is_null) {
+                    fields.remove(field);
+                }
             }
         }
         resource
+    }
+
+    fn component_count_field(metadata: &HashMap<String, String>) -> Option<u64> {
+        metadata
+            .get(GCS_COMPONENT_COUNT_KEY)
+            .and_then(|count| count.parse().ok())
     }
 
     fn handle_json_api(
@@ -9353,6 +9530,11 @@ impl GcsAdapter {
             return Ok(Self::list_json_objects(storage, req, bucket));
         }
 
+        if let Some(response) =
+            self.handle_json_object_action(storage, auth_config, req, parts, bucket)?
+        {
+            return Ok(response);
+        }
         let object = match Self::decode_object_path(&parts[5..].join("/")) {
             Ok(object) => object,
             Err(error) => {
@@ -9371,6 +9553,83 @@ impl GcsAdapter {
         }
         let alt_media = req.query_param("alt") == Some("media");
         self.handle_json_object_item(storage, req, bucket, &object, alt_media)
+    }
+
+    /// Route `compose`, `rewriteTo`, and `copyTo` object actions. Object names
+    /// are percent-encoded single path segments, so the action is unambiguous.
+    fn handle_json_object_action(
+        &self,
+        storage: &Arc<dyn Storage>,
+        auth_config: &Arc<AuthConfig>,
+        req: &Request,
+        parts: &[&str],
+        bucket: &str,
+    ) -> Result<Option<Response<Body>>, String> {
+        let action = match parts {
+            [_, _, _, _, "o", _, "compose"] => "compose",
+            [_, _, _, _, "o", _, action @ ("rewriteTo" | "copyTo"), "b", _, "o", _] => action,
+            _ => return Ok(None),
+        };
+        if *req.method() != Method::POST {
+            return Ok(Some(Self::json_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "methodNotAllowed",
+                "The HTTP verb in the request is not supported.",
+            )));
+        }
+        let decode = |segment: &str| {
+            Self::decode_object_path(segment).map_err(|error| {
+                Box::new(Self::json_upload_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    &error,
+                ))
+            })
+        };
+        let object = match decode(parts[5]) {
+            Ok(object) => object,
+            Err(response) => return Ok(Some(*response)),
+        };
+        if let Err(response) = Self::authorize(req, auth_config, bucket, Some(&object)) {
+            return Ok(Some(response));
+        }
+        if let Some(response) = Self::invalid_json_mutation_headers(req) {
+            return Ok(Some(response));
+        }
+        if Self::foreign_data_protection_active(storage, bucket) {
+            return Ok(Some(Self::foreign_data_protection_json_response()));
+        }
+        if action == "compose" {
+            return self
+                .compose_json_object(storage, req, bucket, &object)
+                .map(Some);
+        }
+        let destination_bucket = match decode(parts[8]) {
+            Ok(bucket) => bucket,
+            Err(response) => return Ok(Some(*response)),
+        };
+        let destination_object = match decode(parts[10]) {
+            Ok(object) => object,
+            Err(response) => return Ok(Some(*response)),
+        };
+        if let Err(response) = Self::authorize(
+            req,
+            auth_config,
+            &destination_bucket,
+            Some(&destination_object),
+        ) {
+            return Ok(Some(response));
+        }
+        self.rewrite_json_object(
+            storage,
+            req,
+            bucket,
+            &object,
+            &destination_bucket,
+            &destination_object,
+            action == "rewriteTo",
+        )
+        .map(Some)
     }
 
     fn list_json_objects(
@@ -9753,10 +10012,13 @@ impl GcsAdapter {
             }
         }
         let previous_updated = Self::gcs_updated(&blob.metadata, blob.last_modified);
-        let metadata = Self::with_kms_key(
+        let mut metadata = Self::with_kms_key(
             metadata,
             blob.metadata.get(GCS_KMS_KEY_NAME_KEY).map(String::as_str),
         );
+        if let Some(count) = blob.metadata.get(GCS_COMPONENT_COUNT_KEY) {
+            metadata.insert(GCS_COMPONENT_COUNT_KEY.to_string(), count.clone());
+        }
         Ok(Self::metadata_with_gcs_state(
             metadata,
             Self::generation(blob),
@@ -9785,6 +10047,7 @@ impl GcsAdapter {
             "contentType": blob.content_type,
             "metadata": Self::public_metadata(&blob.metadata),
             "kmsKeyName": Self::kms_key_resource(&blob.metadata),
+            "componentCount": Self::component_count_field(&blob.metadata),
         }))
     }
 
@@ -9805,6 +10068,7 @@ impl GcsAdapter {
             "contentType": blob.content_type,
             "metadata": Self::public_metadata(&blob.metadata),
             "kmsKeyName": Self::kms_key_resource(&blob.metadata),
+            "componentCount": Self::component_count_field(&blob.metadata),
         }))
     }
 
