@@ -5702,6 +5702,237 @@
           "native-error"
         ]
       }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas": {
+      "provider": "azure",
+      "operations": [
+        "PutBlob",
+        "GetBlobProperties",
+        "ListBlobs",
+        "SetBlobMetadata",
+        "PutBlock",
+        "PutBlockList",
+        "Authenticate(service SAS)"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-auth"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "PutBlob": [
+          "positive",
+          "negative"
+        ],
+        "GetBlobProperties": [
+          "positive"
+        ],
+        "ListBlobs": [
+          "positive"
+        ],
+        "SetBlobMetadata": [
+          "negative"
+        ],
+        "PutBlock": [
+          "positive",
+          "negative"
+        ],
+        "PutBlockList": [
+          "positive"
+        ],
+        "Authenticate(service SAS)": [
+          "positive",
+          "native-auth"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.GetBlobProperties.head.current",
+        "azure-blob.ListBlobs.get.flat",
+        "azure-blob.SetBlobMetadata.put.default",
+        "azure-blob.PutBlock.put.default",
+        "azure-blob.PutBlockList.put.default",
+        "azure-blob.Authenticate.http.service-sas"
+      ],
+      "operation_id_aliases": {
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlobProperties": [
+          "azure-blob.GetBlobProperties.head.current"
+        ],
+        "ListBlobs": [
+          "azure-blob.ListBlobs.get.flat"
+        ],
+        "SetBlobMetadata": [
+          "azure-blob.SetBlobMetadata.put.default"
+        ],
+        "PutBlock": [
+          "azure-blob.PutBlock.put.default"
+        ],
+        "PutBlockList": [
+          "azure-blob.PutBlockList.put.default"
+        ],
+        "Authenticate(service SAS)": [
+          "azure-blob.Authenticate.http.service-sas"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive",
+          "negative"
+        ],
+        "azure-blob.GetBlobProperties.head.current": [
+          "positive"
+        ],
+        "azure-blob.ListBlobs.get.flat": [
+          "positive"
+        ],
+        "azure-blob.SetBlobMetadata.put.default": [
+          "negative"
+        ],
+        "azure-blob.PutBlock.put.default": [
+          "positive",
+          "negative"
+        ],
+        "azure-blob.PutBlockList.put.default": [
+          "positive"
+        ],
+        "azure-blob.Authenticate.http.service-sas": [
+          "positive",
+          "native-auth"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions": {
+      "provider": "azure",
+      "operations": [
+        "CopyBlobFromURL",
+        "CopyBlob"
+      ],
+      "checks": [
+        "positive",
+        "condition",
+        "native-error",
+        "negative"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "CopyBlobFromURL": [
+          "positive",
+          "condition",
+          "native-error"
+        ],
+        "CopyBlob": [
+          "negative"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.CopyBlobFromURL.put.sync",
+        "azure-blob.CopyBlob.put.copy-source"
+      ],
+      "operation_id_aliases": {
+        "CopyBlobFromURL": [
+          "azure-blob.CopyBlobFromURL.put.sync"
+        ],
+        "CopyBlob": [
+          "azure-blob.CopyBlob.put.copy-source"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.CopyBlobFromURL.put.sync": [
+          "positive",
+          "condition",
+          "native-error"
+        ],
+        "azure-blob.CopyBlob.put.copy-source": [
+          "negative"
+        ]
+      }
+    },
+    "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas": {
+      "provider": "azure",
+      "operations": [
+        "GetUserDelegationKey",
+        "Authenticate(user delegation SAS)",
+        "PutBlob",
+        "GetBlob",
+        "DeleteBlob"
+      ],
+      "checks": [
+        "positive",
+        "native-auth",
+        "negative"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "GetUserDelegationKey": [
+          "positive",
+          "native-auth"
+        ],
+        "Authenticate(user delegation SAS)": [
+          "positive",
+          "negative",
+          "native-auth"
+        ],
+        "PutBlob": [
+          "positive"
+        ],
+        "GetBlob": [
+          "positive"
+        ],
+        "DeleteBlob": [
+          "positive"
+        ]
+      },
+      "operation_ids": [
+        "azure-blob.GetUserDelegationKey.post.default",
+        "azure-blob.Authenticate.http.user-delegation-sas",
+        "azure-blob.PutBlob.put.BlockBlob",
+        "azure-blob.GetBlob.get.current",
+        "azure-blob.DeleteBlob.delete.current"
+      ],
+      "operation_id_aliases": {
+        "GetUserDelegationKey": [
+          "azure-blob.GetUserDelegationKey.post.default"
+        ],
+        "Authenticate(user delegation SAS)": [
+          "azure-blob.Authenticate.http.user-delegation-sas"
+        ],
+        "PutBlob": [
+          "azure-blob.PutBlob.put.BlockBlob"
+        ],
+        "GetBlob": [
+          "azure-blob.GetBlob.get.current"
+        ],
+        "DeleteBlob": [
+          "azure-blob.DeleteBlob.delete.current"
+        ]
+      },
+      "operation_id_checks": {
+        "azure-blob.GetUserDelegationKey.post.default": [
+          "positive",
+          "native-auth"
+        ],
+        "azure-blob.Authenticate.http.user-delegation-sas": [
+          "positive",
+          "negative",
+          "native-auth"
+        ],
+        "azure-blob.PutBlob.put.BlockBlob": [
+          "positive"
+        ],
+        "azure-blob.GetBlob.get.current": [
+          "positive"
+        ],
+        "azure-blob.DeleteBlob.delete.current": [
+          "positive"
+        ]
+      }
     }
   }
 }

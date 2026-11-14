@@ -93,8 +93,10 @@ The explicit `2026-10-06` SDK gate verifies Shared Key and SAS signatures,
 credential negatives, same-byte ETag revisions, conditional-write rejection,
 and persisted bytes/ETags plus SAS range reads after an owned process restart.
 Its request and response selectors are asserted, including the SAS `sv` value.
-HTTPS-only, account/user-delegation SAS, signed IP constraints, stored access
-policies and response overrides are rejected. Create-only SAS cannot overwrite
+User delegation SAS is verified with keys from Get User Delegation Key, which
+accepts only the local bearer credential, and a service SAS may pin an
+encryption scope (`ses`). HTTPS-only and account SAS, signed IP constraints,
+stored access policies and response overrides are rejected. Create-only SAS cannot overwrite
 an existing blob, including at block-list commit.
 
 ## Request and memory boundaries

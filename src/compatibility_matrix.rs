@@ -54,6 +54,13 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts",
+            "providers::azure::user_delegation::tests::should_sign_user_delegation_sas_with_version_specific_layouts_until_key_expiry",
+            "providers::azure::user_delegation::tests::should_issue_delegation_keys_only_to_bearer_callers_within_seven_days",
+            "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+            "providers::azure::copy::tests::should_evaluate_source_conditions_against_the_source_etag",
+            "providers::azure::tests::should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url",
+            "providers::azure::tests::should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions",
             "mail::ses_events::tests::should_record_every_event_type_without_a_destination",
             "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_and_ses_tags",
             "mail::providers::ses::tests::should_capture_ses_email_tags_and_configuration_set_on_the_message",
@@ -305,6 +312,9 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas",
+            "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas",
             "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing",
             "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions",
             "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",

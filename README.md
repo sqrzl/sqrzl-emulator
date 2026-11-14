@@ -140,7 +140,8 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | S3 access key and admin username. Provider and admin authentication are enabled only when both generic credential variables are present. Also supplies the Azure account or GCS HMAC access ID when that provider's native override is unset. |
 | `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | S3 signing secret and admin password. Also supplies the Azure account key or GCS HMAC secret when that provider's native override is unset. |
 | `AZURE_ACCOUNT` | Azure storage account name; set with `AZURE_ACCOUNT_KEY` | Generic access key, otherwise unset | Azure Shared Key and SAS account override. These vendor-native variables intentionally have no `SQRZL_` prefix. |
-| `AZURE_ACCOUNT_KEY` | Azure storage account key; set with `AZURE_ACCOUNT` | Generic secret, otherwise unset | Azure Shared Key and SAS signing key. Valid Base64 is decoded as Azure key material; other values are used literally. |
+| `AZURE_ACCOUNT_KEY` | Azure storage account key; set with `AZURE_ACCOUNT` | Generic secret, otherwise unset | Azure Shared Key and SAS signing key. Valid Base64 is decoded as Azure key material; other values are used literally. Also the local bearer token accepted by Get User Delegation Key. |
+| `SQRZL_AZURE_ENCRYPTION_SCOPES` | Comma-separated Azure encryption scope names | Unset (no scopes exist) | Scopes that `x-ms-encryption-scope` and SAS `ses` may name. Any other scope returns `403 AuthorizationFailure`. |
 | `GCS_HMAC_ACCESS_ID` | GCS interoperability HMAC access ID; set with `GCS_HMAC_SECRET` | Generic access key, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signed-URL identity. |
 | `GCS_HMAC_SECRET` | GCS interoperability HMAC secret; set with `GCS_HMAC_ACCESS_ID` | Generic secret, otherwise unset | GCS GOOG1/V2 and GOOG4 HMAC signing secret. |
 | `OCI_TENANCY_OCID` | OCI tenancy OCID | Unset | First component of the accepted OCI request-signing key ID. Configure all four OCI variables together. |
@@ -271,7 +272,7 @@ All provider APIs use the storage listener, normally
 | Provider | Endpoint/client setting | Local notes |
 | --- | --- | --- |
 | S3-compatible | Endpoint URL `http://localhost:9000` | Use region `us-east-1`, SigV4, and path-style addressing. |
-| Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. Shared Key and service SAS use `AZURE_ACCOUNT` and `AZURE_ACCOUNT_KEY` when configured. |
+| Azure Blob | Account URL `http://localhost:9000/devstoreaccount1` | The account is the first path segment. Shared Key and service SAS use `AZURE_ACCOUNT` and `AZURE_ACCOUNT_KEY` when configured. User delegation SAS and encryption scopes are described below. |
 | GCS JSON API | API endpoint `http://localhost:9000` | Use anonymous credentials when auth is disabled. HMAC signing uses `GCS_HMAC_ACCESS_ID` and `GCS_HMAC_SECRET`; the local JSON SDK qualification also accepts the configured secret as a bearer token. |
 | GCS XML API | `http://localhost:9000/<bucket>/<object>` | Send `Host: storage.googleapis.com` when making raw XML API requests. |
 | OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/sqrzl-emulator/b/<bucket>/...`; namespace discovery returns `sqrzl-emulator`. Authenticated requests use the four `OCI_*` identity/public-key variables and OCI RSA-SHA256 request signing. |
@@ -526,6 +527,42 @@ container.upload_blob("hello.txt", b"hello")
 ```
 
 This example expects Sqrzl authentication to be disabled.
+
+### Azure encryption scopes, server-side copy, and user delegation SAS
+
+- **Encryption scopes.** Declare the scope names your tests use in
+  `SQRZL_AZURE_ENCRYPTION_SCOPES`. Put Blob, Put Block, Put Block List, and
+  Copy Blob From URL record the scope from `x-ms-encryption-scope` or from a
+  SAS `ses` field. The scope is returned in `x-ms-encryption-scope`, in Get
+  Blob Properties, and in listings.
+  - A SAS-pinned scope that differs from the header returns
+    `400 InvalidHeaderValue`.
+  - A Put Block List that commits blocks staged under another scope fails the
+    same way.
+  - Container default scopes return `501`.
+  - Nothing is actually encrypted.
+- **Copy Blob From URL.** `PUT` with `x-ms-copy-source` and
+  `x-ms-requires-sync: true` copies a blob in the same account and returns
+  `202` with `x-ms-copy-status: success`.
+  - When authentication is enabled, the source URL must carry a SAS with read
+    permission.
+  - `x-ms-source-if-match` and `x-ms-source-if-none-match` are checked against
+    the source. A failure returns `412 SourceConditionNotMet`.
+  - `If-Match` and `If-None-Match: *` are applied atomically with the write.
+    They return `412 ConditionNotMet` or `409 BlobAlreadyExists`.
+  - Sources are limited to 64 MiB.
+  - Asynchronous Copy Blob, cross-account sources, and snapshot or version
+    sources return `501`.
+- **User delegation SAS.** `POST /<account>?restype=service&comp=userdelegationkey`
+  accepts only `Authorization: Bearer <AZURE_ACCOUNT_KEY>`; Shared Key is
+  refused, as on Azure.
+  - The key is issued for one fixed local principal and is valid for at most
+    seven days.
+  - A blob or container SAS signed with that key authorizes the same
+    permissions as a service SAS. It is refused after the key's `SignedExpiry`.
+  - The Azure SDKs refuse token credentials over plain HTTP. Send the key
+    request directly, or through an HTTPS proxy, and pass the returned key to
+    `generate_blob_sas`.
 
 ### GCS example
 

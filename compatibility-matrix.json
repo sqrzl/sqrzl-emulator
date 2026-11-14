@@ -272,16 +272,23 @@
           "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
           "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
           "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create",
-          "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes"
+          "storage_provider_parity::should_accept_azure_2024_api_version_on_existing_head_routes",
+          "providers::azure::tests::should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions",
+          "providers::azure::tests::should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url",
+          "providers::azure::copy::tests::should_evaluate_source_conditions_against_the_source_etag",
+          "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_core_blob_workflows",
           "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
-          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+          "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas",
+          "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions"
         ],
         "limitations": [
-          "Azure local versioning/soft-delete mode is mutually exclusive with S3 and GCS data-protection ownership of the same container. Conflicting activation, protected mutation, or foreign version access returns FeatureVersionMismatch 409 without mutation. Selected previous-version and snapshot mutations are either handled by the supported delete path or rejected before changing the current blob. Put Block List preserves Committed, Uncommitted, and Latest selectors and reports real block sizes. Unimplemented blob subresources return FeatureNotSupported before ordinary blob CRUD can run."
+          "Azure local versioning/soft-delete mode is mutually exclusive with S3 and GCS data-protection ownership of the same container. Conflicting activation, protected mutation, or foreign version access returns FeatureVersionMismatch 409 without mutation. Selected previous-version and snapshot mutations are either handled by the supported delete path or rejected before changing the current blob. Put Block List preserves Committed, Uncommitted, and Latest selectors and reports real block sizes. Unimplemented blob subresources return FeatureNotSupported before ordinary blob CRUD can run.",
+          "Synchronous Copy Blob From URL copies same-account sources up to 64 MiB with SAS-authorized reads and atomic source/destination ETag conditions; asynchronous copy returns 501. Encryption scopes are modeled by name only: x-ms-encryption-scope and SAS ses must name a scope declared in SQRZL_AZURE_ENCRYPTION_SCOPES, are recorded per blob and returned on reads and listings, and must match the blob's scope on append, page, metadata, and snapshot writes. Container default scopes return 501."
         ]
       },
       "metadata_headers": {
@@ -368,15 +375,19 @@
         "status": "partial",
         "verified_by": [
           "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
-          "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas"
+          "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas",
+          "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+          "providers::azure::user_delegation::tests::should_issue_delegation_keys_only_to_bearer_callers_within_seven_days",
+          "providers::azure::user_delegation::tests::should_sign_user_delegation_sas_with_version_specific_layouts_until_key_expiry"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
           "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+          "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+          "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
         ],
         "limitations": [
-          "Blob SAS read, create, write, and delete permissions are verified, including staging and committing a multi-block upload through one SDK-generated SAS. Account SAS and service-level SAS operations remain outside this subset."
+          "Blob SAS read, create, write, and delete permissions are verified, including staging and committing a multi-block upload through one SDK-generated SAS. Service SAS may pin an encryption scope (ses). User delegation SAS is verified with keys from Get User Delegation Key, which accepts only the local bearer credential. Account SAS and service-level SAS operations remain outside this subset."
         ]
       },
       "block_blob_upload": {
@@ -4225,7 +4236,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
-            "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries"
+            "sdk-tests/test_azure_sdk.py::test_azure_listing_metadata_and_include_boundaries",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4314,7 +4326,8 @@
             "provider_conformance::should_surface_truncated_response_as_body_error_on_every_storage_front_door",
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
             "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
-            "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
+            "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create",
+            "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
@@ -4327,7 +4340,9 @@
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
             "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob",
             "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
-            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas",
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4396,7 +4411,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
-            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob"
+            "sdk-tests/test_storage_auth_acceptance.py::test_azure_native_signature_error_preserves_blob",
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4473,7 +4489,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_same_byte_writes_revise_etags",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
-            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4539,7 +4556,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
             "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
             "sdk-tests/test_storage_acceptance.py::test_azure_blob_pages_conditions_and_process_restart",
-            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts"
+            "sdk-tests/test_azure_sdk.py::test_azure_2024_api_version_head_contracts",
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4572,7 +4590,8 @@
             "interop_azure::should_return_custom_metadata_given_blob_metadata_headers_when_requesting_blob_head"
           ],
           "sdk": [
-            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads"
+            "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4610,14 +4629,16 @@
             "providers::azure::tests::should_reject_malformed_azure_block_lists_without_committing",
             "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
             "providers::azure::tests::should_preserve_active_lease_across_azure_blob_overwrites",
-            "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects"
+            "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
+            "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
             "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_empty_block_list_commits",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4661,7 +4682,8 @@
             "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
             "sdk-tests/test_azure_sdk.py::test_azure_content_properties_and_upload_checksum_contract",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_azure_large_block_blob_qualification",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -4933,7 +4955,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "copy-source",
         "support_tier": "unsupported",
-        "boundary": "This exact operation/variant is not implemented; returns501 FeatureNotSupported before mutation.",
+        "boundary": "Asynchronous Copy Blob (x-ms-copy-source without x-ms-requires-sync: true) and Put Block From URL are not implemented; return 501 FeatureNotSupported before mutation. See CopyBlobFromURL.put.sync.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_create_list_and_fetch_azure_blobs",
@@ -4967,7 +4989,9 @@
             "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions"
+          ]
         },
         "acceptance_gates": {
           "positive": "not-applicable",
@@ -5520,7 +5544,7 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "shared-key",
         "support_tier": "partial",
-        "boundary": "Five selected versions; HTTP-only localhost. Account/user-delegation SAS, signed IP, policy and response overrides are rejected.",
+        "boundary": "Five selected versions; HTTP-only localhost. Account SAS, signed IP, policy and response overrides are rejected.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_concatenate_azure_canonical_headers_and_resource_without_blank_line",
@@ -5554,16 +5578,18 @@
         "path": "/{account}/{container}/{blob}",
         "variant": "service-sas",
         "support_tier": "partial",
-        "boundary": "Five selected versions; HTTP-only localhost. Account/user-delegation SAS, signed IP, policy and response overrides are rejected.",
+        "boundary": "Five selected versions; HTTP-only localhost. Account SAS, signed IP, policy and response overrides are rejected. A signed encryption scope (ses) is validated, pinned onto writes, and must match any x-ms-encryption-scope header.",
         "evidence_candidates": {
           "rust": [
             "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
-            "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas"
+            "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas",
+            "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
             "sdk-tests/test_azure_sdk.py::test_azure_sas_block_blob_workflow",
-            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart"
+            "sdk-tests/test_azure_sdk.py::test_azure_2026_authenticated_conditions_and_process_restart",
+            "sdk-tests/test_azure_sdk.py::test_azure_encryption_scope_on_writes_and_sas"
           ]
         },
         "acceptance_gates": {
@@ -9510,6 +9536,103 @@
           "native-auth": "not-applicable",
           "process-crash": "not-applicable",
           "resources": "not-applicable"
+        }
+      },
+      {
+        "id": "azure-blob.CopyBlobFromURL.put.sync",
+        "provider": "azure-blob",
+        "family": "blob_crud",
+        "operation": "CopyBlobFromURL",
+        "method": "PUT",
+        "path": "/{account}/{container}/{blob}",
+        "variant": "sync",
+        "support_tier": "partial",
+        "boundary": "Synchronous same-account copy (x-ms-requires-sync: true) to a BlockBlob; source must carry a read SAS when auth is enforced. x-ms-source-if-match/none-match and If-Match/If-None-Match are evaluated atomically with the write (412 SourceConditionNotMet/ConditionNotMet, 409 BlobAlreadyExists). x-ms-meta-* replaces metadata and x-ms-encryption-scope applies to the destination. Materializes at most 64 MiB; cross-account, snapshot/version sources, source OAuth, tags and date source conditions return 501.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions",
+            "providers::azure::tests::should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url",
+            "providers::azure::copy::tests::should_evaluate_source_conditions_against_the_source_etag"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_sync_copy_from_url_with_source_and_destination_conditions"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "azure-blob.GetUserDelegationKey.post.default",
+        "provider": "azure-blob",
+        "family": "sas_auth",
+        "operation": "GetUserDelegationKey",
+        "method": "POST",
+        "path": "/{account}?restype=service&comp=userdelegationkey",
+        "variant": "default",
+        "support_tier": "partial",
+        "boundary": "Accepts only the local bearer credential (Bearer <account key>); Shared Key and SAS are refused. Issues a key for one fixed local principal, valid at most 7 days, derived statelessly from the account key. Role assignments and tenant validation are not modeled.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+            "providers::azure::user_delegation::tests::should_issue_delegation_keys_only_to_bearer_callers_within_seven_days"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
+        }
+      },
+      {
+        "id": "azure-blob.Authenticate.http.user-delegation-sas",
+        "provider": "azure-blob",
+        "family": "sas_auth",
+        "operation": "Authenticate",
+        "method": "HTTP",
+        "path": "/{account}/{container}/{blob}",
+        "variant": "user-delegation-sas",
+        "support_tier": "partial",
+        "boundary": "Blob and container user delegation SAS signed with a key from Get User Delegation Key, using the pre-2025-07-05 or 2026-04-06+ string-to-sign; read/create/write/delete/list permissions as for service SAS, refused outside the key validity window. Agent object IDs, correlation IDs, delegated user OIDs, and signed request headers/query parameters are rejected.",
+        "evidence_candidates": {
+          "rust": [
+            "providers::azure::tests::should_authorize_blob_writes_with_a_user_delegation_sas_from_a_bearer_issued_key",
+            "providers::azure::user_delegation::tests::should_sign_user_delegation_sas_with_version_specific_layouts_until_key_expiry"
+          ],
+          "sdk": [
+            "sdk-tests/test_azure_sdk.py::test_azure_user_delegation_key_and_sas"
+          ]
+        },
+        "acceptance_gates": {
+          "positive": "pending",
+          "negative": "pending",
+          "boundary": "pending",
+          "condition": "pending",
+          "pages": "pending",
+          "restart": "pending",
+          "native-error": "pending",
+          "native-auth": "pending",
+          "process-crash": "pending",
+          "resources": "pending"
         }
       }
     ],

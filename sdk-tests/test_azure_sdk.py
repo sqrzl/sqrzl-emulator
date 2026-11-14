@@ -589,3 +589,219 @@ def test_azure_native_page_blob_extent_and_range_mutation(sqrzl_server):
     assert page.download_blob().readall() == bytes(1024)
     page.delete_blob()
     service.delete_container(container.container_name)
+
+
+def test_azure_encryption_scope_on_writes_and_sas(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    from azure.core.exceptions import HttpResponseError
+
+    service = _service(sqrzl_server)
+    container_name = sqrzl_server.bucket_name("sdk-azure-scope")
+    container = service.create_container(container_name)
+
+    scoped = container.get_blob_client("header-scoped.txt")
+    scoped.upload_blob(b"tenant a", encryption_scope="tenant-a")
+    assert scoped.get_blob_properties().encryption_scope == "tenant-a"
+    listed = {blob.name: blob.encryption_scope for blob in container.list_blobs()}
+    assert listed["header-scoped.txt"] == "tenant-a"
+    with pytest.raises(HttpResponseError) as unknown:
+        container.get_blob_client("unknown.txt").upload_blob(
+            b"x", encryption_scope="tenant-unknown"
+        )
+    assert unknown.value.status_code == 403
+    with pytest.raises(HttpResponseError) as extended:
+        scoped.set_blob_metadata({"owner": "b"}, encryption_scope="tenant-b")
+    assert extended.value.status_code == 400
+
+    if sqrzl_server.enforce_auth:
+        blob_name = "sas-scoped.bin"
+        token = azure_blob.generate_blob_sas(
+            account_name=sqrzl_server.azure_account,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=sqrzl_server.azure_account_key,
+            permission=azure_blob.BlobSasPermissions(read=True, create=True, write=True),
+            expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+            encryption_scope="tenant-b",
+        )
+        assert "ses=tenant-b" in token
+        signed = azure_blob.BlobClient.from_blob_url(
+            f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}/{container_name}/{blob_name}?{token}"
+        )
+        block_id = base64.b64encode(b"scoped-block").decode("ascii")
+        signed.stage_block(block_id=block_id, data=b"pinned")
+        signed.commit_block_list([azure_blob.BlobBlock(block_id=block_id)])
+        assert signed.get_blob_properties().encryption_scope == "tenant-b"
+        with pytest.raises(HttpResponseError) as conflicting:
+            signed.stage_block(block_id=block_id, data=b"other", encryption_scope="tenant-a")
+        assert conflicting.value.status_code == 400
+
+    container.delete_container()
+
+
+def test_azure_sync_copy_from_url_with_source_and_destination_conditions(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    from azure.core import MatchConditions
+    from azure.core.exceptions import HttpResponseError
+
+    service = _service(sqrzl_server)
+    container_name = sqrzl_server.bucket_name("sdk-azure-copy")
+    container = service.create_container(container_name)
+    staged = container.get_blob_client("staging/upload.bin")
+    staged.upload_blob(b"verified payload", metadata={"stage": "staged"})
+    staged_etag = staged.get_blob_properties().etag
+    token = azure_blob.generate_blob_sas(
+        account_name=sqrzl_server.azure_account,
+        container_name=container_name,
+        blob_name=staged.blob_name,
+        account_key=sqrzl_server.azure_account_key,
+        permission=azure_blob.BlobSasPermissions(read=True),
+        expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    source_url = f"{staged.url}?{token}"
+    final = container.get_blob_client("releases/v1.bin")
+
+    with pytest.raises(HttpResponseError) as source_mismatch:
+        final.start_copy_from_url(
+            source_url,
+            requires_sync=True,
+            source_etag='"0x0"',
+            source_match_condition=MatchConditions.IfNotModified,
+        )
+    assert source_mismatch.value.status_code == 412
+
+    copied = final.start_copy_from_url(
+        source_url,
+        requires_sync=True,
+        metadata={"release": "v1"},
+        source_etag=staged_etag,
+        source_match_condition=MatchConditions.IfNotModified,
+        match_condition=MatchConditions.IfMissing,
+        encryption_scope="tenant-a",
+    )
+    assert copied["copy_status"] == "success"
+    assert copied["copy_id"]
+    properties = final.get_blob_properties()
+    assert properties.metadata == {"release": "v1"}
+    assert properties.encryption_scope == "tenant-a"
+    assert properties.copy.status == "success"
+    assert final.download_blob().readall() == b"verified payload"
+
+    with pytest.raises(HttpResponseError) as duplicate:
+        final.start_copy_from_url(
+            source_url,
+            requires_sync=True,
+            match_condition=MatchConditions.IfMissing,
+        )
+    assert duplicate.value.status_code == 409
+    with pytest.raises(HttpResponseError) as stale:
+        final.start_copy_from_url(
+            source_url,
+            requires_sync=True,
+            etag='"0x0"',
+            match_condition=MatchConditions.IfNotModified,
+        )
+    assert stale.value.status_code == 412
+    with pytest.raises(HttpResponseError) as asynchronous:
+        container.get_blob_client("async.bin").start_copy_from_url(source_url)
+    assert asynchronous.value.status_code == 501
+
+    container.delete_container()
+
+
+def _get_user_delegation_key(sqrzl_server, start, expiry, *, bearer):
+    """Calls Get User Delegation Key directly.
+
+    The Azure SDK refuses token credentials over plain HTTP, so the local bearer
+    request is sent by hand and the response is loaded into the SDK key model.
+    """
+    import urllib.error
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    from azure.storage.blob._shared.constants import X_MS_VERSION
+
+    def iso(value):
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    request = urllib.request.Request(
+        f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}?restype=service&comp=userdelegationkey",
+        data=f"<KeyInfo><Start>{iso(start)}</Start><Expiry>{iso(expiry)}</Expiry></KeyInfo>".encode(),
+        method="POST",
+        headers={
+            "authorization": bearer,
+            "x-ms-version": X_MS_VERSION,
+            "content-type": "application/xml",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            document = ET.fromstring(response.read())
+    except urllib.error.HTTPError as error:
+        return error.code, None
+    key = azure_blob.UserDelegationKey()
+    key.signed_oid = document.findtext("SignedOid")
+    key.signed_tid = document.findtext("SignedTid")
+    key.signed_start = document.findtext("SignedStart")
+    key.signed_expiry = document.findtext("SignedExpiry")
+    key.signed_service = document.findtext("SignedService")
+    key.signed_version = document.findtext("SignedVersion")
+    key.value = document.findtext("Value")
+    return 200, key
+
+
+def test_azure_user_delegation_key_and_sas(sqrzl_server):
+    sqrzl_server.require_provider("azure")
+    if not sqrzl_server.enforce_auth:
+        pytest.skip("user delegation SAS verification requires the authenticated SDK lane")
+    from azure.core.exceptions import HttpResponseError
+
+    container_name = sqrzl_server.bucket_name("sdk-azure-delegation")
+    _service(sqrzl_server).create_container(container_name)
+    now = datetime.now(timezone.utc)
+    start, expiry = now - timedelta(minutes=5), now + timedelta(hours=2)
+    status, _ = _get_user_delegation_key(
+        sqrzl_server, start, expiry, bearer="Bearer not-the-local-key"
+    )
+    assert status == 403
+    status, key = _get_user_delegation_key(
+        sqrzl_server, start, expiry, bearer=f"Bearer {sqrzl_server.azure_account_key}"
+    )
+    assert status == 200
+    assert key.signed_service == "b"
+    assert key.signed_oid and key.signed_tid and key.value
+
+    blob_name = "delegated/report.txt"
+    token = azure_blob.generate_blob_sas(
+        account_name=sqrzl_server.azure_account,
+        container_name=container_name,
+        blob_name=blob_name,
+        user_delegation_key=key,
+        permission=azure_blob.BlobSasPermissions(
+            read=True, create=True, write=True, delete=True
+        ),
+        expiry=now + timedelta(hours=1),
+    )
+    assert "skoid=" in token
+    signed = azure_blob.BlobClient.from_blob_url(
+        f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}/{container_name}/{blob_name}?{token}"
+    )
+    signed.upload_blob(b"delegated bytes")
+    assert signed.download_blob().readall() == b"delegated bytes"
+
+    key.signed_expiry = (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    forged = azure_blob.generate_blob_sas(
+        account_name=sqrzl_server.azure_account,
+        container_name=container_name,
+        blob_name=blob_name,
+        user_delegation_key=key,
+        permission=azure_blob.BlobSasPermissions(read=True),
+        expiry=now + timedelta(hours=1),
+    )
+    with pytest.raises(HttpResponseError) as rejected:
+        azure_blob.BlobClient.from_blob_url(
+            f"{sqrzl_server.api_url}/{sqrzl_server.azure_account}/{container_name}/{blob_name}?{forged}"
+        ).download_blob()
+    assert rejected.value.status_code == 403
+    signed.delete_blob()
+    _service(sqrzl_server).delete_container(container_name)

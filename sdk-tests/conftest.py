@@ -475,6 +475,8 @@ def sqrzl_server() -> SqrzlSettings:
         env["SQRZL_SENDGRID_API_KEY"] = SENDGRID_API_KEY
     # Declared SES configuration sets let SDK tests exercise NotFoundException.
     env["SQRZL_SES_CONFIGURATION_SETS"] = "sqrzl-events"
+    # Declared Azure encryption scopes let SDK tests exercise unknown-scope failures.
+    env["SQRZL_AZURE_ENCRYPTION_SCOPES"] = "tenant-a,tenant-b"
     if enforce_auth:
         env["SQRZL_ACCESS_KEY_ID"] = DEFAULT_ACCESS_KEY
         env["SQRZL_SECRET_ACCESS_KEY"] = DEFAULT_SECRET_KEY
