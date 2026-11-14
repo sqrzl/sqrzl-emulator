@@ -38,7 +38,7 @@ async fn create_bucket(server: &LiveServer, bucket: &str) {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(component = "provider_api", provider = "oci", operation = "put_object")
 )]
@@ -53,7 +53,7 @@ fn put_object(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", payload.len());
     ctx.parameter("operations_per_batch", WRITE_BATCH_OPS);
-    let operations = ctx.measure_batch(WRITE_BATCH_OPS, || {
+    let operations = ctx.measure_batch("batch", WRITE_BATCH_OPS, || {
         for _ in 0..WRITE_BATCH_OPS {
             let object_url = format!("{object_url_prefix}/hello-{sequence}.txt");
             sequence += 1;
@@ -74,7 +74,7 @@ fn put_object(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(component = "provider_api", provider = "oci", operation = "get_object")
 )]
@@ -98,7 +98,7 @@ fn get_object(ctx: &mut StressContext) {
     });
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let request = Request::builder()
             .method("GET")
             .uri(&object_url)

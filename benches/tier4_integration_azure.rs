@@ -37,9 +37,8 @@ async fn create_container(server: &LiveServer, container: &str) {
     assert_eq!(response.status(), StatusCode::CREATED);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(component = "provider_api", provider = "azure", operation = "put_blob")
 )]
 fn put_blob(ctx: &mut StressContext) {
@@ -53,7 +52,7 @@ fn put_blob(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", payload.len());
     ctx.parameter("operations_per_batch", WRITE_BATCH_OPS);
-    let operations = ctx.measure_batch(WRITE_BATCH_OPS, || {
+    let operations = ctx.measure_batch("batch", WRITE_BATCH_OPS, || {
         for _ in 0..WRITE_BATCH_OPS {
             let blob_url = format!("{container_url}/hello-{sequence}.txt");
             sequence += 1;
@@ -76,9 +75,8 @@ fn put_blob(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(component = "provider_api", provider = "azure", operation = "get_blob")
 )]
 fn get_blob(ctx: &mut StressContext) {
@@ -107,7 +105,7 @@ fn get_blob(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", payload.len());
     ctx.parameter("operations_per_batch", GET_BATCH_OPS);
-    let operations = ctx.measure_batch(GET_BATCH_OPS, || {
+    let operations = ctx.measure_batch("batch", GET_BATCH_OPS, || {
         for _ in 0..GET_BATCH_OPS {
             let request = Request::builder()
                 .method("GET")
@@ -127,9 +125,8 @@ fn get_blob(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "azure",
@@ -162,7 +159,7 @@ fn get_blob_range(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", payload.len());
     ctx.parameter("range_size_bytes", 4 * 1024);
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let request = Request::builder()
             .method("GET")
             .uri(&blob_url)
@@ -181,9 +178,8 @@ fn get_blob_range(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "azure",
@@ -221,7 +217,7 @@ fn list_blobs(ctx: &mut StressContext) {
     );
     ctx.parameter("object_count", 128);
     ctx.parameter("operations_per_batch", LIST_BATCH_OPS);
-    let operations = ctx.measure_batch(LIST_BATCH_OPS, || {
+    let operations = ctx.measure_batch("batch", LIST_BATCH_OPS, || {
         for _ in 0..LIST_BATCH_OPS {
             let request = Request::builder()
                 .method("GET")

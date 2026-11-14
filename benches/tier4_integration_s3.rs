@@ -46,9 +46,8 @@ async fn enable_versioning(server: &LiveServer, bucket: &str) {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(component = "provider_api", provider = "s3", operation = "put_object")
 )]
 fn put_object(ctx: &mut StressContext) {
@@ -60,7 +59,7 @@ fn put_object(ctx: &mut StressContext) {
     let mut sequence = 0usize;
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let object_url = format!("{}/{}/object-{sequence}.txt", server.base_url, bucket);
         sequence += 1;
         let request = Request::builder()
@@ -79,9 +78,8 @@ fn put_object(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(component = "provider_api", provider = "s3", operation = "get_object")
 )]
 fn get_object(ctx: &mut StressContext) {
@@ -105,7 +103,7 @@ fn get_object(ctx: &mut StressContext) {
 
     ctx.parameter("payload_size_bytes", payload.len());
     ctx.parameter("operations_per_batch", GET_BATCH_OPS);
-    let operations = ctx.measure_batch(GET_BATCH_OPS, || {
+    let operations = ctx.measure_batch("batch", GET_BATCH_OPS, || {
         for _ in 0..GET_BATCH_OPS {
             let request = Request::builder()
                 .method("GET")
@@ -124,9 +122,8 @@ fn get_object(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "s3",
@@ -159,7 +156,7 @@ fn list_objects(ctx: &mut StressContext) {
     let list_url = format!("{}/{}?list-type=2", server.base_url, bucket);
     ctx.parameter("object_count", 128);
     ctx.parameter("operations_per_batch", LIST_BATCH_OPS);
-    let operations = ctx.measure_batch(LIST_BATCH_OPS, || {
+    let operations = ctx.measure_batch("batch", LIST_BATCH_OPS, || {
         for _ in 0..LIST_BATCH_OPS {
             let request = Request::builder()
                 .method("GET")
@@ -178,9 +175,8 @@ fn list_objects(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "s3",
@@ -221,7 +217,7 @@ fn list_versions(ctx: &mut StressContext) {
     assert!(warmup_listing.matches("<Version>").count() >= 32);
 
     ctx.parameter("version_count", 32);
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let request = Request::builder()
             .method("GET")
             .uri(&versions_url)

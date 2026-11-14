@@ -15,7 +15,7 @@ use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::sha2::Sha256 as RsaSha256;
 use rsa::signature::Verifier;
-use rsa::RsaPublicKey;
+use rsa::PublicKey;
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
@@ -890,8 +890,8 @@ impl OciAdapter {
             return Err(malformed());
         };
         let pem = std::fs::read_to_string(public_key_path).map_err(|_| malformed())?;
-        let public_key = RsaPublicKey::from_public_key_pem(&pem)
-            .or_else(|_| RsaPublicKey::from_pkcs1_pem(&pem))
+        let public_key = PublicKey::from_public_key_pem(&pem)
+            .or_else(|_| PublicKey::from_pkcs1_pem(&pem))
             .map_err(|_| malformed())?;
         let signature_bytes = BASE64
             .decode(parameters["signature"])
@@ -2995,8 +2995,8 @@ mod tests {
 
         let adapter = OciAdapter::new();
         let storage = temp_storage();
-        let private_key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
-            .expect("test RSA key should generate");
+        let private_key =
+            rsa::PrivateKey::new(&mut rand::rng(), 2048).expect("test RSA key should generate");
         let public_key_path =
             std::env::temp_dir().join(format!("sqrzl-oci-public-key-{}.pem", uuid::Uuid::new_v4()));
         std::fs::write(
@@ -3048,14 +3048,14 @@ mod tests {
     }
 
     struct OciTestSigner {
-        key: rsa::RsaPrivateKey,
+        key: rsa::PrivateKey,
         path: std::path::PathBuf,
     }
 
     impl OciTestSigner {
         fn new() -> Self {
             use rsa::pkcs8::{EncodePublicKey, LineEnding};
-            let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
+            let key = rsa::PrivateKey::new(&mut rand::rng(), 2048).unwrap();
             let path =
                 std::env::temp_dir().join(format!("sqrzl-oci-auth-{}.pem", uuid::Uuid::new_v4()));
             fs::write(

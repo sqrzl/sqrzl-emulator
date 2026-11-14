@@ -149,3 +149,26 @@ not passing evidence.
 
 See the [polish gap analysis](polish-gap-analysis.md) for remaining process,
 resource, diagnostics and operation-acceptance gaps.
+
+## Dependency refresh (2026-11-14)
+
+The qualification lock was regenerated in a fresh CPython 3.12 environment via
+the intentional `sdk-upgrade` extra, with eager dependency resolution. Direct
+SDK pins in `pyproject.toml`, the complete lock, its SHA256 and the baseline
+metadata advance together. The installed SDKs resolve to the same API selectors;
+operation boundaries remain those in the certification policy. New source-bound
+lane receipts are required before the refreshed baseline is qualified.
+
+The resolved tree retains `python-dateutil` 2.9 because current AWS/OCI SDKs
+require `<3`, plus `python-pkcs11` 0.9.4 and `crc32c` 2.8 because OCI pins those
+versions. Forcing their registry latest releases would violate SDK requirements.
+Google.Cloud.Storage.V1 5.0.0 and .NET SDK 11.0.100 remain the current stable
+releases and keep their existing locked restore.
+
+The CI policy scanner remains pinned to `b2a06b1`: its newer parser reports 311
+existing test-style violations across 842 discovered tests. Updating that gate
+requires a separate source-wide test-style migration. No policy check is removed
+or weakened in this dependency refresh. The stress harness itself advances to
+`e0ec8103` with its current named-measurement API; tier-2 batch samples retain one
+batch per sample and their actual logical operation counts. Smoke runs validate
+execution and correctness, not performance confidence.

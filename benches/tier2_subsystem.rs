@@ -114,16 +114,19 @@ where
     F: FnMut(),
 {
     ctx.parameter("operations_per_sample", operations);
-    let completed = ctx.measure_counted(|| {
-        for _ in 0..operations {
-            operation();
-        }
-        operations
-    });
+    let completed = ctx
+        .benchmark("batch")
+        .operations_per_sample(1)
+        .measure_batch(operations, || {
+            for _ in 0..operations {
+                operation();
+            }
+            operations
+        });
     black_box(completed)
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",
@@ -157,7 +160,7 @@ fn put_object_1k_payload(ctx: &mut StressContext) {
     let _ = ctx.correctness().attempted(completed).completed(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",
@@ -177,7 +180,7 @@ fn get_object_1k_payload(ctx: &mut StressContext) {
     });
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",
@@ -216,7 +219,7 @@ fn seed_flat_objects(storage: &FilesystemStorage, object_count: usize, payload_s
     }
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",
@@ -253,7 +256,7 @@ fn seed_directory_children(storage: &FilesystemStorage) {
     }
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",
@@ -274,7 +277,7 @@ fn list_directory_root_children(ctx: &mut StressContext) {
     });
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",
@@ -316,7 +319,7 @@ fn seed_skewed_directory_children(storage: &FilesystemStorage) {
         .expect("seed put should succeed");
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",
@@ -337,7 +340,7 @@ fn list_skewed_directory_root_children(ctx: &mut StressContext) {
     });
 }
 
-#[stress_test(
+#[stress(
     tier = 2,
     metadata(
         component = "storage",

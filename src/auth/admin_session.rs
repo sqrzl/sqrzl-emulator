@@ -95,7 +95,9 @@ impl AdminSessionManager {
             exp: now.saturating_add(ttl_seconds),
         };
 
-        let encoding_key = EncodingKey::from_secret(&self.signing_secret);
+        let encoding_key = EncodingKey::from_secret(&self.signing_secret).map_err(|err| {
+            Error::InternalError(format!("failed to initialize admin session key: {err}"))
+        })?;
 
         encode(&Header::new(Algorithm::HS256), &claims, &encoding_key).map_err(|err| {
             Error::InternalError(format!("failed to sign admin session token: {err}"))
@@ -104,7 +106,7 @@ impl AdminSessionManager {
 
     fn subject_from_token(&self, token: &str) -> Option<String> {
         let validation = Validation::new(Algorithm::HS256);
-        let decoding_key = DecodingKey::from_secret(&self.signing_secret);
+        let decoding_key = DecodingKey::from_secret(&self.signing_secret).ok()?;
         let claims = decode::<AdminSessionClaims>(token, &decoding_key, &validation)
             .ok()?
             .claims;

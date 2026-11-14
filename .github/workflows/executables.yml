@@ -57,12 +57,12 @@ jobs:
           npm ci
           npm run build
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.99.1 --profile minimal
+        run: rustup toolchain install 1.100.0 --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: native-${{ matrix.target }}
       - name: Build native executable
-        run: cargo +1.99.1 build --release --locked --bin sqrzl-emulator
+        run: cargo +1.100.0 build --release --locked --bin sqrzl-emulator
       - name: Test bundle contract
         run: python3 -m unittest discover -s scripts -p test_release_package.py
       - name: Package complete distribution

@@ -219,7 +219,7 @@ fn parse_bearer(value: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use jsonwebtoken::{encode, jwk::Jwk, EncodingKey, Header};
-    use rsa::{pkcs8::EncodePrivateKey, rand_core::OsRng, RsaPrivateKey};
+    use rsa::{pkcs8::EncodePrivateKey, PrivateKey};
     use serde_json::json;
 
     #[test]
@@ -236,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn should_validate_required_rsa_token_claims() {
         // Arrange
-        let private = RsaPrivateKey::new(&mut OsRng, 2048).expect("RSA key should generate");
+        let private = PrivateKey::new(&mut rand::rng(), 2048).expect("RSA key should generate");
         let private_pem = private
             .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
             .expect("private key should encode");

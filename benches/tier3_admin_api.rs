@@ -52,7 +52,7 @@ fn measure_admin_response_len_workload(
     uri: &str,
 ) -> u64 {
     ctx.parameter("operations_per_batch", ADMIN_BATCH_OPS);
-    let completed = ctx.measure_batch(ADMIN_BATCH_OPS, || {
+    let completed = ctx.measure_batch("batch", ADMIN_BATCH_OPS, || {
         for _ in 0..ADMIN_BATCH_OPS {
             let len = runtime.block_on(admin_response_len(storage.clone(), uri));
             black_box(len);
@@ -167,7 +167,7 @@ fn seed_object_browsing_storage() -> Arc<dyn Storage> {
     storage
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
     metadata(component = "admin_api", operation = "list_buckets", scenario = "page")
 )]
@@ -185,7 +185,7 @@ fn admin_list_buckets_page(ctx: &mut StressContext) {
     black_box(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
     metadata(
         component = "admin_api",
@@ -212,9 +212,8 @@ fn admin_list_buckets_search(ctx: &mut StressContext) {
     black_box(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
-    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "list_objects",
@@ -239,9 +238,8 @@ fn admin_list_objects_root_directory(ctx: &mut StressContext) {
     black_box(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
-    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "list_objects",
@@ -266,9 +264,8 @@ fn admin_list_objects_nested_directory(ctx: &mut StressContext) {
     black_box(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
-    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "list_objects",
@@ -293,7 +290,7 @@ fn admin_list_objects_skewed_root_directory(ctx: &mut StressContext) {
     black_box(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
     metadata(
         component = "admin_api",
@@ -320,9 +317,8 @@ fn admin_list_objects_search_flat_objects(ctx: &mut StressContext) {
     black_box(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
-    mode = "fixed_duration",
     metadata(
         component = "admin_api",
         operation = "object_detail",
@@ -346,7 +342,7 @@ fn admin_object_detail_metadata(ctx: &mut StressContext) {
     black_box(completed);
 }
 
-#[stress_test(
+#[stress(
     tier = 3,
     metadata(
         component = "admin_api",

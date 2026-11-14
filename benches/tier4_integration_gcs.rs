@@ -50,7 +50,7 @@ async fn create_json_bucket(server: &LiveServer, bucket: &str) {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(
         component = "provider_api",
@@ -67,7 +67,7 @@ fn xml_put_object(ctx: &mut StressContext) {
     let object_url = format!("{}/{}/hello.txt", server.base_url, bucket);
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let request = Request::builder()
             .method("PUT")
             .uri(&object_url)
@@ -86,9 +86,8 @@ fn xml_put_object(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
-    mode = "fixed_duration",
     metadata(
         component = "provider_api",
         provider = "gcs",
@@ -117,7 +116,7 @@ fn xml_get_object(ctx: &mut StressContext) {
     });
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let request = Request::builder()
             .method("GET")
             .uri(&object_url)
@@ -136,7 +135,7 @@ fn xml_get_object(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(
         component = "provider_api",
@@ -171,7 +170,7 @@ fn xml_list_objects(ctx: &mut StressContext) {
 
     let list_url = format!("{}/{}?prefix=item-", server.base_url, bucket);
     ctx.parameter("object_count", 128);
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let request = Request::builder()
             .method("GET")
             .uri(&list_url)
@@ -190,7 +189,7 @@ fn xml_list_objects(ctx: &mut StressContext) {
         .completed(operations);
 }
 
-#[stress_test(
+#[stress(
     tier = 4,
     metadata(
         component = "provider_api",
@@ -210,7 +209,7 @@ fn json_resumable_upload(ctx: &mut StressContext) {
     );
 
     ctx.parameter("payload_size_bytes", payload.len());
-    let operations = ctx.measure_workload(|| {
+    let operations = ctx.measure_batch("operation", 1, || {
         let init_request = Request::builder()
             .method("POST")
             .uri(&init_url)

@@ -66,7 +66,7 @@ reuse an existing server. CI installs Chromium and runs the same desktop/mobile
 journeys. `npm run gen` uses the pinned generator and formats its output; CI fails
 when regeneration changes the committed client.
 
-Node 24 or newer is required. CI and the container build use Node 26.
+Node 24.15+ (24.x) or Node 26+ is required. CI and the container build use Node 26.
 
 ## Dependencies
 
@@ -88,9 +88,9 @@ as its HTTP transport. Keep `package.json` and `package-lock.json` in sync;
 | `@playwright/test` |       `1.65.1` |
 | `@types/node`    |        `^26.6.6` |
 | `jiti`           |         `^2.7.0` |
-| `jsdom`          |        `^30.1.3` |
+| `jsdom`          |        `^31.0.1` |
 | `typescript`     |         `^7.0.2` |
-| `vite-plus`      |          `1.4.0` |
+| `vite-plus`      |          `1.6.0` |
 
 ## Routes
 

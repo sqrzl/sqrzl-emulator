@@ -1,5 +1,5 @@
 # Build UI
-FROM node:26.13.0-bookworm-slim AS frontend
+FROM node:26.13.1-bookworm-slim AS frontend
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates curl \
@@ -20,7 +20,7 @@ COPY ui/ ./
 
 RUN npm run build
 
-FROM rust:1.99.1-slim-trixie AS backend
+FROM rust:1.100.0-slim-trixie AS backend
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
