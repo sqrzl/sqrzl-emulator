@@ -7,6 +7,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'compatibility-matrix.json'
       - '.github/workflows/executables.yml'
       - 'scripts/*package*.py'
       - 'src/api/server.rs'

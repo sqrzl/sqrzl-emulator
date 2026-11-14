@@ -6094,7 +6094,8 @@
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6129,7 +6130,9 @@
             "provider_conformance::should_return_gcs_json_not_found_for_missing_bucket_operations",
             "provider_conformance::should_return_gcs_xml_no_such_bucket_across_bucket_and_object_operations"
           ],
-          "sdk": []
+          "sdk": [
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
+          ]
         },
         "acceptance_gates": {
           "positive": "pending",
@@ -6212,7 +6215,8 @@
           ],
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
-            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification"
+            "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6284,7 +6288,8 @@
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
             "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6453,7 +6458,8 @@
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_core_json_workflows",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
-            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart"
+            "sdk-tests/test_storage_acceptance.py::test_gcs_json_object_pages_conditions_and_process_restart",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6588,7 +6594,8 @@
           "sdk": [
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_upload_workflow",
             "sdk-tests/test_large_upload_qualification.py::test_gcs_large_resumable_qualification",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_isolated_resumable_checksum_contract[json]",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -6636,7 +6643,8 @@
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
@@ -9234,7 +9242,8 @@
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-xml]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[missing-json]",
             "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-xml]",
-            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]"
+            "sdk-tests/test_gcs_sdk.py::test_gcs_resumable_checksum_receipt_faults[corrupt-json]",
+            "sdk-tests/test_gcs_dotnet_sdk.py::test_gcs_dotnet_default_gzip_workflow"
           ]
         },
         "acceptance_gates": {
