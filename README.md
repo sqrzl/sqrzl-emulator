@@ -172,6 +172,37 @@ The table below is the complete runtime configuration surface.
 | `SQRZL_ACS_CONNECTION_STRING` | `endpoint=<url>;accesskey=<base64>` | Unset | Enables ACS email/SMS HMAC authentication. |
 | `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
 | `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each inbound or delivery callback attempt. |
+| `SQRZL_SES_CONFIGURATION_SETS` | Comma-separated SES configuration set names | Unset | When set, SES `SendEmail` with an unlisted `ConfigurationSetName` returns `NotFoundException`. When unset, any valid name is accepted. |
+| `SQRZL_MAIL_CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames or IP addresses | Loopback hosts | Adds SES event callback hosts to `localhost`, `127.0.0.1`, and `::1`. Redirects remain disabled. |
+| `SQRZL_MAIL_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each simulated SES event callback. |
+
+## SES event publishing simulation
+
+Captured SES messages keep their `EmailTags` and `ConfigurationSetName`; both
+appear on the admin message detail (`email_tags`, `configuration_set_name`),
+in the UI, and through the `mail_message_get` MCP tool. To test code that
+consumes SES event-publishing records:
+
+1. Optionally route a configuration set to a callback:
+   `PUT /admin/v1/ses-event-destinations/{configurationSet}` with
+   `{"callback_url": "http://127.0.0.1:8080/ses", "event_types": ["Delivery", "Bounce"]}`
+   (omit `event_types` to deliver every type).
+2. Emit an event: `POST /admin/v1/ses-events` with
+   `{"message_id": "<SES MessageId>", "event_type": "Bounce", "bounce_type": "Transient", "recipients": ["user@example.com"]}`.
+   Event types are `Send`, `Delivery`, `Bounce`, `Complaint`, `Reject`,
+   `DeliveryDelay`, and `Rendering Failure`.
+3. Read records back with `GET /admin/v1/ses-events?message_id=<id>`.
+
+Each record has `eventType`, the `mail` object (`timestamp`, `messageId`,
+`source`, `destination`, `commonHeaders`, and `tags` with the caller's tags plus
+`ses:configuration-set`, `ses:from-domain`, `ses:source-ip` and
+`ses:caller-identity`), and the per-type detail object. When the message's
+configuration set has a destination, the record is posted as an SNS
+`Notification` envelope (`x-amz-sns-message-type: Notification`) and the
+attempt is stored with the record. Delivery, Bounce, Reject, and Rendering
+Failure also update the captured copies' delivery state. The same operations
+are available as `mail_ses_event_*` MCP tools. Envelopes are unsigned; SNS
+subscriptions, signing certificates, EventBridge, and Firehose are not modelled.
 
 ## MCP and usage diagnostics
 
@@ -246,7 +277,7 @@ All provider APIs use the storage listener, normally
 | OCI Object Storage | Client endpoint `http://localhost:9000` | OCI paths use `/n/sqrzl-emulator/b/<bucket>/...`; namespace discovery returns `sqrzl-emulator`. Authenticated requests use the four `OCI_*` identity/public-key variables and OCI RSA-SHA256 request signing. |
 | SMTP | SMTP server `localhost:2525` | Plaintext local capture with strict envelope paths and null reverse-path support; SMTP AUTH and STARTTLS are intentionally unsupported. |
 | SendGrid Mail Send | API base `http://localhost:9000` | Supports the matrix-listed v3 personalizations/content/attachment subset at `POST /v3/mail/send` and optional `SQRZL_SENDGRID_API_KEY` bearer authentication. |
-| Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4; Raw, Template, and attachments are rejected. |
+| Amazon SES v2 | Endpoint URL `http://localhost:9000` | Supports the matrix-listed `Content.Simple` subset through `POST /v2/email/outbound-emails` with SigV4, including validated `EmailTags` and `ConfigurationSetName`; Raw, Template, and attachments are rejected. Admin-driven event publishing emits SES records (see below). |
 | ACS Email | Connection-string endpoint `http://localhost:9000` | Supports the matrix-listed `POST /emails:send` subset, operation polling, caller operation IDs, repeatability, and ACS HMAC authentication. |
 | Twilio Messages | API base `http://localhost:9000` | Supports outbound SMS/MMS references plus admin-driven inbound and delivery simulation. |
 | Amazon SNS | Endpoint URL `http://localhost:9000` | Supports direct `PhoneNumber` SMS `Publish` only. |

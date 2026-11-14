@@ -297,6 +297,17 @@ async fn handle_ui_request(
         return Ok(resp);
     }
 
+    if crate::api::admin_mail_events::matches_path(&path) {
+        if !admin_request_is_authorized(&req, &config, &admin_session) {
+            return Ok(admin_unauthorized_response());
+        }
+        let resp = match crate::api::admin_mail_events::handle_request(&mail, req).await {
+            Ok(resp) => resp,
+            Err(err) => crate::api::admin::error_response(&err),
+        };
+        return Ok(resp);
+    }
+
     if crate::api::admin_text::matches_path(&path) {
         if !admin_request_is_authorized(&req, &config, &admin_session) {
             return Ok(admin_unauthorized_response());

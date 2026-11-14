@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod admin_mail;
+pub mod admin_mail_events;
 pub mod admin_text;
 pub mod mcp;
 pub mod models;

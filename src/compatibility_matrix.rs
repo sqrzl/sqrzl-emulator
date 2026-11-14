@@ -54,6 +54,11 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn known_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "mail::ses_events::tests::should_record_every_event_type_without_a_destination",
+            "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_and_ses_tags",
+            "mail::providers::ses::tests::should_capture_ses_email_tags_and_configuration_set_on_the_message",
+            "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
+            "mail::providers::ses::tests::should_validate_ses_email_tag_names_values_and_duplicates",
             "providers::gcs::tests::should_rewrite_and_copy_gcs_objects_only_when_destination_is_absent",
             "providers::gcs::tests::should_compose_gcs_sources_with_generation_preconditions",
             "providers::gcs::tests::should_apply_explicit_or_bucket_default_kms_keys_to_gcs_objects",
@@ -300,6 +305,7 @@ mod tests {
 
     fn known_sdk_verifiers() -> HashSet<&'static str> {
         HashSet::from([
+            "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing",
             "sdk-tests/test_gcs_sdk.py::test_gcs_compose_rewrite_and_copy_with_preconditions",
             "sdk-tests/test_gcs_sdk.py::test_gcs_cmek_default_and_explicit_key_names",
             "sdk-tests/test_sms_sdk.py::test_twilio_messages_sdk_with_api_key",

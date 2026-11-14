@@ -5667,6 +5667,41 @@
           "positive"
         ]
       }
+    },
+    "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing": {
+      "provider": "ses",
+      "operations": [
+        "SendEmail"
+      ],
+      "checks": [
+        "positive",
+        "negative",
+        "native-error"
+      ],
+      "auth_mode": "native-if-auth-lane",
+      "scope": "Selected operations only; categories apply as listed in operation_checks.",
+      "operation_checks": {
+        "SendEmail": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      },
+      "operation_ids": [
+        "ses.SendEmail.post.Simple"
+      ],
+      "operation_id_aliases": {
+        "SendEmail": [
+          "ses.SendEmail.post.Simple"
+        ]
+      },
+      "operation_id_checks": {
+        "ses.SendEmail.post.Simple": [
+          "positive",
+          "negative",
+          "native-error"
+        ]
+      }
     }
   }
 }

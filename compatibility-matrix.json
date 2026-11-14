@@ -916,14 +916,21 @@
         "verified_by": [
           "interop_email::should_capture_ses_send_with_signature_authorization",
           "interop_email::should_reject_unsupported_mail_shapes_before_capture",
-          "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
+          "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses",
+          "mail::providers::ses::tests::should_validate_ses_email_tag_names_values_and_duplicates",
+          "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
+          "mail::providers::ses::tests::should_capture_ses_email_tags_and_configuration_set_on_the_message",
+          "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_and_ses_tags",
+          "mail::ses_events::tests::should_record_every_event_type_without_a_destination"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
-          "sdk-tests/test_email_sdk.py::test_ses_sdk_send"
+          "sdk-tests/test_email_sdk.py::test_ses_sdk_send",
+          "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing"
         ],
         "limitations": [
-          "The accepted SES v2 SendEmail subset is Content.Simple with Destination, FromEmailAddress, ReplyToAddresses, subject/body charset metadata, and up to 15 non-reserved custom headers. Content.Raw, Content.Template, Simple attachments, tags, configuration sets, feedback forwarding, tenant fields, and other top-level options are explicitly rejected. SigV4 is validated for the local endpoint, but IAM, identities, quotas, and every signing edge case are not certified."
+          "The accepted SES v2 SendEmail subset is Content.Simple with Destination, FromEmailAddress, ReplyToAddresses, subject/body charset metadata, up to 15 non-reserved custom headers, up to 50 validated unique EmailTags, and ConfigurationSetName. When SQRZL_SES_CONFIGURATION_SETS is set, unlisted configuration sets return NotFoundException; otherwise any valid name is accepted. Content.Raw, Content.Template, Simple attachments, feedback forwarding, tenant fields, and other top-level options are explicitly rejected. SigV4 is validated for the local endpoint, but IAM, identities, quotas, and every signing edge case are not certified.",
+          "Event publishing is simulated through the admin API and MCP: Send, Delivery, Bounce, Complaint, Reject, DeliveryDelay, and Rendering Failure records carry the documented mail object (including caller EmailTags and ses:* tags) and per-type detail, are readable through /admin/v1/ses-events, and are posted as unsigned SNS Notification envelopes to allowlisted HTTP callbacks configured per configuration set. SNS subscription management, signing certificates, EventBridge, Firehose, CloudWatch, and automatic event timing are not modelled."
         ]
       }
     },
@@ -8053,16 +8060,22 @@
         "path": "/v2/email/outbound-emails",
         "variant": "Simple",
         "support_tier": "partial",
-        "boundary": "Selected Simple content and SigV4; Raw, Template, attachments and unsupported options rejected.",
+        "boundary": "Selected Simple content, EmailTags, ConfigurationSetName, and SigV4; Raw, Template, attachments and unsupported options rejected.",
         "evidence_candidates": {
           "rust": [
             "interop_email::should_capture_ses_send_with_signature_authorization",
             "interop_email::should_reject_unsupported_mail_shapes_before_capture",
-            "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses"
+            "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses",
+            "mail::providers::ses::tests::should_validate_ses_email_tag_names_values_and_duplicates",
+            "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
+            "mail::providers::ses::tests::should_capture_ses_email_tags_and_configuration_set_on_the_message",
+            "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_and_ses_tags",
+            "mail::ses_events::tests::should_record_every_event_type_without_a_destination"
           ],
           "sdk": [
             "sdk-tests/test_email_sdk.py::test_ses_sdk_send",
-            "sdk-tests/test_messaging_acceptance.py::test_ses_native_auth_and_process_restart"
+            "sdk-tests/test_messaging_acceptance.py::test_ses_native_auth_and_process_restart",
+            "sdk-tests/test_email_sdk.py::test_ses_sdk_tags_configuration_set_and_event_publishing"
           ]
         },
         "acceptance_gates": {

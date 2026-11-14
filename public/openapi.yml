@@ -1180,6 +1180,118 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /ses-event-destinations/{configurationSet}:
+    get:
+      tags: [Mail]
+      operationId: getSesEventDestination
+      summary: Get the SES event destination for a configuration set
+      parameters:
+        - $ref: '#/components/parameters/SesConfigurationSet'
+      responses:
+        '200':
+          description: Destination returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SesEventDestination'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Mail]
+      operationId: putSesEventDestination
+      summary: Deliver a configuration set's events to an allowlisted HTTP callback
+      parameters:
+        - $ref: '#/components/parameters/SesConfigurationSet'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutSesEventDestinationRequest'
+      responses:
+        '200':
+          description: Destination stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SesEventDestination'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Mail]
+      operationId: deleteSesEventDestination
+      summary: Delete the SES event destination for a configuration set
+      parameters:
+        - $ref: '#/components/parameters/SesConfigurationSet'
+      responses:
+        '204':
+          description: Destination deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /ses-events:
+    get:
+      tags: [Mail]
+      operationId: listSesEvents
+      summary: List simulated SES event-publishing records
+      parameters:
+        - name: message_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Records returned oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SesEventRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Mail]
+      operationId: simulateSesEvent
+      summary: Emit an SES event-publishing record for a captured SES message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulateSesEventRequest'
+      responses:
+        '201':
+          description: Record stored and, when configured, delivered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SesEventRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   securitySchemes:
     AdminSessionCookie:
@@ -1188,6 +1300,12 @@ components:
       name: sqrzl_admin_session
       description: HttpOnly JWT session cookie issued by /auth/login.
   parameters:
+    SesConfigurationSet:
+      name: configurationSet
+      in: path
+      required: true
+      schema:
+        type: string
     BucketName:
       name: bucketName
       in: path
@@ -2109,6 +2227,140 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MessageAttachmentSummary'
+        email_tags:
+          type: array
+          description: SES EmailTags supplied by the sender.
+          items:
+            $ref: '#/components/schemas/MessageTag'
+        configuration_set_name:
+          type: string
+          description: SES ConfigurationSetName supplied by the sender.
+    MessageTag:
+      type: object
+      additionalProperties: false
+      required: [name, value]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+    SesEventType:
+      type: string
+      enum:
+        - Send
+        - Delivery
+        - Bounce
+        - Complaint
+        - Reject
+        - DeliveryDelay
+        - Rendering Failure
+    SesEventDestination:
+      type: object
+      additionalProperties: false
+      required: [configuration_set, callback_url, event_types, created_at, updated_at]
+      properties:
+        configuration_set:
+          type: string
+        callback_url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/SesEventType'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PutSesEventDestinationRequest:
+      type: object
+      additionalProperties: false
+      required: [callback_url]
+      properties:
+        callback_url:
+          type: string
+          format: uri
+        event_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/SesEventType'
+    SimulateSesEventRequest:
+      type: object
+      additionalProperties: false
+      required: [message_id, event_type]
+      properties:
+        message_id:
+          type: string
+        event_type:
+          $ref: '#/components/schemas/SesEventType'
+        recipients:
+          type: array
+          items:
+            type: string
+        bounce_type:
+          type: string
+          enum: [Undetermined, Permanent, Transient]
+        bounce_sub_type:
+          type: string
+        complaint_feedback_type:
+          type: string
+        delay_type:
+          type: string
+        reason:
+          type: string
+        smtp_response:
+          type: string
+    SesCallbackAttempt:
+      type: object
+      additionalProperties: false
+      required: [url, request_headers, request_body, state, attempted_at]
+      properties:
+        url:
+          type: string
+        request_headers:
+          type: object
+          additionalProperties:
+            type: string
+        request_body:
+          type: string
+        response_status:
+          type: integer
+        response_body:
+          type: string
+        error:
+          type: string
+        state:
+          type: string
+          enum: [succeeded, failed]
+        attempted_at:
+          type: string
+          format: date-time
+    SesEventRecord:
+      type: object
+      additionalProperties: false
+      required: [event_id, message_id, event_type, record, notification, created_at]
+      properties:
+        event_id:
+          type: string
+        message_id:
+          type: string
+        event_type:
+          $ref: '#/components/schemas/SesEventType'
+        record:
+          type: object
+          description: The SES event-publishing record.
+          additionalProperties: true
+        notification:
+          type: object
+          description: The SNS Notification envelope carrying the record.
+          additionalProperties: true
+        callback:
+          $ref: '#/components/schemas/SesCallbackAttempt'
+        created_at:
+          type: string
+          format: date-time
     MessageAttachmentSummary:
       type: object
       additionalProperties: false

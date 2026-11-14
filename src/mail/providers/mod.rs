@@ -14,7 +14,10 @@ mod ses;
 
 pub use acs::AcsEmailAdapter;
 pub use sendgrid::SendGridAdapter;
-pub use ses::SesEmailAdapter;
+pub use ses::{
+    SesEmailAdapter, ENV_SES_CONFIGURATION_SETS, SES_CONFIGURATION_SET_METADATA,
+    SES_EMAIL_TAGS_METADATA,
+};
 
 pub trait MailAdapter: Send + Sync {
     fn name(&self) -> &'static str;

@@ -1,8 +1,8 @@
-import { For, Show } from '@askrjs/askr/control';
-import { resource } from '@askrjs/askr/resources';
-import { state } from '@askrjs/askr';
-import { Link } from '@askrjs/askr/router';
-import { ArrowLeftIcon, DownloadIcon } from '@askrjs/lucide';
+import { For, Show } from "@askrjs/askr/control";
+import { resource } from "@askrjs/askr/resources";
+import { state } from "@askrjs/askr";
+import { Link } from "@askrjs/askr/router";
+import { ArrowLeftIcon, DownloadIcon } from "@askrjs/lucide";
 import {
   Button,
   DataTable,
@@ -11,7 +11,7 @@ import {
   Spinner,
   Block,
   Toolbar,
-} from '@askrjs/themes/components';
+} from "@askrjs/themes/components";
 import {
   Table,
   TableBody,
@@ -19,19 +19,20 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-} from '@askrjs/themes/components';
+} from "@askrjs/themes/components";
 import {
   MailAddress,
   MessageAttachmentSummary,
   MessageDetail,
-} from '@/adapters/api.g';
-import { formatByteCount, formatRelativeTime } from '@/shared/format';
-import { mailboxPath } from '@/shared/routes';
+  MessageTag,
+} from "@/adapters/api.g";
+import { formatByteCount, formatRelativeTime } from "@/shared/format";
+import { mailboxPath } from "@/shared/routes";
 import {
   downloadMessageAttachment,
   downloadMessageContent,
   getMessageDetail,
-} from '../messages.query';
+} from "../messages.query";
 
 export default function MessageDetails({
   mailboxName,
@@ -49,21 +50,21 @@ export default function MessageDetails({
         messageId,
         signal,
       }),
-    [mailboxName, messageId]
+    [mailboxName, messageId],
   );
 
   const [contentDownloadPending, setContentDownloadPending] = state(false);
   const [attachmentDownloadPendingId, setAttachmentDownloadPendingId] = state<
     string | null
   >(null);
-  const [downloadError, setDownloadError] = state('');
+  const [downloadError, setDownloadError] = state("");
 
   function formatMailAddress({ email, name }: MailAddress): string {
     return name ? `${name} <${email}>` : email;
   }
 
   function formatAddressList(addresses: MailAddress[]): string {
-    return addresses.map(formatMailAddress).join(', ') || 'None';
+    return addresses.map(formatMailAddress).join(", ") || "None";
   }
 
   async function startDownload({
@@ -75,7 +76,7 @@ export default function MessageDetails({
   }) {
     const blob = await resolve();
     const href = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
+    const link = document.createElement("a");
     link.href = href;
     link.download = filename;
     document.body.appendChild(link);
@@ -92,7 +93,7 @@ export default function MessageDetails({
     }
 
     setContentDownloadPending(true);
-    setDownloadError('');
+    setDownloadError("");
     try {
       await startDownload({
         filename: `${messageId}.eml`,
@@ -106,7 +107,7 @@ export default function MessageDetails({
       setDownloadError(
         error instanceof Error
           ? error.message
-          : 'The raw message content could not be downloaded.'
+          : "The raw message content could not be downloaded.",
       );
     } finally {
       setContentDownloadPending(false);
@@ -119,7 +120,7 @@ export default function MessageDetails({
     }
 
     setAttachmentDownloadPendingId(attachment.filename);
-    setDownloadError('');
+    setDownloadError("");
     try {
       await startDownload({
         filename: attachment.filename,
@@ -134,7 +135,7 @@ export default function MessageDetails({
       setDownloadError(
         error instanceof Error
           ? error.message
-          : `The attachment ${attachment.filename} could not be downloaded.`
+          : `The attachment ${attachment.filename} could not be downloaded.`,
       );
     } finally {
       setAttachmentDownloadPendingId(null);
@@ -148,7 +149,7 @@ export default function MessageDetails({
         data-sqrzl-slot="mail-message-actions"
         align="center"
         gap="xs"
-        style={{ flexWrap: 'wrap' }}
+        style={{ flexWrap: "wrap" }}
       >
         {!inline ? (
           <Button variant="secondary" asChild>
@@ -162,7 +163,7 @@ export default function MessageDetails({
           disabled={contentDownloadPending()}
         >
           <DownloadIcon aria-hidden="true" />
-          {contentDownloadPending() ? 'Downloading...' : 'Download raw content'}
+          {contentDownloadPending() ? "Downloading..." : "Download raw content"}
         </Button>
       </Block>
 
@@ -244,12 +245,20 @@ export default function MessageDetails({
                       </TableRow>
                       <TableRow>
                         <TableHeaderCell>Delivery detail</TableHeaderCell>
-                        <TableCell>{message.delivery_detail ?? '—'}</TableCell>
+                        <TableCell>{message.delivery_detail ?? "—"}</TableCell>
                       </TableRow>
                       <TableRow>
                         <TableHeaderCell>Thread ID</TableHeaderCell>
-                        <TableCell>{message.thread_id ?? '—'}</TableCell>
+                        <TableCell>{message.thread_id ?? "—"}</TableCell>
                       </TableRow>
+                      <Show when={Boolean(message.configuration_set_name)}>
+                        <TableRow>
+                          <TableHeaderCell>Configuration set</TableHeaderCell>
+                          <TableCell>
+                            {message.configuration_set_name ?? ""}
+                          </TableCell>
+                        </TableRow>
+                      </Show>
                     </TableBody>
                   </Table>
                 </DataTable>
@@ -295,16 +304,52 @@ export default function MessageDetails({
               </Block>
             </section>
 
+            <Show when={(message.email_tags ?? []).length > 0}>
+              <section aria-labelledby="mail-message-tags-title">
+                <Block direction="column" gap="sm">
+                  <Toolbar
+                    title={<span id="mail-message-tags-title">Email tags</span>}
+                  />
+                  <DataTable
+                    data-sqrzl-slot="storage-table-scroll"
+                    data-sqrzl-table-width="detail"
+                  >
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Name</TableHeaderCell>
+                          <TableHeaderCell>Value</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        <For
+                          each={message.email_tags ?? []}
+                          by={(tag: MessageTag) => tag.name}
+                        >
+                          {(tag: MessageTag) => (
+                            <TableRow key={tag.name}>
+                              <TableHeaderCell>{tag.name}</TableHeaderCell>
+                              <TableCell>{tag.value}</TableCell>
+                            </TableRow>
+                          )}
+                        </For>
+                      </TableBody>
+                    </Table>
+                  </DataTable>
+                </Block>
+              </section>
+            </Show>
+
             <section aria-labelledby="mail-message-body-title">
               <Block direction="column" gap="sm">
                 <Toolbar
                   title={<span id="mail-message-body-title">Body</span>}
                 />
                 <Show when={Boolean(message.body_text)}>
-                  <pre>{message.body_text ?? ''}</pre>
+                  <pre>{message.body_text ?? ""}</pre>
                 </Show>
                 <Show when={Boolean(message.body_html)}>
-                  <pre>{message.body_html ?? ''}</pre>
+                  <pre>{message.body_html ?? ""}</pre>
                 </Show>
               </Block>
             </section>
@@ -359,8 +404,8 @@ export default function MessageDetails({
                                   <DownloadIcon aria-hidden="true" />
                                   {attachmentDownloadPendingId() ===
                                   attachment.filename
-                                    ? 'Downloading...'
-                                    : 'Download'}
+                                    ? "Downloading..."
+                                    : "Download"}
                                 </Button>
                               </TableCell>
                             </TableRow>

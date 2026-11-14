@@ -185,6 +185,134 @@ def test_ses_sdk_send(sqrzl_server):
     assert detail["subject"] == subject
 
 
+def test_ses_sdk_tags_configuration_set_and_event_publishing(sqrzl_server):
+    sqrzl_server.require_provider("ses")
+    boto3 = pytest.importorskip("boto3")
+    botocore_config = pytest.importorskip("botocore.config")
+    botocore_exceptions = pytest.importorskip("botocore.exceptions")
+    import http.server
+    import threading
+
+    received: list[tuple[dict[str, str], bytes]] = []
+
+    class Receiver(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 - http.server API
+            length = int(self.headers.get("content-length", "0"))
+            received.append(
+                ({k.lower(): v for k, v in self.headers.items()}, self.rfile.read(length))
+            )
+            self.send_response(200)
+            self.send_header("content-length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Receiver)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        mailbox, subject = _mailbox_subject("ses-events")
+        client = boto3.client(
+            "sesv2",
+            endpoint_url=sqrzl_server.api_url,
+            aws_access_key_id=sqrzl_server.access_key_id,
+            aws_secret_access_key=sqrzl_server.secret_access_key,
+            region_name="us-east-1",
+            config=botocore_config.Config(signature_version="s3v4"),
+        )
+        content = {
+            "Simple": {
+                "Subject": {"Data": subject},
+                "Body": {"Text": {"Data": "tagged SES body"}},
+            }
+        }
+        _admin_json_request(
+            sqrzl_server,
+            "/admin/v1/ses-event-destinations/sqrzl-events",
+            method="PUT",
+            body={
+                "callback_url": f"http://127.0.0.1:{httpd.server_port}/ses",
+                "event_types": ["Delivery"],
+            },
+        )
+
+        response = client.send_email(
+            FromEmailAddress="sender@example.com",
+            Destination={"ToAddresses": [mailbox]},
+            ConfigurationSetName="sqrzl-events",
+            EmailTags=[
+                {"Name": "tenant", "Value": "tenant-a"},
+                {"Name": "order_id", "Value": "o-42.v1@shop"},
+            ],
+            Content=content,
+        )
+        message_id = response["MessageId"]
+
+        with pytest.raises(botocore_exceptions.ClientError) as missing:
+            client.send_email(
+                FromEmailAddress="sender@example.com",
+                Destination={"ToAddresses": [mailbox]},
+                ConfigurationSetName="missing-set",
+                Content=content,
+            )
+        assert missing.value.response["Error"]["Code"] == "NotFoundException"
+        with pytest.raises(botocore_exceptions.ClientError) as invalid:
+            client.send_email(
+                FromEmailAddress="sender@example.com",
+                Destination={"ToAddresses": [mailbox]},
+                EmailTags=[{"Name": "dup", "Value": "1"}, {"Name": "dup", "Value": "2"}],
+                Content=content,
+            )
+        assert invalid.value.response["Error"]["Code"] == "BadRequestException"
+
+        detail = _get_mailbox_message(sqrzl_server, mailbox, message_id)
+        assert detail["configuration_set_name"] == "sqrzl-events"
+        assert detail["email_tags"] == [
+            {"name": "tenant", "value": "tenant-a"},
+            {"name": "order_id", "value": "o-42.v1@shop"},
+        ]
+
+        delivered = _admin_json_request(
+            sqrzl_server,
+            "/admin/v1/ses-events",
+            method="POST",
+            body={"message_id": message_id, "event_type": "Delivery"},
+        )
+        complained = _admin_json_request(
+            sqrzl_server,
+            "/admin/v1/ses-events",
+            method="POST",
+            body={"message_id": message_id, "event_type": "Complaint"},
+        )
+        assert delivered["callback"]["state"] == "succeeded"
+        assert "callback" not in complained
+        assert len(received) == 1
+        headers, body = received[0]
+        assert headers["x-amz-sns-message-type"] == "Notification"
+        envelope = json.loads(body)
+        record = json.loads(envelope["Message"])
+        assert record["eventType"] == "Delivery"
+        assert record["mail"]["messageId"] == message_id
+        assert record["mail"]["tags"]["tenant"] == ["tenant-a"]
+        assert record["mail"]["tags"]["ses:configuration-set"] == ["sqrzl-events"]
+        assert record["delivery"]["recipients"] == [mailbox]
+
+        listed = _admin_json_request(
+            sqrzl_server,
+            f"/admin/v1/ses-events?message_id={urllib.parse.quote(message_id)}",
+        )
+        assert [item["event_type"] for item in listed["items"]] == [
+            "Delivery",
+            "Complaint",
+        ]
+        assert (
+            _get_mailbox_message(sqrzl_server, mailbox, message_id)["delivery_state"]
+            == "delivered"
+        )
+    finally:
+        httpd.shutdown()
+
+
 def test_azure_communication_email_sdk_send(sqrzl_server):
     sqrzl_server.require_provider("acs")
     email_mod = pytest.importorskip("azure.communication.email")

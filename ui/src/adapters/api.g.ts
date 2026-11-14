@@ -1581,8 +1581,10 @@ export type MessageDetail = {
   body_html?: string | null;
   body_text?: string | null;
   cc: Array<MailAddress>;
+  configuration_set_name?: string;
   delivery_detail?: string | null;
   delivery_state: 'accepted' | 'delivered' | 'bounced' | 'rejected';
+  email_tags?: Array<MessageTag>;
   from: MailAddress;
   headers: Record<string, string>;
   mailbox: string;
@@ -1593,6 +1595,9 @@ export type MessageDetail = {
   thread_id?: string | null;
   to: Array<MailAddress>;
 };
+
+/** MessageTag schema */
+export type MessageTag = { name: string; value: string };
 
 /** MessageSummary schema */
 export type MessageSummary = {

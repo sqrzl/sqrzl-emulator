@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::mail::model::{
     DeliveryStatus, ListMessagesParams, ListMessagesResult, MailboxInfo, Message, StoredMessage,
 };
+use crate::mail::ses_events::{SesEventDestination, SesEventRecord};
 use crate::mail::{MailStore, ALL_MAILBOX};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -30,6 +31,9 @@ type CaptureFiles = Vec<(PathBuf, Vec<u8>)>;
 const RAW_SUFFIX: &str = ".raw";
 const MAILBOX_METADATA: &str = ".mailbox";
 const MAILBOX_DIRECTORY_PREFIX: &str = "mbx-";
+// Dot-prefixed so mailbox listing never treats them as recipient mailboxes.
+const SES_EVENTS_DIR: &str = ".ses-events";
+const SES_DESTINATIONS_DIR: &str = ".ses-event-destinations";
 
 impl FilesystemMailStore {
     /// Opens (creating if needed) the `_mail` subtree under `blobs_path`.
@@ -45,6 +49,13 @@ impl FilesystemMailStore {
             root,
             capture_lock: Mutex::new(()),
         })
+    }
+
+    fn ses_destination_path(&self, configuration_set: &str) -> PathBuf {
+        self.root.join(SES_DESTINATIONS_DIR).join(format!(
+            "{}.json",
+            hex::encode(configuration_set.as_bytes())
+        ))
     }
 
     fn mailbox_dir(&self, mailbox: &str) -> Result<PathBuf> {
@@ -443,6 +454,87 @@ impl MailStore for FilesystemMailStore {
             .map_err(|_| Error::InternalError("mail capture lock poisoned".to_string()))?;
         self.ensure_mailbox_dir(mailbox)?;
         Ok(())
+    }
+
+    fn put_ses_event_destination(
+        &self,
+        destination: &SesEventDestination,
+    ) -> Result<SesEventDestination> {
+        let path = self.ses_destination_path(&destination.configuration_set);
+        let mut stored = destination.clone();
+        if let Ok(previous) = fs::read(&path)
+            .map_err(|err| io_err(&err))
+            .and_then(|bytes| {
+                serde_json::from_slice::<SesEventDestination>(&bytes)
+                    .map_err(|err| Error::InternalError(err.to_string()))
+            })
+        {
+            stored.created_at = previous.created_at;
+        }
+        let bytes =
+            serde_json::to_vec(&stored).map_err(|err| Error::InternalError(err.to_string()))?;
+        write_atomic(&path, &bytes)?;
+        Ok(stored)
+    }
+
+    fn get_ses_event_destination(&self, configuration_set: &str) -> Result<SesEventDestination> {
+        let bytes = fs::read(self.ses_destination_path(configuration_set)).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                Error::MessageNotFound
+            } else {
+                io_err(&err)
+            }
+        })?;
+        serde_json::from_slice(&bytes).map_err(|err| Error::InternalError(err.to_string()))
+    }
+
+    fn delete_ses_event_destination(&self, configuration_set: &str) -> Result<()> {
+        match fs::remove_file(self.ses_destination_path(configuration_set)) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(io_err(&err)),
+        }
+    }
+
+    fn record_ses_event(&self, event: &SesEventRecord) -> Result<()> {
+        validate_segment(&event.event_id)?;
+        let bytes =
+            serde_json::to_vec(event).map_err(|err| Error::InternalError(err.to_string()))?;
+        write_atomic(
+            &self
+                .root
+                .join(SES_EVENTS_DIR)
+                .join(format!("{}.json", event.event_id)),
+            &bytes,
+        )
+    }
+
+    fn list_ses_events(&self, message_id: Option<&str>) -> Result<Vec<SesEventRecord>> {
+        let Ok(entries) = fs::read_dir(self.root.join(SES_EVENTS_DIR)) else {
+            return Ok(Vec::new());
+        };
+        let mut events = Vec::new();
+        for entry in entries.filter_map(std::result::Result::ok) {
+            if entry.path().extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+                continue;
+            }
+            let bytes = match fs::read(entry.path()) {
+                Ok(bytes) => bytes,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(io_err(&err)),
+            };
+            let event: SesEventRecord = serde_json::from_slice(&bytes)
+                .map_err(|err| Error::InternalError(err.to_string()))?;
+            if message_id.is_none_or(|id| event.message_id.eq_ignore_ascii_case(id)) {
+                events.push(event);
+            }
+        }
+        events.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.event_id.cmp(&b.event_id))
+        });
+        Ok(events)
     }
 }
 

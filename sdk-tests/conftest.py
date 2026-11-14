@@ -473,6 +473,8 @@ def sqrzl_server() -> SqrzlSettings:
         env["SQRZL_TWILIO_API_KEY_SECRET"] = TWILIO_API_KEY_SECRET
     if "sendgrid" in enabled_providers:
         env["SQRZL_SENDGRID_API_KEY"] = SENDGRID_API_KEY
+    # Declared SES configuration sets let SDK tests exercise NotFoundException.
+    env["SQRZL_SES_CONFIGURATION_SETS"] = "sqrzl-events"
     if enforce_auth:
         env["SQRZL_ACCESS_KEY_ID"] = DEFAULT_ACCESS_KEY
         env["SQRZL_SECRET_ACCESS_KEY"] = DEFAULT_SECRET_KEY
