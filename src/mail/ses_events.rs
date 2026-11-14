@@ -15,6 +15,7 @@ use crate::sms::simulator::{send_http_callback, validate_callback_url_for, Callb
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -81,6 +82,7 @@ pub struct SesEventDestination {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SesCallbackState {
+    Pending,
     Succeeded,
     Failed,
 }
@@ -101,9 +103,25 @@ pub struct SesCallbackAttempt {
     pub attempted_at: DateTime<Utc>,
 }
 
+/// Whether every local update and callback outcome has been recorded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SesEventState {
+    Pending,
+    #[default]
+    Completed,
+}
+
 /// A simulated event-publishing record and its delivery outcome.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SesEventRecord {
+    #[serde(default)]
+    pub state: SesEventState,
+    /// Stable caller-selected identity for safe retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing, rename = "__sqrzl_request_fingerprint")]
+    pub(crate) request_fingerprint: Option<String>,
     pub event_id: String,
     pub message_id: String,
     pub event_type: SesEventType,
@@ -117,9 +135,11 @@ pub struct SesEventRecord {
 }
 
 /// Optional per-type detail for a simulated event.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SesEventRequest {
+    #[serde(default)]
+    pub request_id: Option<String>,
     pub message_id: String,
     pub event_type: SesEventType,
     /// Recipients the event applies to; defaults to every recipient.
@@ -141,6 +161,18 @@ pub struct SesEventRequest {
 
 impl SesEventRequest {
     fn validate(&self) -> Result<()> {
+        if self.request_id.as_ref().is_some_and(|id| {
+            id.is_empty()
+                || id.len() > 128
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        }) {
+            return Err(Error::InvalidRequest(
+                "request_id must contain 1-128 ASCII letters, digits, hyphens or underscores"
+                    .to_string(),
+            ));
+        }
         let field_allowed = |field: &Option<String>, name: &str, applies: bool| {
             if field.is_some() && !applies {
                 return Err(Error::InvalidRequest(format!(
@@ -220,6 +252,28 @@ impl SesEventSimulator {
     /// persistence failures. Callback failures are recorded, not returned.
     pub async fn simulate(&self, request: SesEventRequest) -> Result<SesEventRecord> {
         request.validate()?;
+        let request_id = request
+            .request_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let event_id = format!(
+            "ses-event-{}",
+            hex::encode(Sha256::digest(request_id.as_bytes()))
+        );
+        let mut payload = serde_json::to_value(&request)
+            .map_err(|error| Error::InternalError(error.to_string()))?;
+        payload
+            .as_object_mut()
+            .ok_or_else(|| {
+                Error::InternalError("SES request serialization must produce an object".to_string())
+            })?
+            .remove("request_id");
+        let fingerprint = hex::encode(Sha256::digest(payload.to_string().as_bytes()));
+        match self.store.get_ses_event(&event_id) {
+            Ok(event) => return replay(event, &fingerprint),
+            Err(Error::MessageNotFound) => {}
+            Err(error) => return Err(error),
+        }
         let stored = self
             .store
             .get_message_case_insensitive(ALL_MAILBOX, &request.message_id)?;
@@ -271,18 +325,17 @@ impl SesEventSimulator {
             },
             None => None,
         };
-        let callback = match destination {
-            Some(destination)
-                if destination.event_types.is_empty()
-                    || destination.event_types.contains(&request.event_type) =>
-            {
-                Some(deliver(&destination.callback_url, &notification).await)
-            }
-            _ => None,
-        };
-
-        let event = SesEventRecord {
-            event_id: format!("ses-event-{}", uuid::Uuid::new_v4()),
+        let callback = destination
+            .filter(|destination| {
+                destination.event_types.is_empty()
+                    || destination.event_types.contains(&request.event_type)
+            })
+            .map(|destination| pending_callback(&destination.callback_url, &notification));
+        let mut event = SesEventRecord {
+            state: SesEventState::Pending,
+            event_id,
+            request_id: Some(request_id),
+            request_fingerprint: Some(fingerprint.clone()),
             message_id: stored.message_id.clone(),
             event_type: request.event_type,
             record,
@@ -290,8 +343,17 @@ impl SesEventSimulator {
             callback,
             created_at: now,
         };
-        self.store.record_ses_event(&event)?;
+        if let Some(existing) = self.store.claim_ses_event(&event)? {
+            return replay(existing, &fingerprint);
+        }
+        // Persist intent and finish local delivery state before external effects.
+        // Replaying pending intent never repeats an uncertain callback.
         self.apply_delivery_state(&stored, request.event_type, &recipients, now)?;
+        if let Some(attempt) = event.callback.take() {
+            event.callback = Some(deliver(attempt).await);
+        }
+        event.state = SesEventState::Completed;
+        self.store.record_ses_event(&event)?;
         Ok(event)
     }
 
@@ -485,9 +547,9 @@ fn sns_notification(record: &Value, topic: &str, now: DateTime<Utc>) -> Value {
     })
 }
 
-async fn deliver(url: &str, notification: &Value) -> SesCallbackAttempt {
+fn pending_callback(url: &str, notification: &Value) -> SesCallbackAttempt {
     let body = notification.to_string();
-    let mut headers = HashMap::from([
+    let headers = HashMap::from([
         (
             "content-type".to_string(),
             "text/plain; charset=UTF-8".to_string(),
@@ -511,7 +573,22 @@ async fn deliver(url: &str, notification: &Value) -> SesCallbackAttempt {
                 .to_string(),
         ),
     ]);
-    let attempted_at = Utc::now();
+    SesCallbackAttempt {
+        url: url.to_string(),
+        request_headers: headers,
+        request_body: body,
+        response_status: None,
+        response_body: None,
+        error: None,
+        state: SesCallbackState::Pending,
+        attempted_at: Utc::now(),
+    }
+}
+
+async fn deliver(mut attempt: SesCallbackAttempt) -> SesCallbackAttempt {
+    let url = &attempt.url;
+    let body = &attempt.request_body;
+    let mut headers = attempt.request_headers.clone();
     let response = send_http_callback(MAIL_CALLBACK_POLICY, url, &headers, body.as_bytes()).await;
     headers.insert("content-length".to_string(), body.len().to_string());
     let (response_status, response_body, error, state) = match response {
@@ -529,15 +606,21 @@ async fn deliver(url: &str, notification: &Value) -> SesCallbackAttempt {
         ),
         Err(error) => (None, None, Some(error), SesCallbackState::Failed),
     };
-    SesCallbackAttempt {
-        url: url.to_string(),
-        request_headers: headers,
-        request_body: body,
-        response_status,
-        response_body,
-        error,
-        state,
-        attempted_at,
+    attempt.request_headers = headers;
+    attempt.response_status = response_status;
+    attempt.response_body = response_body;
+    attempt.error = error;
+    attempt.state = state;
+    attempt
+}
+
+fn replay(event: SesEventRecord, fingerprint: &str) -> Result<SesEventRecord> {
+    if event.request_fingerprint.as_deref() == Some(fingerprint) {
+        Ok(event)
+    } else {
+        Err(Error::InvalidRequest(
+            "request_id was already used with a different SES event payload".to_string(),
+        ))
     }
 }
 
@@ -590,6 +673,7 @@ mod tests {
 
     fn request(message_id: &str, event_type: SesEventType) -> SesEventRequest {
         SesEventRequest {
+            request_id: None,
             message_id: message_id.to_string(),
             event_type,
             recipients: Vec::new(),
@@ -603,6 +687,12 @@ mod tests {
     }
 
     async fn callback_receiver() -> (String, tokio::task::JoinHandle<String>) {
+        callback_receiver_with(|| {}).await
+    }
+
+    async fn callback_receiver_with(
+        before_response: impl FnOnce() + Send + 'static,
+    ) -> (String, tokio::task::JoinHandle<String>) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
@@ -630,6 +720,7 @@ mod tests {
                     break;
                 }
             }
+            before_response();
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .await
@@ -757,5 +848,206 @@ mod tests {
         assert!(simulator.simulate(mismatched).await.is_err());
         assert!(simulator.simulate(stranger).await.is_err());
         assert_eq!(store.list_ses_events(None).unwrap().len(), types.len());
+    }
+    #[tokio::test]
+    async fn should_not_deliver_an_event_before_persistence_succeeds() {
+        // Arrange
+        let root = std::env::temp_dir().join(format!("sqrzl-ses-failure-{}", uuid::Uuid::new_v4()));
+        let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+        let message_id = fan_out(store.as_ref(), &ses_message(Some("events"))).unwrap()[0]
+            .message_id
+            .clone();
+        let (url, receiver) = callback_receiver().await;
+        let now = Utc::now();
+        store
+            .put_ses_event_destination(&SesEventDestination {
+                configuration_set: "events".to_string(),
+                callback_url: url,
+                event_types: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+        std::fs::write(root.join("_mail/.ses-events"), b"injected failure").unwrap();
+
+        // Act
+        let result = SesEventSimulator::new(store)
+            .simulate(request(&message_id, SesEventType::Delivery))
+            .await;
+        let delivered = receiver.is_finished();
+        receiver.abort();
+
+        // Assert
+        assert!(result.is_err());
+        assert!(
+            !delivered,
+            "callback escaped before its event could be persisted"
+        );
+    }
+
+    #[tokio::test]
+    async fn should_replay_a_stable_ses_request_without_repeating_its_callback() {
+        // Arrange
+        let store = store();
+        let message_id = fan_out(store.as_ref(), &ses_message(Some("events"))).unwrap()[0]
+            .message_id
+            .clone();
+        let (url, receiver) = callback_receiver().await;
+        let now = Utc::now();
+        store
+            .put_ses_event_destination(&SesEventDestination {
+                configuration_set: "events".to_string(),
+                callback_url: url,
+                event_types: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+        let payload = json!({"request_id": "stable-request", "message_id": message_id, "event_type": "Delivery"});
+        let simulator = SesEventSimulator::new(store.clone());
+
+        // Act
+        let first = simulator
+            .simulate(serde_json::from_value(payload.clone()).unwrap())
+            .await
+            .unwrap();
+        receiver.await.unwrap();
+        let replay = simulator
+            .simulate(serde_json::from_value(payload.clone()).unwrap())
+            .await
+            .unwrap();
+        let mut conflicting = payload;
+        conflicting["event_type"] = json!("Bounce");
+        let conflict = simulator
+            .simulate(serde_json::from_value(conflicting).unwrap())
+            .await;
+
+        // Assert
+        assert_eq!(first.event_id, replay.event_id);
+        assert_eq!(store.list_ses_events(Some(&message_id)).unwrap().len(), 1);
+        assert_eq!(replay.callback.unwrap().state, SesCallbackState::Succeeded);
+        assert!(conflict.is_err());
+    }
+    #[tokio::test]
+    async fn should_preserve_pending_callback_identity_after_outcome_persistence_fails() {
+        // Arrange
+        let root = std::env::temp_dir().join(format!("sqrzl-ses-outcome-{}", uuid::Uuid::new_v4()));
+        let store: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+        let message_id = fan_out(store.as_ref(), &ses_message(Some("events"))).unwrap()[0]
+            .message_id
+            .clone();
+        let fail_root = root.clone();
+        let (url, receiver) = callback_receiver_with(move || {
+            std::fs::rename(
+                fail_root.join("_mail/.ses-events"),
+                fail_root.join("_mail/.saved-events"),
+            )
+            .unwrap();
+            std::fs::write(fail_root.join("_mail/.ses-events"), b"outcome failure").unwrap();
+        })
+        .await;
+        let now = Utc::now();
+        store
+            .put_ses_event_destination(&SesEventDestination {
+                configuration_set: "events".to_string(),
+                callback_url: url,
+                event_types: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+        let mut event_request = request(&message_id, SesEventType::Delivery);
+        event_request.request_id = Some("uncertain-outcome".to_string());
+
+        // Act
+        let first = SesEventSimulator::new(store)
+            .simulate(event_request.clone())
+            .await;
+        receiver.await.unwrap();
+        std::fs::remove_file(root.join("_mail/.ses-events")).unwrap();
+        std::fs::rename(
+            root.join("_mail/.saved-events"),
+            root.join("_mail/.ses-events"),
+        )
+        .unwrap();
+        let reopened: Arc<dyn MailStore> = Arc::new(FilesystemMailStore::open(&root).unwrap());
+        let replay = SesEventSimulator::new(reopened.clone())
+            .simulate(event_request)
+            .await
+            .unwrap();
+
+        // Assert
+        assert!(first.is_err());
+        assert_eq!(
+            replay.callback.as_ref().unwrap().state,
+            SesCallbackState::Pending
+        );
+        assert_eq!(serde_json::to_value(&replay).unwrap()["state"], "pending");
+        assert_eq!(
+            reopened.list_ses_events(Some(&message_id)).unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn should_claim_one_callback_for_concurrent_stable_ses_requests() {
+        // Arrange
+        let store = store();
+        let message_id = fan_out(store.as_ref(), &ses_message(Some("events"))).unwrap()[0]
+            .message_id
+            .clone();
+        let (url, receiver) = callback_receiver().await;
+        let now = Utc::now();
+        store
+            .put_ses_event_destination(&SesEventDestination {
+                configuration_set: "events".to_string(),
+                callback_url: url,
+                event_types: Vec::new(),
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+        let mut event_request = request(&message_id, SesEventType::Delivery);
+        event_request.request_id = Some("concurrent-request".to_string());
+        let simulator = SesEventSimulator::new(store.clone());
+
+        // Act
+        let (first, second) = tokio::join!(
+            simulator.simulate(event_request.clone()),
+            simulator.simulate(event_request)
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), receiver)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Assert
+        assert_eq!(first.event_id, second.event_id);
+        assert_ne!(first.callback.unwrap().state, SesCallbackState::Failed);
+        assert_ne!(second.callback.unwrap().state, SesCallbackState::Failed);
+        assert_eq!(store.list_ses_events(Some(&message_id)).unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn should_keep_case_distinct_request_ids_independent_of_filesystem_case_rules() {
+        // Arrange
+        let store = store();
+        let message_id = fan_out(store.as_ref(), &ses_message(None)).unwrap()[0]
+            .message_id
+            .clone();
+        let mut first = request(&message_id, SesEventType::Send);
+        first.request_id = Some("CaseSensitive".to_string());
+        let mut second = first.clone();
+        second.request_id = Some("casesensitive".to_string());
+        let simulator = SesEventSimulator::new(store.clone());
+
+        // Act
+        let first = simulator.simulate(first).await.unwrap();
+        let second = simulator.simulate(second).await.unwrap();
+
+        // Assert
+        assert_ne!(first.event_id, second.event_id);
+        assert_eq!(store.list_ses_events(Some(&message_id)).unwrap().len(), 2);
     }
 }

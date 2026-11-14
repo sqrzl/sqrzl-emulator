@@ -17,7 +17,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-const ENV_ACS_CONNECTION_STRING: &str = "ACS_CONNECTION_STRING";
 const ACS_EMAIL_MAX_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 const ACS_EMAIL_MAX_RECIPIENTS: usize = 50;
 const ACS_EMAIL_API_VERSIONS: &[&str] = &["2023-03-01", "2023-03-31", "2025-09-01"];
@@ -56,15 +55,17 @@ impl AcsEmailAdapter {
             .build()
     }
 
-    fn load_connection_string() -> Option<String> {
-        std::env::var(ENV_ACS_CONNECTION_STRING)
-            .ok()
-            .and_then(|value| parse_connection_string(&value))
+    fn load_connection_string(config: &AuthConfig) -> Option<String> {
+        config
+            .vendor_credentials
+            .acs_connection_string
+            .as_deref()
+            .and_then(parse_connection_string)
             .map(|parsed| parsed.access_key)
     }
 
-    fn is_authorized(req: &MailRequest) -> bool {
-        let Some(access_key) = Self::load_connection_string() else {
+    fn is_authorized(req: &MailRequest, config: &AuthConfig) -> bool {
+        let Some(access_key) = Self::load_connection_string(config) else {
             return true;
         };
 
@@ -439,7 +440,7 @@ impl MailAdapter for AcsEmailAdapter {
     fn handle<'a>(
         &'a self,
         mail: Arc<dyn MailStore>,
-        _auth_config: Arc<AuthConfig>,
+        auth_config: Arc<AuthConfig>,
         req: MailRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, String>> + Send + 'a>> {
         Box::pin(async move {
@@ -473,7 +474,7 @@ impl MailAdapter for AcsEmailAdapter {
                     "The ACS Email request exceeds the 10 MB service limit",
                 ));
             }
-            if !Self::is_authorized(&req) {
+            if !Self::is_authorized(&req, &auth_config) {
                 return Ok(ResponseBuilder::new(StatusCode::UNAUTHORIZED)
                     .header("x-ms-error-code", "Unauthorized")
                     .content_type("application/json; charset=utf-8")
@@ -946,10 +947,6 @@ mod tests {
         let string_to_sign = format!("{method}\n{path_and_query}\n{date};{host};{content_hash}");
         let signature = acs_hmac::sign_request(access_key, &string_to_sign)
             .expect("ACS test access key should be valid base64");
-        std::env::set_var(
-            ENV_ACS_CONNECTION_STRING,
-            format!("endpoint=http://localhost;accesskey={access_key}"),
-        );
         crate::server::RequestExt::from_hyper(
             hyper::Request::builder()
                 .method(method)
@@ -997,7 +994,12 @@ mod tests {
                     ui_port: 9001,
                     max_request_bytes: crate::config::DEFAULT_SQRZL_MAX_REQUEST_BYTES,
                     smtp_port: crate::config::DEFAULT_SQRZL_SMTP_PORT,
-                    vendor_credentials: crate::config::VendorCredentials::default(),
+                    vendor_credentials: crate::config::VendorCredentials {
+                        acs_connection_string: Some(format!(
+                            "endpoint=http://localhost;accesskey={access_key}"
+                        )),
+                        ..Default::default()
+                    },
                     mcp: crate::config::McpConfig::default(),
                 }),
                 req,

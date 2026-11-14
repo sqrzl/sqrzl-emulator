@@ -348,8 +348,13 @@ impl MailAdapter for SesEmailAdapter {
                 .get(SES_CONFIGURATION_SET_METADATA)
                 .and_then(Value::as_str)
             {
-                let declared = std::env::var(ENV_SES_CONFIGURATION_SETS).ok();
-                if !configuration_set_exists(declared.as_deref(), name) {
+                if !configuration_set_exists(
+                    auth_config
+                        .vendor_credentials
+                        .ses_configuration_sets
+                        .as_deref(),
+                    name,
+                ) {
                     return Ok(Self::not_found_response(&format!(
                         "Configuration set <{name}> does not exist."
                     )));

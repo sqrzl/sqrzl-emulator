@@ -1,5 +1,21 @@
 # Release notes
 
+## Configuration and admin reliability
+
+Vendor settings now use `TWILIO_*`, `SENDGRID_API_KEY`, `ACS_CONNECTION_STRING`,
+`AZURE_ENCRYPTION_SCOPES`, and `SES_CONFIGURATION_SETS`. Update deployments that
+used the former SQRZL-prefixed vendor names. `SQRZL_*` remains reserved for emulator
+controls. Incomplete generic or Twilio credentials, empty credentials and invalid
+ACS connection strings fail startup. Lifecycle duration overflow is rejected.
+
+SES simulations accept stable request IDs, persist intent before external delivery,
+and retain pending outcomes across interruption without automatic callback resend.
+Concurrent event destination updates no longer share temporary filenames.
+
+The admin UI supports dotted deep-link reloads, open-mode entry, visible retry
+actions and an unknown-route fallback. The generated client includes SES event
+operations and is checked against OpenAPI in CI.
+
 ## Concurrent object reads
 
 Within one emulator instance, object GET, HEAD, range, and version reads now

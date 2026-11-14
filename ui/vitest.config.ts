@@ -10,6 +10,7 @@ export default defineConfig({
   },
   plugins: [askr()],
   test: {
+    include: ['tests/**/*.{test,spec}.{ts,tsx}'],
     environment: 'jsdom',
     globals: true,
     coverage: {

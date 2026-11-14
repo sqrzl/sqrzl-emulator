@@ -272,11 +272,12 @@ def test_ses_sdk_tags_configuration_set_and_event_publishing(sqrzl_server):
             {"name": "order_id", "value": "o-42.v1@shop"},
         ]
 
+        delivery_request = {"request_id": f"delivery-{os.urandom(8).hex()}", "message_id": message_id, "event_type": "Delivery"}
         delivered = _admin_json_request(
             sqrzl_server,
             "/admin/v1/ses-events",
             method="POST",
-            body={"message_id": message_id, "event_type": "Delivery"},
+            body=delivery_request,
         )
         complained = _admin_json_request(
             sqrzl_server,
@@ -284,6 +285,10 @@ def test_ses_sdk_tags_configuration_set_and_event_publishing(sqrzl_server):
             method="POST",
             body={"message_id": message_id, "event_type": "Complaint"},
         )
+        replay = _admin_json_request(sqrzl_server, "/admin/v1/ses-events", method="POST", body=delivery_request)
+        assert replay["event_id"] == delivered["event_id"]
+        assert replay["state"] == "completed"
+        assert "__sqrzl_request_fingerprint" not in replay
         assert delivered["callback"]["state"] == "succeeded"
         assert "callback" not in complained
         assert len(received) == 1

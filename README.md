@@ -43,7 +43,7 @@ password/secret key: sqrzl-secret
 
 Use those values on the UI login page. To run an open local instance, remove
 `SQRZL_ACCESS_KEY_ID` and `SQRZL_SECRET_ACCESS_KEY` from `compose.yml`; both must
-be absent. Setting only one also leaves authentication disabled.
+be absent. Setting only one is rejected at startup.
 
 Stop the container while retaining data:
 
@@ -140,7 +140,7 @@ policy. Vendor credentials and resource settings use their provider prefix
 
 | Variable | Accepted values | Default | Description |
 | --- | --- | --- | --- |
-| `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | S3 access key and admin username. Provider and admin authentication are enabled only when both generic credential variables are present. Also supplies the Azure account or GCS HMAC access ID when that provider's native override is unset. |
+| `SQRZL_ACCESS_KEY_ID` | Any string; set together with `SQRZL_SECRET_ACCESS_KEY` | Unset | S3 access key and admin username. Provider and admin authentication are enabled only when both generic credential variables are present. Incomplete or empty credentials fail startup. Also supplies the Azure account or GCS HMAC access ID when that provider's native override is unset. |
 | `SQRZL_SECRET_ACCESS_KEY` | Any string; set together with `SQRZL_ACCESS_KEY_ID` | Unset | S3 signing secret and admin password. Also supplies the Azure account key or GCS HMAC secret when that provider's native override is unset. |
 | `AZURE_ACCOUNT` | Azure storage account name; set with `AZURE_ACCOUNT_KEY` | Generic access key, otherwise unset | Azure Shared Key and SAS account override. These vendor-native variables intentionally have no `SQRZL_` prefix. |
 | `AZURE_ACCOUNT_KEY` | Azure storage account key; set with `AZURE_ACCOUNT` | Generic secret, otherwise unset | Azure Shared Key and SAS signing key. Valid Base64 is decoded as Azure key material; other values are used literally. Also the local bearer token accepted by Get User Delegation Key. |
@@ -169,7 +169,7 @@ policy. Vendor credentials and resource settings use their provider prefix
 | `SQRZL_LOG_FORMAT` | `text` or `json` (case-insensitive) | `text` | Log output format. Unknown values fall back to `text`. |
 | `SQRZL_SMTP_PORT` | Unsigned 16-bit port | `2525` | SMTP capture listener. This is the only extra listener used by the mail domain. |
 | `SENDGRID_API_KEY` | SendGrid API key | Unset | Enables SendGrid bearer authentication when set. |
-| `TWILIO_ACCOUNT_SID` | Twilio account SID; set with `TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication only when both Twilio values are present. |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID; set with `TWILIO_AUTH_TOKEN` | Unset | Enables Twilio Basic authentication when both Twilio values are present; incomplete credentials fail startup. |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token; set with `TWILIO_ACCOUNT_SID` | Unset | Twilio Basic authentication secret and callback-signing key. |
 | `TWILIO_API_KEY_SID` | Twilio API key SID (`SK...`); set with `TWILIO_API_KEY_SECRET` | Unset | Additional Basic credential accepted for the configured account when Twilio authentication is enabled. Callbacks stay signed with the auth token. |
 | `TWILIO_API_KEY_SECRET` | Twilio API key secret; set with `TWILIO_API_KEY_SID` | Unset | Password paired with `TWILIO_API_KEY_SID`. |
@@ -181,6 +181,17 @@ policy. Vendor credentials and resource settings use their provider prefix
 | `SQRZL_MAIL_CALLBACK_TIMEOUT_MS` | Positive integer milliseconds | `5000` | Timeout for each simulated SES event callback. |
 
 ## SES event publishing simulation
+
+SES event simulation accepts an optional `request_id` (1–128 ASCII letters,
+digits, hyphens or underscores). Supply it before sending when a lost response may be retried. Reuse it with the same payload to read the
+persisted outcome without sending the callback again. Each response includes a
+request ID; retain it for retries. Reusing an ID with a changed payload is rejected.
+Events are persisted with `state: pending` before local updates or callback
+delivery. Completed processing records `state: completed` and the callback result.
+A pending record after interruption has an incomplete or uncertain outcome and is
+never resent automatically. Without a supplied request ID, each call creates a
+new event. These semantics prevent automatic duplicate delivery; they do not claim
+exactly-once delivery to an HTTP receiver.
 
 Captured SES messages keep their `EmailTags` and `ConfigurationSetName`; both
 appear on the admin message detail (`email_tags`, `configuration_set_name`),

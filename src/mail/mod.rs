@@ -181,6 +181,27 @@ pub trait MailStore: Send + Sync {
         Ok(())
     }
 
+    /// Atomically persist initial intent, returning the existing event on replay.
+    ///
+    /// # Errors
+    /// Returns an error when the store cannot durably claim events.
+    fn claim_ses_event(
+        &self,
+        _event: &ses_events::SesEventRecord,
+    ) -> Result<Option<ses_events::SesEventRecord>> {
+        Err(Error::InvalidRequest(
+            "this mail store does not support durable SES event claims".to_string(),
+        ))
+    }
+
+    /// Read one SES event by its stable identity.
+    ///
+    /// # Errors
+    /// Returns an error when the event does not exist or cannot be read.
+    fn get_ses_event(&self, _event_id: &str) -> Result<ses_events::SesEventRecord> {
+        Err(Error::MessageNotFound)
+    }
+
     /// Persists a simulated SES event record.
     ///
     /// # Errors

@@ -76,7 +76,7 @@ export default function DataTableSection({
           <EmptyState
             title={errorTitle}
             description={errorDescription}
-            actions={<Button onPress={onRetry}>Retry</Button>}
+            action={<Button onPress={onRetry}>Retry</Button>}
           />
         </Show>
 

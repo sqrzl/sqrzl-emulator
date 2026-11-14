@@ -2291,6 +2291,12 @@ components:
       additionalProperties: false
       required: [message_id, event_type]
       properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Stable identity for retries. Reusing it with a different payload is rejected.
         message_id:
           type: string
         event_type:
@@ -2333,7 +2339,7 @@ components:
           type: string
         state:
           type: string
-          enum: [succeeded, failed]
+          enum: [pending, succeeded, failed]
         attempted_at:
           type: string
           format: date-time
@@ -2342,6 +2348,13 @@ components:
       additionalProperties: false
       required: [event_id, message_id, event_type, record, notification, created_at]
       properties:
+        state:
+          type: string
+          enum: [pending, completed]
+          description: Pending means local processing or callback acknowledgement is incomplete or uncertain; replay does not repeat external delivery.
+        request_id:
+          type: string
+          description: Identity for replaying this event without repeating its callback. Pending outcomes are never resent automatically.
         event_id:
           type: string
         message_id:
@@ -2598,7 +2611,7 @@ components:
             - 'null'
         state:
           type: string
-          enum: [succeeded, failed]
+          enum: [pending, succeeded, failed]
         attempted_at:
           type: string
           format: date-time

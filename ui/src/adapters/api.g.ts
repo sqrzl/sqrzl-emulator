@@ -501,6 +501,63 @@ export function createAdapter(client: FetchClient): {
     options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
   ) => Promise<FetchResponse<Blob>>;
   /**
+   * Delete the SES event destination for a configuration set
+   *
+   * @param configurationSet - configurationSet parameter
+   * @param options - Request options (signal, timeout, operationId)
+   * @returns Promise resolving to FetchResponse<boolean>
+   */
+  deleteSesEventDestination: (
+    configurationSet: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<boolean>>;
+  /**
+   * Get the SES event destination for a configuration set
+   *
+   * @param configurationSet - configurationSet parameter
+   * @param options - Request options (signal, timeout, operationId)
+   * @returns Promise resolving to FetchResponse<SesEventDestination>
+   */
+  getSesEventDestination: (
+    configurationSet: string,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<SesEventDestination>>;
+  /**
+   * Deliver a configuration set's events to an allowlisted HTTP callback
+   *
+   * @param configurationSet - configurationSet parameter
+   * @param body - Request body
+   * @param options - Request options (signal, timeout, operationId)
+   * @returns Promise resolving to FetchResponse<SesEventDestination>
+   */
+  putSesEventDestination: (
+    configurationSet: string,
+    body: PutSesEventDestinationRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<SesEventDestination>>;
+  /**
+   * List simulated SES event-publishing records
+   *
+   * @param query - Query parameters
+   * @param options - Request options (signal, timeout, operationId)
+   * @returns Promise resolving to FetchResponse<{ items: Array<SesEventRecord> }>
+   */
+  listSesEvents: (
+    query?: { message_id?: string },
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<{ items: Array<SesEventRecord> }>>;
+  /**
+   * Emit an SES event-publishing record for a captured SES message
+   *
+   * @param body - Request body
+   * @param options - Request options (signal, timeout, operationId)
+   * @returns Promise resolving to FetchResponse<SesEventRecord>
+   */
+  simulateSesEvent: (
+    body: SimulateSesEventRequest,
+    options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+  ) => Promise<FetchResponse<SesEventRecord>>;
+  /**
    * Create a linked retry attempt without overwriting callback history
    *
    * @param attemptId - attemptId parameter
@@ -1215,6 +1272,73 @@ export function createAdapter(client: FetchClient): {
         finalOptions
       );
     },
+    deleteSesEventDestination: (
+      configurationSet: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<boolean>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'deleteSesEventDestination',
+      };
+      return client.del(
+        `/admin/v1/ses-event-destinations/${encodeURIComponent(String(configurationSet))}`,
+        undefined,
+        finalOptions
+      );
+    },
+    getSesEventDestination: (
+      configurationSet: string,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<SesEventDestination>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'getSesEventDestination',
+      };
+      return client.get(
+        `/admin/v1/ses-event-destinations/${encodeURIComponent(String(configurationSet))}`,
+        undefined,
+        finalOptions
+      );
+    },
+    putSesEventDestination: (
+      configurationSet: string,
+      body: PutSesEventDestinationRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<SesEventDestination>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'putSesEventDestination',
+      };
+      return client.put(
+        `/admin/v1/ses-event-destinations/${encodeURIComponent(String(configurationSet))}`,
+        body,
+        undefined,
+        finalOptions
+      );
+    },
+    listSesEvents: (
+      query?: { message_id?: string },
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<{ items: Array<SesEventRecord> }>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'listSesEvents',
+      };
+      const queryString = query ? buildQueryParams(query) : '';
+      const url =
+        `/admin/v1/ses-events` + (queryString ? '?' + queryString : '');
+      return client.get(url, undefined, finalOptions);
+    },
+    simulateSesEvent: (
+      body: SimulateSesEventRequest,
+      options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
+    ): Promise<FetchResponse<SesEventRecord>> => {
+      const finalOptions = {
+        ...options,
+        operationId: options?.operationId ?? 'simulateSesEvent',
+      };
+      return client.post(`/admin/v1/ses-events`, body, undefined, finalOptions);
+    },
     retryTextCallback: (
       attemptId: string,
       options?: { signal?: AbortSignal; timeout?: number; operationId?: string }
@@ -1596,9 +1720,6 @@ export type MessageDetail = {
   to: Array<MailAddress>;
 };
 
-/** MessageTag schema */
-export type MessageTag = { name: string; value: string };
-
 /** MessageSummary schema */
 export type MessageSummary = {
   delivery_state: 'accepted' | 'delivered' | 'bounced' | 'rejected';
@@ -1608,6 +1729,9 @@ export type MessageSummary = {
   subject: string;
   to: Array<MailAddress>;
 };
+
+/** MessageTag schema */
+export type MessageTag = { name: string; value: string };
 
 /** MultipartPart schema */
 export type MultipartPart = {
@@ -1679,8 +1803,72 @@ export type PolicyStatementDocument = {
   Sid?: string | null;
 };
 
+/** PutSesEventDestinationRequest schema */
+export type PutSesEventDestinationRequest = {
+  callback_url: string;
+  event_types?: Array<SesEventType>;
+};
+
 /** PutTextDestinationRequest schema */
 export type PutTextDestinationRequest = { callback_url: string };
+
+/** SesCallbackAttempt schema */
+export type SesCallbackAttempt = {
+  attempted_at: string;
+  error?: string;
+  request_body: string;
+  request_headers: Record<string, string>;
+  response_body?: string;
+  response_status?: number;
+  state: 'pending' | 'succeeded' | 'failed';
+  url: string;
+};
+
+/** SesEventDestination schema */
+export type SesEventDestination = {
+  callback_url: string;
+  configuration_set: string;
+  created_at: string;
+  event_types: Array<SesEventType>;
+  updated_at: string;
+};
+
+/** SesEventRecord schema */
+export type SesEventRecord = {
+  callback?: SesCallbackAttempt;
+  created_at: string;
+  event_id: string;
+  event_type: SesEventType;
+  message_id: string;
+  notification: Record<string, any>;
+  record: Record<string, any>;
+  request_id?: string;
+  state?: 'pending' | 'completed';
+};
+
+/** SesEventType schema */
+export type SesEventType =
+  | 'Send'
+  | 'Delivery'
+  | 'Bounce'
+  | 'Complaint'
+  | 'Reject'
+  | 'DeliveryDelay'
+  | 'Rendering Failure';
+
+/** SimulateSesEventRequest schema */
+export type SimulateSesEventRequest = {
+  bounce_sub_type?: string;
+  bounce_type?: 'Undetermined' | 'Permanent' | 'Transient';
+  complaint_feedback_type?: string;
+  delay_type?: string;
+  event_type: SesEventType;
+  message_id: string;
+  reason?: string;
+  recipients?: Array<string>;
+  request_id?: string;
+  smtp_response?: string;
+};
 
 /** SuccessResponse schema */
 export type SuccessResponse = { success: boolean };
@@ -1704,7 +1892,7 @@ export type TextCallbackAttempt = {
   response_body?: string | null;
   response_status?: number | null;
   retry_of?: string | null;
-  state: 'succeeded' | 'failed';
+  state: 'pending' | 'succeeded' | 'failed';
   url: string;
 };
 

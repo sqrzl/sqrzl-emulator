@@ -16,10 +16,6 @@ pub(super) const AZURE_ENCRYPTION_SCOPE_KEY: &str = "azure_encryption_scope";
 const AZURE_ENCRYPTION_SCOPES_ENV: &str = "AZURE_ENCRYPTION_SCOPES";
 const SCOPE_HEADER: &str = "x-ms-encryption-scope";
 
-fn declared_scopes() -> Vec<String> {
-    parse_declared_scopes(std::env::var(AZURE_ENCRYPTION_SCOPES_ENV).ok().as_deref())
-}
-
 fn parse_declared_scopes(raw: Option<&str>) -> Vec<String> {
     raw.unwrap_or_default()
         .split(',')
@@ -51,8 +47,14 @@ pub(super) fn write_scope(req: &Request) -> Option<String> {
 /// Returns the Azure error response for an empty header, a header that differs
 /// from the SAS-pinned scope, or a scope the emulator account does not declare.
 #[allow(clippy::result_large_err)]
-pub(super) fn validate_write_scope(req: &Request) -> Result<Option<String>, Response<Body>> {
-    validate_write_scope_with(req, &declared_scopes())
+pub(super) fn validate_write_scope(
+    req: &Request,
+    config: &crate::Config,
+) -> Result<Option<String>, Response<Body>> {
+    validate_write_scope_with(
+        req,
+        &parse_declared_scopes(config.vendor_credentials.azure_encryption_scopes.as_deref()),
+    )
 }
 
 #[allow(clippy::result_large_err)]

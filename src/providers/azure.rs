@@ -2879,7 +2879,7 @@ impl AzureBlobAdapter {
         }
         let comp = req.query_param("comp");
         if let Some(response) =
-            Self::reject_encryption_scope_conflict(storage, req, container, blob_key)?
+            Self::reject_encryption_scope_conflict(storage, auth_config, req, container, blob_key)?
         {
             return Ok(response);
         }
@@ -2949,6 +2949,7 @@ impl AzureBlobAdapter {
     /// the scope; writes that extend an existing blob must name its scope.
     fn reject_encryption_scope_conflict(
         storage: &Arc<dyn Storage>,
+        config: &AuthConfig,
         req: &Request,
         container: &str,
         blob_key: &str,
@@ -2964,7 +2965,7 @@ impl AzureBlobAdapter {
         {
             return Ok(None);
         }
-        let scope = match encryption_scope::validate_write_scope(req) {
+        let scope = match encryption_scope::validate_write_scope(req, config) {
             Ok(scope) => scope,
             Err(response) => return Ok(Some(response)),
         };

@@ -1,4 +1,5 @@
-import { createRouteRegistry, group } from '@askrjs/askr/router';
+import { createRouteRegistry, fallback, group } from '@askrjs/askr/router';
+import NotFoundPage from './not-found';
 import RootLayout from './_layout';
 import { registerAppRoutes } from './app/_routes';
 import AppLayout from './app/_layout';
@@ -15,9 +16,11 @@ export const routeRegistry = createRouteRegistry(
       group({ layout: AppLayout, auth: requireUser() }, () => {
         registerAppRoutes();
       });
+      fallback(NotFoundPage);
     });
   },
   {
+    trailingSlash: 'never',
     auth: {
       resolve: resolveAdminSession,
       loginPath: (context) =>

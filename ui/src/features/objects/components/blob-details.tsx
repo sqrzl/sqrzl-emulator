@@ -107,7 +107,7 @@ export default function BlobDetails({
         <EmptyState
           title="Blob details could not load"
           description="Retry the admin API call to see the blob details."
-          actions={<Button onPress={() => metadata.refresh()}>Retry</Button>}
+          action={<Button onPress={() => metadata.refresh()}>Retry</Button>}
         />
       </Show>
 

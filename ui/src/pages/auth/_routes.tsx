@@ -1,4 +1,5 @@
-import { route } from '@askrjs/askr/router';
+import { group, route } from '@askrjs/askr/router';
+import { requireAnonymous } from '@askrjs/auth';
 import LoginPage from './login';
 import LogoutPage from './logout';
 
@@ -15,6 +16,6 @@ export function registerLogoutRoute(): void {
 }
 
 export function registerAuthRoutes(): void {
-  registerGuestRoutes();
+  group({ auth: requireAnonymous() }, registerGuestRoutes);
   registerLogoutRoute();
 }

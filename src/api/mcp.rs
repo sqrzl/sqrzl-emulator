@@ -718,7 +718,7 @@ fn tool_specs() -> Vec<ToolSpec> {
             "sqrzl:write",
             "POST",
             "/admin/v1/ses-events",
-            r#"{"type":"object","properties":{"message_id":{"type":"string"},"event_type":{"type":"string","enum":["Send","Delivery","Bounce","Complaint","Reject","DeliveryDelay","Rendering Failure"]},"recipients":{"type":"array","items":{"type":"string"}},"bounce_type":{"type":"string","enum":["Undetermined","Permanent","Transient"]},"bounce_sub_type":{"type":"string"},"complaint_feedback_type":{"type":"string"},"delay_type":{"type":"string"},"reason":{"type":"string"},"smtp_response":{"type":"string"}},"required":["message_id","event_type"]}"#
+            r#"{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},"message_id":{"type":"string"},"event_type":{"type":"string","enum":["Send","Delivery","Bounce","Complaint","Reject","DeliveryDelay","Rendering Failure"]},"recipients":{"type":"array","items":{"type":"string"}},"bounce_type":{"type":"string","enum":["Undetermined","Permanent","Transient"]},"bounce_sub_type":{"type":"string"},"complaint_feedback_type":{"type":"string"},"delay_type":{"type":"string"},"reason":{"type":"string"},"smtp_response":{"type":"string"}},"required":["message_id","event_type"]}"#
         ),
         tool!(
             "mail_ses_events_list",

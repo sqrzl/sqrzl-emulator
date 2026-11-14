@@ -119,7 +119,7 @@ export default function MessageDetails({
         <EmptyState
           title="Text message could not load"
           description="Retry the admin API call to inspect this message."
-          actions={<Button onPress={() => detail.refresh()}>Retry</Button>}
+          action={<Button onPress={() => detail.refresh()}>Retry</Button>}
         />
       </Show>
       <Show when={detail.pending && !detail.value}>

@@ -185,6 +185,12 @@ jobs:
         working-directory: ui
         run: npm ci
 
+      - name: Check generated admin API client
+        working-directory: ui
+        run: |
+          npm run gen
+          git diff --exit-code -- src/adapters/api.g.ts
+
       - name: Type check
         working-directory: ui
         run: npm run type-check
@@ -200,6 +206,32 @@ jobs:
       - name: Build
         working-directory: ui
         run: npm run build
+
+      - name: Cache browser test server dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci"
+
+      - name: Prepare real-server browser tests
+        run: |
+          rustup update stable
+          cargo build --locked --bin sqrzl-emulator
+
+      - name: Install Chromium
+        working-directory: ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser journeys against the Rust server
+        working-directory: ui
+        run: npm run test:e2e
+
+      - name: Preserve browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-failures-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ui/.playwright/results
+          if-no-files-found: ignore
 
   container-smoke:
     runs-on: ubuntu-latest

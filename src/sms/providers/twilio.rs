@@ -101,14 +101,14 @@ impl TwilioSmsAdapter {
         }
     }
 
-    fn credentials() -> Option<(String, String)> {
-        let account = std::env::var("TWILIO_ACCOUNT_SID").ok()?;
-        let token = std::env::var("TWILIO_AUTH_TOKEN").ok()?;
+    fn credentials(config: &AuthConfig) -> Option<(String, String)> {
+        let account = config.vendor_credentials.twilio_account_sid.clone()?;
+        let token = config.vendor_credentials.twilio_auth_token.clone()?;
         Some((account, token))
     }
 
-    fn authorized(request: &SmsRequest, path_account: &str) -> bool {
-        let Some((account, token)) = Self::credentials() else {
+    fn authorized(request: &SmsRequest, path_account: &str, config: &AuthConfig) -> bool {
+        let Some((account, token)) = Self::credentials(config) else {
             return true;
         };
         if account != path_account {
@@ -123,12 +123,12 @@ impl TwilioSmsAdapter {
         let Ok(decoded) = BASE64.decode(value) else {
             return false;
         };
-        basic_credentials_match(&decoded, &account, &token, Self::api_key())
+        basic_credentials_match(&decoded, &account, &token, Self::api_key(config))
     }
 
-    fn api_key() -> Option<(String, String)> {
-        let sid = std::env::var("TWILIO_API_KEY_SID").ok()?;
-        let secret = std::env::var("TWILIO_API_KEY_SECRET").ok()?;
+    fn api_key(config: &AuthConfig) -> Option<(String, String)> {
+        let sid = config.vendor_credentials.twilio_api_key_sid.clone()?;
+        let secret = config.vendor_credentials.twilio_api_key_secret.clone()?;
         (!sid.is_empty() && !secret.is_empty()).then_some((sid, secret))
     }
 
@@ -383,7 +383,7 @@ impl SmsAdapter for TwilioSmsAdapter {
     fn handle<'a>(
         &'a self,
         store: Arc<dyn SmsStore>,
-        _auth: Arc<AuthConfig>,
+        auth: Arc<AuthConfig>,
         request: SmsRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, String>> + Send + 'a>> {
         Box::pin(async move {
@@ -401,7 +401,7 @@ impl SmsAdapter for TwilioSmsAdapter {
                     "AccountSid must be a valid AC SID.",
                 ));
             }
-            if !Self::authorized(&request, account) {
+            if !Self::authorized(&request, account, &auth) {
                 return Ok(Self::error(
                     StatusCode::UNAUTHORIZED,
                     20_003,

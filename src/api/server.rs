@@ -669,7 +669,9 @@ fn admin_payload_too_large_response(max_request_bytes: usize) -> Response<Body> 
 
 async fn serve_static_content(static_dir: &Path, request_path: &str) -> Response<Body> {
     let normalized_path = request_path.trim_start_matches('/');
-    let is_spa_route = normalized_path == "app"
+    let is_spa_route = normalized_path == "admin"
+        || normalized_path.starts_with("admin/")
+        || normalized_path == "app"
         || normalized_path.starts_with("app/")
         || normalized_path == "auth"
         || normalized_path.starts_with("auth/");
@@ -1050,6 +1052,33 @@ mod tests {
                 .to_str()
                 .expect("content-type should be valid utf-8"),
             "text/html; charset=utf-8"
+        );
+    }
+    #[tokio::test]
+    async fn should_serve_current_admin_deep_links_as_spa_documents() {
+        // Arrange
+        let root = temp_static_dir();
+        fs::write(root.join("index.html"), "<div id=\"app\"></div>").unwrap();
+        let mut statuses = Vec::new();
+
+        // Act
+        for path in [
+            "/admin/mailboxes/team%40example.com",
+            "/admin/buckets/example/folder.with.dot",
+            "/admin/blobs/example/blob.txt",
+            "/login",
+            "/logout",
+        ] {
+            statuses.push(serve_static_content(&root, path).await.status());
+        }
+
+        // Assert
+        assert_eq!(statuses, vec![StatusCode::OK; 5]);
+        assert_eq!(
+            serve_static_content(&root, "/assets/missing.js")
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
         );
     }
 }
