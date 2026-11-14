@@ -971,7 +971,7 @@ mod tests {
         // Arrange
         let mail = temp_mail();
         let body = r#"{"FromEmailAddress":"alice@example.com","Destination":{"ToAddresses":["bob@example.com"]},"ConfigurationSetName":"events","EmailTags":[{"Name":"tenant","Value":"a"}],"Content":{"Simple":{"Subject":{"Data":"tagged"},"Body":{"Text":{"Data":"hello"}}}}}"#;
-        let req = request_with_signature(body, "test-key", "test-secret").await;
+        let req = request_with_signature(body, "test-key", &uuid::Uuid::new_v4().to_string()).await;
 
         // Act
         let response = SesEmailAdapter
