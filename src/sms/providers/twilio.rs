@@ -456,7 +456,7 @@ mod tests {
     const KEY_SID: &str = "SK00000000000000000000000000000001";
 
     #[test]
-    fn should_accept_auth_token_or_api_key_and_reject_mixed_credentials() {
+    fn should_accept_auth_token_or_api_key_while_rejecting_mixed_credentials() {
         // Arrange
         let key = || Some((KEY_SID.to_string(), "key-secret".to_string()));
         let token_pair = format!("{ACCOUNT}:token");

@@ -276,7 +276,7 @@
           "providers::azure::tests::should_copy_azure_blob_from_url_synchronously_with_source_and_destination_conditions",
           "providers::azure::tests::should_require_a_readable_source_sas_for_authenticated_azure_copy_from_url",
           "providers::azure::copy::tests::should_evaluate_source_conditions_against_the_source_etag",
-          "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
+          "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -874,7 +874,7 @@
           "sms::providers::tests::should_render_provider_shaped_incomplete_body_responses",
           "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
           "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api",
-          "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_and_reject_mixed_credentials"
+          "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_while_rejecting_mixed_credentials"
         ],
         "support_tier": "partial",
         "sdk_verified_by": [
@@ -928,10 +928,10 @@
           "interop_email::should_capture_ses_send_with_signature_authorization",
           "interop_email::should_reject_unsupported_mail_shapes_before_capture",
           "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses",
-          "mail::providers::ses::tests::should_validate_ses_email_tag_names_values_and_duplicates",
+          "mail::providers::ses::tests::should_reject_invalid_or_duplicate_ses_email_tags",
           "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
-          "mail::providers::ses::tests::should_capture_ses_email_tags_and_configuration_set_on_the_message",
-          "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_and_ses_tags",
+          "mail::providers::ses::tests::should_capture_ses_email_tags_with_configuration_set_on_the_message",
+          "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_ses_tags",
           "mail::ses_events::tests::should_record_every_event_type_without_a_destination"
         ],
         "support_tier": "partial",
@@ -4327,7 +4327,7 @@
             "provider_conformance::should_preserve_protocol_durability_lifecycle_across_cache_loss_on_every_front_door",
             "provider_conformance::should_reject_s3_mutation_while_azure_versioning_owns_the_bucket",
             "providers::azure::tests::should_isolate_foreign_version_history_and_validate_local_mode_before_create",
-            "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
+            "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_conditional_current_snapshot_and_version_reads",
@@ -4630,7 +4630,7 @@
             "providers::azure::tests::should_create_new_versions_when_overwriting_azure_worm_blobs",
             "providers::azure::tests::should_preserve_active_lease_across_azure_blob_overwrites",
             "providers::azure::tests::should_reject_azure_selectors_on_unsupported_mutations_without_side_effects",
-            "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
+            "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_block_blob_workflow",
@@ -5583,7 +5583,7 @@
           "rust": [
             "providers::azure::tests::should_validate_azure_shared_key_and_sas_authorization",
             "providers::azure::tests::should_upload_and_commit_blocks_through_one_blob_sas",
-            "providers::azure::encryption_scope::tests::should_resolve_declared_sas_and_header_scopes_and_reject_conflicts"
+            "providers::azure::encryption_scope::tests::should_resolve_encryption_scope_from_declared_sas_or_header"
           ],
           "sdk": [
             "sdk-tests/test_azure_sdk.py::test_azure_restricted_sas_permissions_and_signed_constraints",
@@ -8092,10 +8092,10 @@
             "interop_email::should_capture_ses_send_with_signature_authorization",
             "interop_email::should_reject_unsupported_mail_shapes_before_capture",
             "mail::providers::tests::should_render_provider_shaped_incomplete_body_responses",
-            "mail::providers::ses::tests::should_validate_ses_email_tag_names_values_and_duplicates",
+            "mail::providers::ses::tests::should_reject_invalid_or_duplicate_ses_email_tags",
             "mail::providers::ses::tests::should_treat_configuration_sets_as_declared_only_when_a_list_is_configured",
-            "mail::providers::ses::tests::should_capture_ses_email_tags_and_configuration_set_on_the_message",
-            "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_and_ses_tags",
+            "mail::providers::ses::tests::should_capture_ses_email_tags_with_configuration_set_on_the_message",
+            "mail::ses_events::tests::should_post_sns_wrapped_bounce_record_with_caller_ses_tags",
             "mail::ses_events::tests::should_record_every_event_type_without_a_destination"
           ],
           "sdk": [
@@ -8370,7 +8370,7 @@
             "sms::providers::tests::should_render_provider_shaped_incomplete_body_responses",
             "sms::simulator::tests::should_send_signed_twilio_callback_record_twiml_and_keep_retry_history",
             "e2e_sms::should_simulate_list_download_and_delete_texts_through_admin_api",
-            "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_and_reject_mixed_credentials"
+            "sms::providers::twilio::tests::should_accept_auth_token_or_api_key_while_rejecting_mixed_credentials"
           ],
           "sdk": [
             "sdk-tests/test_messaging_acceptance.py::test_twilio_native_auth_and_body_boundary",

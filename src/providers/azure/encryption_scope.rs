@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_resolve_declared_sas_and_header_scopes_and_reject_conflicts() {
+    async fn should_resolve_encryption_scope_from_declared_sas_or_header() {
         // Arrange
         let declared = parse_declared_scopes(Some(" tenant-a , tenant-b,"));
         let sas_only = request("http://localhost/a/c/b?sig=x&ses=tenant-a", &[]).await;

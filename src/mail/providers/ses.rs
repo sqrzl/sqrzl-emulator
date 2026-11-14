@@ -918,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn should_validate_ses_email_tag_names_values_and_duplicates() {
+    fn should_reject_invalid_or_duplicate_ses_email_tags() {
         // Arrange
         let tags = |value: serde_json::Value| parse_email_tags(Some(&value));
 
@@ -967,7 +967,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_capture_ses_email_tags_and_configuration_set_on_the_message() {
+    async fn should_capture_ses_email_tags_with_configuration_set_on_the_message() {
         // Arrange
         let mail = temp_mail();
         let body = r#"{"FromEmailAddress":"alice@example.com","Destination":{"ToAddresses":["bob@example.com"]},"ConfigurationSetName":"events","EmailTags":[{"Name":"tenant","Value":"a"}],"Content":{"Simple":{"Subject":{"Data":"tagged"},"Body":{"Text":{"Data":"hello"}}}}}"#;

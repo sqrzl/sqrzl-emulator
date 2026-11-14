@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_post_sns_wrapped_bounce_record_with_caller_and_ses_tags() {
+    async fn should_post_sns_wrapped_bounce_record_with_caller_ses_tags() {
         // Arrange
         let store = store();
         let stored = fan_out(store.as_ref(), &ses_message(Some("events"))).unwrap();
