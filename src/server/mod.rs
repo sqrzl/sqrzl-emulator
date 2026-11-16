@@ -193,7 +193,14 @@ impl Server {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
-        tracing::info!("S3 API listening on http://0.0.0.0:{}", api_port);
+        let bound_address = listener
+            .local_addr()
+            .map_err(|error| crate::error::Error::InternalError(error.to_string()))?;
+        tracing::info!(
+            listener = "api",
+            port = bound_address.port(),
+            "S3 API listening on http://{bound_address}"
+        );
 
         let mut connections = tokio::task::JoinSet::new();
         let mut listener_error = None;

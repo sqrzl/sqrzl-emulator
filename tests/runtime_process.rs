@@ -13,52 +13,71 @@ struct Process {
 }
 impl Process {
     fn start(drain_ms: u64) -> Self {
-        // Keep concurrent test processes from selecting each other's ports before
-        // their listeners are bound and ready.
-        static STARTUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _startup = STARTUP.lock().unwrap();
-        let sockets: Vec<_> = (0..3)
-            .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
-            .collect();
-        let ports = std::array::from_fn(|i| sockets[i].local_addr().unwrap().port());
         let root = std::env::temp_dir().join(format!("sqrzl-runtime-{}", uuid::Uuid::new_v4()));
-        drop(sockets);
+        // Keep diagnostics outside the storage root, which must start empty.
+        let log = std::fs::File::create(root.with_extension("log")).unwrap();
         let child = Command::new(env!("CARGO_BIN_EXE_sqrzl-emulator"))
             .env_clear()
             .env("SQRZL_BLOBS_PATH", &root)
-            .env("SQRZL_API_PORT", ports[0].to_string())
-            .env("SQRZL_UI_PORT", ports[1].to_string())
-            .env("SQRZL_SMTP_PORT", ports[2].to_string())
+            .env("SQRZL_API_PORT", "0")
+            .env("SQRZL_UI_PORT", "0")
+            .env("SQRZL_SMTP_PORT", "0")
+            .env("SQRZL_LOG_FORMAT", "json")
             .env("SES_CONFIGURATION_SETS", "drain-events")
             .env("SQRZL_MAX_MCP_SESSIONS", "1")
             .env("SQRZL_MAX_SMTP_RECIPIENTS", "4")
             .env("SQRZL_DRAIN_TIMEOUT_MS", drain_ms.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
             .spawn()
             .unwrap();
-        let mut process = Self { child, ports, root };
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut process = Self {
+            child,
+            ports: [0; 3],
+            root,
+        };
+        process.wait_ready(Duration::from_secs(10)).unwrap();
+        process
+    }
+
+    fn wait_ready(&mut self, timeout: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
         loop {
-            assert!(
-                process.child.try_wait().unwrap().is_none(),
-                "process exited before ready"
-            );
-            if process
-                .ports
-                .iter()
-                .all(|port| TcpStream::connect(("127.0.0.1", *port)).is_ok())
-            {
-                assert!(
-                    process.child.try_wait().unwrap().is_none(),
-                    "process exited while becoming ready"
-                );
-                break;
+            let log = std::fs::read_to_string(self.root.with_extension("log"))
+                .map_err(|error| error.to_string())?;
+            if let Some(status) = self.child.try_wait().map_err(|error| error.to_string())? {
+                return Err(format!("process exited before ready: {status}\n{log}"));
             }
-            assert!(Instant::now() < deadline, "process never became ready");
+            // TCP connect alone can hit reservation sockets inherited by another
+            // child before exec. Trust only post-bind events from our own child.
+            let mut ports = [0; 3];
+            for event in log
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            {
+                let fields = &event["fields"];
+                let index = match fields["listener"].as_str() {
+                    Some("api") => 0,
+                    Some("ui") => 1,
+                    Some("smtp") => 2,
+                    _ => continue,
+                };
+                if let Some(port) = fields["port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
+                {
+                    ports[index] = port;
+                }
+            }
+            if ports.iter().all(|port| *port != 0) {
+                self.ports = ports;
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("process never reported bound listeners\n{log}"));
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
-        process
     }
     fn signal(&self) {
         assert!(Command::new("kill")
@@ -92,7 +111,16 @@ impl Drop for Process {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if std::thread::panicking() {
+            eprintln!(
+                "child pid={} ports={:?}\n{}",
+                self.child.id(),
+                self.ports,
+                std::fs::read_to_string(self.root.with_extension("log")).unwrap_or_default()
+            );
+        }
         let _ = std::fs::remove_dir_all(&self.root);
+        let _ = std::fs::remove_file(self.root.with_extension("log"));
     }
 }
 fn http_request(
@@ -127,6 +155,29 @@ fn line(reader: &mut BufReader<TcpStream>) -> String {
 fn smtp(reader: &mut BufReader<TcpStream>, command: &str, status: &str) {
     reader.get_mut().write_all(command.as_bytes()).unwrap();
     assert!(line(reader).starts_with(status));
+}
+
+#[test]
+fn should_reject_unrelated_listeners_given_child_has_not_reported_bound_ports() {
+    // Arrange: these listeners satisfy the old TCP-only readiness check while
+    // the child is alive but has never started an emulator.
+    let listeners: Vec<_> = (0..3)
+        .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    let ports = std::array::from_fn(|i| listeners[i].local_addr().unwrap().port());
+    let root = std::env::temp_dir().join(format!("sqrzl-runtime-{}", uuid::Uuid::new_v4()));
+    std::fs::File::create(root.with_extension("log")).unwrap();
+    let child = Command::new("sleep").arg("5").spawn().unwrap();
+    let mut process = Process { child, ports, root };
+    assert!(ports
+        .iter()
+        .all(|port| TcpStream::connect(("127.0.0.1", *port)).is_ok()));
+    // Act
+    let result = process.wait_ready(Duration::from_millis(50));
+    // Assert
+    assert!(result
+        .unwrap_err()
+        .contains("never reported bound listeners"));
 }
 
 #[test]
