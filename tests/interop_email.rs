@@ -421,11 +421,12 @@ async fn should_capture_ses_send_with_signature_authorization() {
         },
     });
     let request_body = payload.to_string();
-    let request = signed_ses_request(&request_body, "test-key", "test-secret").await;
+    let secret = uuid::Uuid::new_v4().to_string();
+    let request = signed_ses_request(&request_body, "test-key", &secret).await;
     let response = call_adapter(
         &adapters,
         mail.clone(),
-        auth_enabled("test-key", "test-secret"),
+        auth_enabled("test-key", &secret),
         request,
     )
     .await;

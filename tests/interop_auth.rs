@@ -28,7 +28,8 @@ async fn should_authorize_gcs_v2_hmac_extension_headers_through_provider_registr
     let canonical = format!(
         "GET\n\n\n{date}\nx-goog-acl:public-read\nx-goog-meta-reviewer:jane,john\n/private/item.txt"
     );
-    let mut mac = HmacSha1::new_from_slice(b"gcs-secret").expect("HMAC key should be valid");
+    let secret = uuid::Uuid::new_v4().to_string();
+    let mut mac = HmacSha1::new_from_slice(secret.as_bytes()).expect("HMAC key should be valid");
     mac.update(canonical.as_bytes());
     let signature = BASE64.encode(mac.finalize().into_bytes());
     let authorization = format!("GOOG1 test-access:{signature}");
@@ -36,7 +37,7 @@ async fn should_authorize_gcs_v2_hmac_extension_headers_through_provider_registr
     // Act
     let response = call(
         storage,
-        auth_enabled("test-access", "Z2NzLXNlY3JldA=="),
+        auth_enabled("test-access", &BASE64.encode(secret.as_bytes())),
         request(
             "GET",
             "http://localhost/private/item.txt",

@@ -17,6 +17,11 @@ use sqrzl_emulator::storage::Storage;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+fn test_secret() -> &'static str {
+    static SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SECRET.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+
 type RequestBody = Full<bytes::Bytes>;
 
 struct Fixture {
@@ -40,10 +45,10 @@ impl Fixture {
 
     async fn call(&self, request: Request<RequestBody>) -> Response<sqrzl_emulator::body::Body> {
         let request = RequestExt::from_hyper(request).await.unwrap();
-        let mut config = (*auth_enabled("audit-access", "audit-secret")).clone();
+        let mut config = (*auth_enabled("audit-access", test_secret())).clone();
         config.vendor_credentials.acs_connection_string = Some(format!(
             "endpoint=http://localhost;accesskey={}",
-            BASE64.encode(b"audit-secret")
+            BASE64.encode(test_secret().as_bytes())
         ));
         let auth = Arc::new(config);
         if request.path().starts_with("/v2/") || request.path().starts_with("/emails:") {
@@ -176,7 +181,10 @@ fn presigned_request(
         "PUT\n{path}\n{query}\n{canonical_headers}\n{}\nUNSIGNED-PAYLOAD",
         names.join(";")
     );
-    let key = mac(b"AWS4audit-secret", stamp.as_bytes());
+    let key = mac(
+        format!("AWS4{}", test_secret()).as_bytes(),
+        stamp.as_bytes(),
+    );
     let key = mac(&key, b"us-east-1");
     let key = mac(&key, b"s3");
     let key = mac(&key, b"aws4_request");
@@ -280,7 +288,10 @@ fn with_signed_names(
         request.uri().path(),
         names.join(";")
     );
-    let key = mac(b"AWS4audit-secret", stamp.as_bytes());
+    let key = mac(
+        format!("AWS4{}", test_secret()).as_bytes(),
+        stamp.as_bytes(),
+    );
     let key = mac(&key, b"us-east-1");
     let key = mac(&key, service.as_bytes());
     let key = mac(&key, b"aws4_request");
@@ -584,7 +595,10 @@ fn aws_request_with_date_header(
     );
     let stamp = scope_date.unwrap_or_else(|| date.get(..8).unwrap_or("20200101"));
     let scope = format!("{stamp}/us-east-1/{}/aws4_request", operation.service);
-    let key = mac(b"AWS4audit-secret", stamp.as_bytes());
+    let key = mac(
+        format!("AWS4{}", test_secret()).as_bytes(),
+        stamp.as_bytes(),
+    );
     let key = mac(&key, b"us-east-1");
     let key = mac(&key, operation.service.as_bytes());
     let key = mac(&key, b"aws4_request");
@@ -795,7 +809,7 @@ async fn should_reject_invalid_acs_hmac_dates_given_email_and_sms_when_auth_is_c
             let fixture = Fixture::new();
             let hash = BASE64.encode(Sha256::digest(body.as_bytes()));
             let canonical = format!("POST\n{path}\n{date};localhost;{hash}");
-            let signature = BASE64.encode(mac(b"audit-secret", canonical.as_bytes()));
+            let signature = BASE64.encode(mac(test_secret().as_bytes(), canonical.as_bytes()));
             let request=Request::builder().method("POST").uri(format!("http://localhost{path}")).header("host","localhost").header("content-type","application/json").header("x-ms-date",&date).header("x-ms-content-sha256",hash).header("authorization",format!("HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature={signature}")).body(RequestBody::from(body)).unwrap();
             // Act
             let response = fixture.call(request).await;
@@ -820,11 +834,9 @@ async fn should_reject_invalid_acs_hmac_dates_given_email_and_sms_when_auth_is_c
 #[tokio::test(flavor = "multi_thread")]
 async fn should_preserve_streamed_object_given_authenticated_s3_when_body_hash_does_not_match() {
     // Arrange
-    let server = common::e2e::LiveServer::start_s3(common::e2e::auth_enabled(
-        "audit-access",
-        "audit-secret",
-    ))
-    .await;
+    let server =
+        common::e2e::LiveServer::start_s3(common::e2e::auth_enabled("audit-access", test_secret()))
+            .await;
     let date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let mut create = aws_request(&operations()[0], &date, &digest(b""), None, false);
     *create.uri_mut() = format!("{}/auth-contract", server.base_url)
@@ -871,7 +883,7 @@ async fn should_preserve_streamed_object_given_authenticated_s3_when_body_hash_d
         &server.base_url,
         &sqrzl_emulator::auth::PresignedUrlConfig {
             access_key: "audit-access".into(),
-            secret_key: "audit-secret".into(),
+            secret_key: test_secret().into(),
         },
     );
     let fetched = server

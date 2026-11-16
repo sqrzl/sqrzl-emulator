@@ -891,13 +891,14 @@ mod tests {
         let mail = temp_mail();
         let body = r#"{"FromEmailAddress":"alice@example.com","Destination":{"ToAddresses":["bob@example.com"]},"Content":{"Simple":{"Subject":{"Data":"ses test"},"Body":{"Text":{"Data":"hello"}}}}}"#;
 
-        let req = request_with_signature(body, "test-key", "test-secret").await;
+        let secret = uuid::Uuid::new_v4().to_string();
+        let req = request_with_signature(body, "test-key", &secret).await;
         let response = SesEmailAdapter
             .handle(
                 mail.clone(),
                 Arc::new(AuthConfig {
                     access_key_id: Some("test-key".to_string()),
-                    secret_access_key: Some("test-secret".to_string()),
+                    secret_access_key: Some(secret),
                     enforce_auth: true,
                     admin_auth_disabled: false,
                     blobs_path: "./blobs".to_string(),

@@ -8,6 +8,9 @@ on:
         description: Semantic version (GitVersion semVer)
         value: ${{ jobs.gitversion.outputs.semver }}
 
+permissions:
+  contents: read
+
 jobs:
   gitversion:
     runs-on: ubuntu-latest
