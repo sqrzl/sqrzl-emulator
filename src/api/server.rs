@@ -122,7 +122,14 @@ pub async fn start_ui_server_with_sms_and_metrics(
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| crate::error::Error::InternalError(e.to_string()))?;
-    tracing::info!("UI server listening on http://0.0.0.0:{}", ui_port);
+    let bound_address = listener
+        .local_addr()
+        .map_err(|error| crate::error::Error::InternalError(error.to_string()))?;
+    tracing::info!(
+        listener = "ui",
+        port = bound_address.port(),
+        "UI server listening on http://{bound_address}"
+    );
 
     let control = config.runtime.clone();
     let mut connections = tokio::task::JoinSet::new();

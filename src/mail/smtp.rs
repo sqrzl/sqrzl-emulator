@@ -57,7 +57,14 @@ impl SmtpServer {
         let listener = TcpListener::bind(addr)
             .await
             .map_err(|e| Error::InternalError(e.to_string()))?;
-        tracing::info!("SMTP server listening on 0.0.0.0:{}", self.port);
+        let bound_address = listener
+            .local_addr()
+            .map_err(|error| Error::InternalError(error.to_string()))?;
+        tracing::info!(
+            listener = "smtp",
+            port = bound_address.port(),
+            "SMTP server listening on {bound_address}"
+        );
 
         let mut connections = tokio::task::JoinSet::new();
         let mut listener_error = None;
