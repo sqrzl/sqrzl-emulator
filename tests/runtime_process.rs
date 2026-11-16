@@ -13,6 +13,10 @@ struct Process {
 }
 impl Process {
     fn start(drain_ms: u64) -> Self {
+        // Keep concurrent test processes from selecting each other's ports before
+        // their listeners are bound and ready.
+        static STARTUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _startup = STARTUP.lock().unwrap();
         let sockets: Vec<_> = (0..3)
             .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
             .collect();
@@ -45,6 +49,10 @@ impl Process {
                 .iter()
                 .all(|port| TcpStream::connect(("127.0.0.1", *port)).is_ok())
             {
+                assert!(
+                    process.child.try_wait().unwrap().is_none(),
+                    "process exited while becoming ready"
+                );
                 break;
             }
             assert!(Instant::now() < deadline, "process never became ready");
