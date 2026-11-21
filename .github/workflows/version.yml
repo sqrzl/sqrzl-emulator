@@ -23,8 +23,8 @@ jobs:
           fetch-depth: 0
 
       - name: Setup GitVersion
-        uses: gittools/actions/gitversion/setup@v4
+        uses: gittools/actions/gitversion/setup@v5
 
       - name: Compute Version
         id: gitversion
-        uses: gittools/actions/gitversion/execute@v4
+        uses: gittools/actions/gitversion/execute@v5
