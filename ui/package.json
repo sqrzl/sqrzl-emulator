@@ -32,7 +32,7 @@
     "jiti": "^2.7.0",
     "jsdom": "^31.0.1",
     "typescript": "^7.0.2",
-    "vite-plus": "1.6.0"
+    "vite-plus": "1.7.0"
   },
   "engines": {
     "node": "^24.15.0 || >=26.0.0"
