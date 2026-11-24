@@ -19,9 +19,9 @@
 //! file into its final location.
 
 use super::http::{
-    parse_query_params, CollectBodyError, Request as RequestExt, RequestParseError, RouteMatch,
-    Router, SpooledPayload,
+    parse_query_params, CollectBodyError, Request as RequestExt, RequestParseError, SpooledPayload,
 };
+use super::{RouteMatch, Router};
 use crate::providers::AdapterRegistry;
 use bytes::Bytes;
 use http::request::Parts;

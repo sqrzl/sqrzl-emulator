@@ -1,6 +1,5 @@
 use crate::auth::AuthConfig;
 use crate::body::Body;
-use crate::hyper_compat::Compat;
 use crate::mail::providers::MailAdapterRegistry;
 use crate::mail::MailStore;
 use crate::metrics::UsageMetrics;
@@ -9,66 +8,19 @@ use crate::sms::providers::SmsAdapterRegistry;
 use crate::sms::{FilesystemSmsStore, SmsStore};
 use crate::storage::Storage;
 use ::http::Method;
-use hyper::service::{service_fn, Service};
+use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use std::sync::Arc;
 use tracing::error;
 
-mod handlers;
-mod http;
+use sqrzl_core::server::http;
+pub use sqrzl_core::server::{
+    serve_h1_connection, serve_h1_connection_until, RequestExt, RequestParseError, ResponseBuilder,
+};
+pub use sqrzl_object::server::{RouteMatch, Router};
+use sqrzl_vault::{Provider as VaultProvider, Vault};
+
 mod streaming;
-
-pub(crate) use handlers::handle_request as handle_s3_request;
-#[cfg(test)]
-pub(crate) use http::SpooledPayload;
-pub use http::{Request as RequestExt, RequestParseError, ResponseBuilder, RouteMatch, Router};
-
-///
-/// # Errors
-///
-/// Returns an error when the underlying emulator operation fails.
-pub async fn serve_h1_connection<S>(
-    stream: tokio::net::TcpStream,
-    service: S,
-) -> Result<(), hyper::Error>
-where
-    S: Service<hyper::Request<hyper::body::Incoming>, Response = Response<Body>> + Send + 'static,
-    S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    S::Future: Send + 'static,
-{
-    serve_h1_connection_until(
-        stream,
-        service,
-        crate::runtime::RuntimeControl::new(crate::runtime::RuntimeLimits::default()),
-    )
-    .await
-}
-
-/// Serves an HTTP connection until completion or coordinated graceful shutdown.
-///
-/// # Errors
-/// Returns HTTP protocol and transport errors.
-pub async fn serve_h1_connection_until<S>(
-    stream: tokio::net::TcpStream,
-    service: S,
-    control: Arc<crate::runtime::RuntimeControl>,
-) -> Result<(), hyper::Error>
-where
-    S: Service<hyper::Request<hyper::body::Incoming>, Response = Response<Body>> + Send + 'static,
-    S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    S::Future: Send + 'static,
-{
-    let connection =
-        hyper::server::conn::http1::Builder::new().serve_connection(Compat::new(stream), service);
-    tokio::pin!(connection);
-    tokio::select! {
-        result = &mut connection => result,
-        () = control.cancelled() => {
-            connection.as_mut().graceful_shutdown();
-            connection.await
-        }
-    }
-}
 
 fn simple_text_response(status: StatusCode, body: &str) -> Response<Body> {
     ResponseBuilder::new(status)
@@ -86,6 +38,7 @@ pub struct Server {
     sms_adapters: Arc<SmsAdapterRegistry>,
     adapters: Arc<AdapterRegistry>,
     metrics: Arc<UsageMetrics>,
+    vault: Option<Arc<Vault>>,
     api_port: u16,
 }
 
@@ -99,6 +52,7 @@ struct RequestState {
     sms_adapters: Arc<SmsAdapterRegistry>,
     adapters: Arc<AdapterRegistry>,
     metrics: Arc<UsageMetrics>,
+    vault: Option<Arc<Vault>>,
 }
 
 impl Server {
@@ -157,8 +111,16 @@ impl Server {
             auth_config,
             adapters: Arc::new(AdapterRegistry::default()),
             metrics,
+            vault: None,
             api_port,
         }
+    }
+
+    /// Attaches vault adapters to the API listener.
+    #[must_use]
+    pub fn with_vault(mut self, vault: Arc<Vault>) -> Self {
+        self.vault = Some(vault);
+        self
     }
 
     ///
@@ -185,6 +147,7 @@ impl Server {
             sms_adapters: self.sms_adapters,
             adapters: self.adapters,
             metrics: self.metrics,
+            vault: self.vault,
         };
         let api_port = self.api_port;
 
@@ -252,12 +215,25 @@ async fn serve_api_connection(
         let state = state.clone();
         let admission = admission.clone();
         async move {
+            let vault_provider = state
+                .vault
+                .as_ref()
+                .filter(|_| req.uri().path() != "/healthz")
+                .and_then(|_| VaultProvider::resolve(req.uri(), req.headers()));
+            let reservation = if vault_provider.is_some() {
+                reservation.min(sqrzl_vault::MAX_REQUEST_BYTES)
+            } else {
+                reservation
+            };
             let work = if req.method() == Method::GET && req.uri().path() == "/healthz" {
                 admission.try_probe()
             } else {
                 admission.try_request(reservation)
             };
             let Some(work) = work else {
+                if let Some(provider) = vault_provider {
+                    return Ok::<_, std::io::Error>(provider.overloaded());
+                }
                 return Ok::<_, std::io::Error>(crate::runtime::overloaded(
                     state
                         .sms_adapters
@@ -279,7 +255,7 @@ async fn serve_api_connection(
             };
             let work = crate::runtime::WorkLease::from(work);
             req.extensions_mut().insert(work.clone());
-            let mut response = handle_request(state, req).await?;
+            let mut response = handle_request(state, req, vault_provider).await?;
             work.status(response.status());
             response.body_mut().retain_work(work);
             Ok(response)
@@ -298,18 +274,26 @@ fn handler_error(kind: &str, error: &str) -> Response<Body> {
 async fn handle_request<B>(
     state: RequestState,
     req: Request<B>,
+    vault_provider: Option<VaultProvider>,
 ) -> Result<Response<Body>, std::io::Error>
 where
     B: hyper::body::Body<Data = bytes::Bytes> + Send + Unpin + 'static,
     B::Error: std::fmt::Display,
 {
-    let max_request_bytes = state.auth_config.max_request_bytes;
+    let max_request_bytes = if vault_provider.is_some() {
+        state
+            .auth_config
+            .max_request_bytes
+            .min(sqrzl_vault::MAX_REQUEST_BYTES)
+    } else {
+        state.auth_config.max_request_bytes
+    };
     let method = req.method().clone();
     let uri = req.uri().clone();
     let headers = req.headers().clone();
-    let provider_hint = state
-        .sms_adapters
-        .resolve_by_head(&method, &uri, &headers)
+    let provider_hint = vault_provider
+        .map(VaultProvider::name)
+        .or_else(|| state.sms_adapters.resolve_by_head(&method, &uri, &headers))
         .or_else(|| state.mail_adapters.resolve_by_head(&method, &uri, &headers))
         .or_else(|| state.adapters.resolve_by_head(&method, &uri, &headers));
     let mut request_bytes = headers
@@ -319,7 +303,10 @@ where
         .unwrap_or(0);
     let metrics = state.metrics.clone();
     let (parts, body) = req.into_parts();
-    let parsed = if streaming::is_streamable_object_put(&parts, &state.adapters) {
+    let work = parts.extensions.get::<crate::runtime::WorkLease>().cloned();
+    let parsed = if vault_provider.is_none()
+        && streaming::is_streamable_object_put(&parts, &state.adapters)
+    {
         let spool_dir = std::path::Path::new(&state.auth_config.blobs_path).join(".spool");
         streaming::spool_request(parts, body, max_request_bytes, &spool_dir).await
     } else {
@@ -334,9 +321,24 @@ where
             if request_bytes == 0 {
                 request_bytes = parsed_req.payload_len();
             }
-            route_parsed_request(state, parsed_req).await
+            if let (Some(provider), Some(vault)) = (vault_provider, state.vault.clone()) {
+                tokio::task::spawn_blocking(move || {
+                    let _work = work;
+                    vault.handle(provider, &parsed_req, &state.auth_config)
+                })
+                .await
+                .unwrap_or_else(|_| provider.internal_error())
+            } else {
+                route_parsed_request(state, parsed_req).await
+            }
         }
-        Err(error) => request_parse_error_response(&state, error),
+        Err(error) => {
+            if let Some(provider) = vault_provider {
+                provider.body_error(matches!(error, RequestParseError::BodyTooLarge { .. }))
+            } else {
+                request_parse_error_response(&state, error)
+            }
+        }
     };
     metrics.record_http_request(
         &method,
@@ -571,8 +573,10 @@ mod adapter_routing_tests {
                 mail,
                 mail_adapters: Arc::new(MailAdapterRegistry::default()),
                 metrics: Arc::new(UsageMetrics::default()),
+                vault: None,
             },
             req,
+            None,
         )
         .await
         .expect("request should complete")
@@ -967,6 +971,7 @@ mod adapter_routing_tests {
             mail: mail.clone(),
             mail_adapters: Arc::new(MailAdapterRegistry::default()),
             metrics: Arc::new(UsageMetrics::default()),
+            vault: None,
         };
         let cases = [
             (
@@ -990,7 +995,7 @@ mod adapter_routing_tests {
                 .header("content-length", "10")
                 .body(Body::truncated(bytes::Bytes::from_static(b"short"), 10))
                 .expect("truncated messaging request should build");
-            let response = handle_request(state.clone(), request)
+            let response = handle_request(state.clone(), request, None)
                 .await
                 .expect("truncated messaging request should respond");
 

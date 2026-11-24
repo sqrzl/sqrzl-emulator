@@ -40,7 +40,10 @@ jobs:
         run: cargo install --git https://github.com/cntryl/tools --rev b2a06b1a635de752803f5860339fc3cecbc19742 --locked
 
       - name: Validate Test Structure
-        run: cntryl-tools validate-tests
+        run: |
+          for package_dir in . crates/*; do
+            (cd "$package_dir" && cntryl-tools validate-tests)
+          done
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::pedantic
@@ -279,7 +282,7 @@ jobs:
           docker info --format '{{json .RegistryConfig.Mirrors}}'
 
       - name: Build container image
-        run: docker build -t sqrzl-emulator:smoke .
+        run: docker build -t sqrzl:smoke .
 
       - name: Start container
         run: |
@@ -294,7 +297,7 @@ jobs:
             -e SES_CONFIGURATION_SETS=sqrzl-events \
             -e AZURE_ENCRYPTION_SCOPES=tenant-a,tenant-b \
             -e 'ACS_CONNECTION_STRING=endpoint=http://127.0.0.1:9000;accesskey=c2hhcmVkLXNlY3JldA==' \
-            sqrzl-emulator:smoke
+            sqrzl:smoke
 
       - name: Wait for health
         run: |

@@ -83,8 +83,8 @@ Run these gates with:
 
 ```sh
 cargo test --test storage_root_ownership --test operation_coordination
-cargo test --lib storage::filesystem::protection_tests
-cargo test --lib storage::filesystem::bucket_recovery_tests
+cargo test -p sqrzl-emulator --lib storage::filesystem::protection_tests
+cargo test -p sqrzl-storage --lib storage::filesystem::bucket_recovery_tests
 ```
 
 The protection regression counts complete S3, GCS XML and GCS JSON object/range

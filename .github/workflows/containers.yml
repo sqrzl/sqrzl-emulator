@@ -5,7 +5,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/sqrzl
+  COMPAT_IMAGE_NAME: ${{ github.repository_owner }}/sqrzl-emulator
 
 permissions:
   contents: read
@@ -127,7 +128,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ env.REGISTRY }}/${{ env.COMPAT_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -135,13 +138,29 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Create manifest list and push
+      - name: Publish the manifest under both image names
         working-directory: /tmp/digests
+        env:
+          IMAGE_METADATA: ${{ steps.meta.outputs.json }}
         run: |
-          TAG_ARGS=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}')
-          docker buildx imagetools create $TAG_ARGS \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$IMAGE_METADATA")
+          test "${#tags[@]}" -gt 0
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(--tag "$tag")
+          done
+          sources=()
+          for digest in *; do
+            sources+=("$REGISTRY/$IMAGE_NAME@sha256:$digest")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
 
-      - name: Inspect image
+      - name: Verify both image names resolve to the same manifest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          primary=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$REGISTRY/$IMAGE_NAME:$VERSION")
+          compat=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$REGISTRY/$COMPAT_IMAGE_NAME:$VERSION")
+          test -n "$primary"
+          test "$primary" = "$compat"
+          echo "Both image names resolve to $primary"

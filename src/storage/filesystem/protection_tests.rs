@@ -1,12 +1,19 @@
-use super::*;
+use super::{FilesystemStorage, TestPhase};
 use crate::auth::AuthConfig;
+use crate::models::Object;
 use crate::providers::AdapterRegistry;
 use crate::server::RequestExt;
 use crate::storage::IndexedStorage;
+use crate::storage::{BucketStore, MultipartStore, ObjectCondition, ObjectStore, VersionStore};
 use bytes::Bytes;
 use http::StatusCode;
 use http_body_util::{BodyExt, Full};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use uuid::Uuid;
 
 const BUCKET: &str = "ordinary";
 const CONTENT: &[u8] = b"ordinary-object-bytes";
@@ -94,11 +101,11 @@ async fn request_read_costs(inner: Arc<FilesystemStorage>) -> Vec<String> {
     let reads = Arc::new(AtomicUsize::new(0));
     let counter = reads.clone();
     let mut excessive = Vec::new();
-    *inner.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    inner.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::ReadMetadata {
             counter.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
     for (host, path) in ROUTES {
         for range in [false, true] {
             reads.store(0, Ordering::SeqCst);
@@ -130,7 +137,7 @@ async fn request_read_costs(inner: Arc<FilesystemStorage>) -> Vec<String> {
             }
         }
     }
-    *inner.test_hook.lock().unwrap() = None;
+    inner.set_test_hook(None);
     excessive
 }
 
@@ -309,11 +316,13 @@ async fn should_preserve_azure_metadata_decisions_given_expired_released_or_malf
 }
 
 fn hold_publication_metadata(storage: &Arc<FilesystemStorage>, key: &str) -> PathBuf {
-    let directory =
-        storage.object_id_dir(BUCKET, &FilesystemStorage::compute_object_id(BUCKET, key));
+    let directory = storage.test_object_id_dir(
+        BUCKET,
+        &FilesystemStorage::test_compute_object_id(BUCKET, key),
+    );
     let hook_directory = directory.clone();
     let weak = Arc::downgrade(storage);
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::DirectoryCreated {
             assert!(!weak
                 .upgrade()
@@ -328,12 +337,12 @@ fn hold_publication_metadata(storage: &Arc<FilesystemStorage>, key: &str) -> Pat
             let stage = hook_directory.join(journal["stage"].as_str().unwrap());
             fs::rename(stage.join("object.meta.json"), stage.join("held-metadata")).unwrap();
         }
-    }));
+    })));
     directory
 }
 
 fn restore_publication_metadata(storage: &FilesystemStorage, directory: &Path) {
-    *storage.test_hook.lock().unwrap() = None;
+    storage.set_test_hook(None);
     let journal: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.join(".publication.json")).unwrap()).unwrap();
     let stage = directory.join(journal["stage"].as_str().unwrap());
@@ -404,7 +413,7 @@ async fn should_reject_unrelated_foreign_reads_after_ambiguous_protected_publica
             outcome.is_err(),
             "{mode} must leave an ambiguous protected commit"
         );
-        *storage.test_hook.lock().unwrap() = None;
+        storage.set_test_hook(None);
         assert!(!wrapper.azure_object_protection_absent(BUCKET));
         assert_foreign_reads(wrapper, StatusCode::CONFLICT).await;
         assert!(FilesystemStorage::open(&root).is_err());
@@ -430,15 +439,15 @@ async fn should_invalidate_absence_before_failed_protected_metadata_cas() {
     let observed = storage.get_object_metadata(BUCKET, "owner").unwrap();
     let mut updated = observed.clone();
     updated.provider_metadata = protected_owner().provider_metadata;
-    let metadata = storage.object_metadata_path(
+    let metadata = storage.test_object_metadata_path(
         BUCKET,
-        &FilesystemStorage::compute_object_id(BUCKET, "owner"),
+        &FilesystemStorage::test_compute_object_id(BUCKET, "owner"),
     );
     let held = metadata.with_file_name("held-metadata");
     let hook_metadata = metadata.clone();
     let hook_held = held.clone();
     let weak = Arc::downgrade(&storage);
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::MetadataReplacementPrepared {
             assert!(!weak
                 .upgrade()
@@ -447,7 +456,7 @@ async fn should_invalidate_absence_before_failed_protected_metadata_cas() {
             fs::rename(&hook_metadata, &hook_held).unwrap();
             fs::create_dir(&hook_metadata).unwrap();
         }
-    }));
+    })));
 
     // Act
     let outcome =
@@ -455,7 +464,7 @@ async fn should_invalidate_absence_before_failed_protected_metadata_cas() {
 
     // Assert
     assert!(outcome.is_err());
-    *storage.test_hook.lock().unwrap() = None;
+    storage.set_test_hook(None);
     assert!(!storage.azure_object_protection_absent(BUCKET));
     assert_foreign_reads(
         Arc::new(IndexedStorage::new(storage.clone())),
@@ -488,9 +497,9 @@ fn should_reject_incomplete_startup_instead_of_proving_azure_protection_absent()
         storage
             .put_object(BUCKET, "owner".to_string(), protected_owner())
             .unwrap();
-        let directory = storage.object_id_dir(
+        let directory = storage.test_object_id_dir(
             BUCKET,
-            &FilesystemStorage::compute_object_id(BUCKET, "owner"),
+            &FilesystemStorage::test_compute_object_id(BUCKET, "owner"),
         );
         drop(storage);
         match fault {
@@ -507,7 +516,7 @@ fn should_reject_incomplete_startup_instead_of_proving_azure_protection_absent()
             "wrong-key-identity" => {
                 let mut owner = protected_owner();
                 owner.key = "another-key".to_string();
-                FilesystemStorage::write_object_metadata(
+                FilesystemStorage::test_write_object_metadata(
                     &directory.join("object.meta.json"),
                     &owner,
                 )
@@ -540,12 +549,12 @@ fn should_preserve_positive_admission_when_empty_bucket_initialization_finishes_
     let (reached, observed) = std::sync::mpsc::channel();
     let release = Arc::new(std::sync::Barrier::new(2));
     let hook_release = release.clone();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::BucketCreated {
             reached.send(()).unwrap();
             hook_release.wait();
         }
-    }));
+    })));
     let creating = storage.clone();
     let creator = std::thread::spawn(move || creating.create_bucket(BUCKET.to_string()).unwrap());
     observed
@@ -608,7 +617,7 @@ async fn should_invalidate_reopened_absence_before_protected_history_promotion_e
 
         // Assert
         assert_eq!(outcome.is_err(), ambiguous);
-        *reopened.test_hook.lock().unwrap() = None;
+        reopened.set_test_hook(None);
         assert!(!reopened.azure_object_protection_absent(BUCKET));
         assert_foreign_reads(
             Arc::new(IndexedStorage::new(reopened.clone())),
@@ -642,11 +651,11 @@ fn should_exit_at_protected_publication_boundary_given_worker_environment() {
     };
     let storage = FilesystemStorage::open(root).unwrap();
     let target = std::env::var("SQRZL_TEST_PROTECTION_PHASE").unwrap();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if format!("{phase:?}") == target {
             std::process::exit(86);
         }
-    }));
+    })));
     // Act
     storage
         .put_object(BUCKET, "owner".to_string(), protected_owner())

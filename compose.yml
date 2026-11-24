@@ -2,7 +2,11 @@ services:
   sqrzl:
     container_name: sqrzl
     hostname: sqrzl
-    build: .
+    image: sqrzl:latest
+    build:
+      context: .
+      tags:
+        - sqrzl-emulator:latest
     ports:
       - "9000:9000"
       - "9001:9001"
