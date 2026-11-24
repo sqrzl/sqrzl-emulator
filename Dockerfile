@@ -20,9 +20,7 @@ RUN apt-get update \
 WORKDIR /usr/src/sqrzl-emulator
 
 COPY Cargo.toml Cargo.lock compatibility-matrix.json ./
-COPY src/ ./src/
 COPY crates/ ./crates/
-COPY benches/ ./benches/
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/usr/local/cargo/git \

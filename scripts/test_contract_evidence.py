@@ -254,6 +254,7 @@ def source_lane():
     head, tree, binary = "a" * 40, "b" * 40, "c" * 64
     snapshot = {"commit": head, "tree": tree, "clean": True}
     source = {
+        "Cargo.toml": b"[workspace]\n",
         "Cargo.lock": b"tracked lock",
         "sdk-tests/build_provenance.py": b"tracked builder",
     }
@@ -307,7 +308,7 @@ def source_lane():
                 "target": {
                     "name": "sqrzl-emulator",
                     "kind": ["bin"],
-                    "src_path": "/owned/repo/src/main.rs",
+                    "src_path": "/owned/repo/crates/sqrzl-server/src/main.rs",
                 },
                 "executable": "/owned/repo/target/aarch64-apple-darwin/debug/sqrzl-emulator",
             },
@@ -531,6 +532,13 @@ class EvidenceTests(unittest.TestCase):
             lane["results"][0]["properties"]["large_upload_campaign"],
             lane["process_events"],
         )
+
+    def test_should_accept_evidence_from_the_original_root_package(self):
+        lane, head, tree, source = source_lane()
+        source["Cargo.toml"] = b'[package]\nname = "sqrzl-emulator"\n'
+        target = lane["build_provenance"]["compiler_artifact"]["target"]
+        target["src_path"] = "/owned/repo/src/main.rs"
+        validate_sdk_lane(lane, head, tree, source.__getitem__)
 
     def test_should_reject_unbound_binary_source_and_process_evidence(self):
         cases = [
@@ -774,7 +782,14 @@ class EvidenceTests(unittest.TestCase):
         )
 
     def test_should_distinguish_duplicate_bare_names_across_rust_binaries(self):
-        log = "Running unittests src/lib.rs (target/lib)\ntest works ... ok\nRunning tests/interop.rs (target/test)\ntest works ... ignored\nRunning benches/load.rs (target/bench)\ntest works ... ok\n"
+        log = (
+            "Running unittests crates/sqrzl-server/src/lib.rs (target/lib)\n"
+            "test works ... ok\n"
+            "Running crates/sqrzl-server/tests/interop.rs (target/test)\n"
+            "test works ... ignored\n"
+            "Running crates/sqrzl-server/benches/load.rs (target/bench)\n"
+            "test works ... ok\n"
+        )
         self.assertEqual(
             rust_records(log, listing=False),
             {"works": "passed", "interop::works": "skipped"},

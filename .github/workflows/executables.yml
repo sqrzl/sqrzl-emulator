@@ -10,8 +10,6 @@ on:
       - 'compatibility-matrix.json'
       - '.github/workflows/executables.yml'
       - 'scripts/*package*.py'
-      - 'src/api/server.rs'
-      - 'src/main.rs'
       - 'crates/**'
       - 'Cargo.*'
 

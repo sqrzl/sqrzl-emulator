@@ -24,7 +24,7 @@ SQRZL_SDK_LANE=measured-upload \
 ```
 
 The separate `Measured large upload qualification` workflow runs on pull
-requests that change runtime `src/**`, `Cargo.toml`, `Cargo.lock`, the SDK
+requests that change `crates/**`, `Cargo.toml`, `Cargo.lock`, the SDK
 harness, evidence validators, or this workflow, and can also be
 triggered manually. Its manual provider selector records disabled providers as
 skipped gates; full four-provider acceptance requires all four tests to pass.

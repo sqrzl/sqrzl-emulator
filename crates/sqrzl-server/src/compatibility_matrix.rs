@@ -22,7 +22,7 @@ mod tests {
 
     fn declared_verifiers(field: &str) -> Vec<String> {
         let matrix: serde_json::Value =
-            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+            serde_json::from_str(include_str!("../../../compatibility-matrix.json"))
                 .expect("compatibility matrix should parse");
         matrix["providers"]
             .as_object()
@@ -355,7 +355,7 @@ mod tests {
     fn should_use_allowed_status_values_in_compatibility_matrix() {
         // Arrange
         let matrix: serde_json::Value =
-            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+            serde_json::from_str(include_str!("../../../compatibility-matrix.json"))
                 .expect("compatibility matrix should parse");
         let providers = matrix
             .get("providers")
@@ -389,7 +389,7 @@ mod tests {
     fn should_use_allowed_support_tiers_in_compatibility_matrix() {
         // Arrange
         let matrix: serde_json::Value =
-            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+            serde_json::from_str(include_str!("../../../compatibility-matrix.json"))
                 .expect("compatibility matrix should parse");
         let providers = matrix
             .get("providers")
@@ -426,7 +426,7 @@ mod tests {
     fn should_require_sdk_verifier_metadata_for_compatibility_matrix_entries() {
         // Arrange
         let matrix: serde_json::Value =
-            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+            serde_json::from_str(include_str!("../../../compatibility-matrix.json"))
                 .expect("compatibility matrix should parse");
         let providers = matrix
             .get("providers")
@@ -475,7 +475,7 @@ mod tests {
     fn should_require_verifiers_for_pass_entries_in_compatibility_matrix() {
         // Arrange
         let matrix: serde_json::Value =
-            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+            serde_json::from_str(include_str!("../../../compatibility-matrix.json"))
                 .expect("compatibility matrix should parse");
         let providers = matrix
             .get("providers")
@@ -535,7 +535,7 @@ mod tests {
     fn should_reference_only_known_verifiers_in_compatibility_matrix() {
         // Arrange
         let matrix: serde_json::Value =
-            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+            serde_json::from_str(include_str!("../../../compatibility-matrix.json"))
                 .expect("compatibility matrix should parse");
         let providers = matrix
             .get("providers")
@@ -575,7 +575,7 @@ mod tests {
     fn should_reference_only_known_sdk_verifiers_in_compatibility_matrix() {
         // Arrange
         let matrix: serde_json::Value =
-            serde_json::from_str(include_str!("../compatibility-matrix.json"))
+            serde_json::from_str(include_str!("../../../compatibility-matrix.json"))
                 .expect("compatibility matrix should parse");
         let providers = matrix
             .get("providers")
@@ -614,13 +614,11 @@ mod tests {
     #[test]
     fn should_reference_test_functions_that_exist_in_the_source_tree() {
         // Arrange
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut rust_source = String::new();
-        collect_source(&manifest.join("src"), &["rs"], &mut rust_source);
-        collect_source(&manifest.join("crates"), &["rs"], &mut rust_source);
-        collect_source(&manifest.join("tests"), &["rs"], &mut rust_source);
+        collect_source(&workspace.join("crates"), &["rs"], &mut rust_source);
         let mut python_source = String::new();
-        collect_source(&manifest.join("sdk-tests"), &["py"], &mut python_source);
+        collect_source(&workspace.join("sdk-tests"), &["py"], &mut python_source);
 
         // Act
         let rust_verifiers = declared_verifiers("verified_by");

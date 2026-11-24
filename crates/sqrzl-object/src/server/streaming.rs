@@ -3,7 +3,7 @@
 //! a plain object `PUT` and a multipart `UploadPart`. Every other request
 //! (control-plane XML, small object subresources like `?tagging`/`?acl`,
 //! SMS/mail adapter traffic, …) keeps using the existing fully-buffered
-//! [`super::http::Request::from_hyper_with_max_body`] path — those bodies
+//! [`RequestExt::from_hyper_with_max_body`] path — those bodies
 //! are always small, so buffering them costs nothing and touching their
 //! handlers would only add risk.
 //!
@@ -18,9 +18,6 @@
 //! [`crate::storage::MultipartStore::upload_part_streamed`] then move that
 //! file into its final location.
 
-use super::http::{
-    parse_query_params, CollectBodyError, Request as RequestExt, RequestParseError, SpooledPayload,
-};
 use super::{RouteMatch, Router};
 use crate::providers::AdapterRegistry;
 use bytes::Bytes;
@@ -28,6 +25,9 @@ use http::request::Parts;
 use http_body_util::BodyExt;
 use md5::Context as Md5Context;
 use sha2::{Digest, Sha256, Sha384};
+use sqrzl_core::server::http::{
+    parse_query_params, CollectBodyError, Request as RequestExt, RequestParseError, SpooledPayload,
+};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use uuid::Uuid;
@@ -61,7 +61,8 @@ impl Drop for PartialSpoolFile {
 /// documents (multipart manifests, block lists, metadata, ACLs, and similar
 /// small XML/JSON payloads) remain buffered, while direct object bodies and
 /// provider-native part/chunk requests are spooled.
-pub(crate) fn is_streamable_object_put(parts: &Parts, adapters: &AdapterRegistry) -> bool {
+#[must_use]
+pub fn is_streamable_object_put(parts: &Parts, adapters: &AdapterRegistry) -> bool {
     let query = parse_query_params(parts.uri.query());
     match adapters.resolve_by_head(&parts.method, &parts.uri, &parts.headers) {
         Some("azure-blob") => {
@@ -107,8 +108,11 @@ pub(crate) fn is_streamable_object_put(parts: &Parts, adapters: &AdapterRegistry
 /// Streams `body` into a scratch file under `spool_dir`, enforcing
 /// `max_request_bytes` as bytes arrive, and builds the resulting
 /// [`RequestExt`] with an empty in-memory `body` and `spooled_body` set.
+///
+/// # Errors
+/// Returns an error if the body exceeds its limit or cannot be spooled.
 #[allow(clippy::result_large_err)]
-pub(crate) async fn spool_request<B>(
+pub async fn spool_request<B>(
     parts: Parts,
     body: B,
     max_request_bytes: usize,
@@ -179,7 +183,7 @@ where
 
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|e| CollectBodyError::BodyRead(e.to_string()))?;
-        super::http::reject_s3_checksum_trailers(frame.trailers_ref())?;
+        sqrzl_core::server::http::reject_s3_checksum_trailers(frame.trailers_ref())?;
         let Some(data) = frame.data_ref() else {
             continue;
         };
@@ -229,7 +233,10 @@ where
 /// Removes request spool files left behind by a previous interrupted process.
 /// Only the request spool filename pattern is owned here; other entries are
 /// preserved.
-pub(crate) async fn cleanup_stale_spool_files(spool_dir: &Path) -> std::io::Result<()> {
+///
+/// # Errors
+/// Returns an I/O error if the spool cannot be inspected or cleaned.
+pub async fn cleanup_stale_spool_files(spool_dir: &Path) -> std::io::Result<()> {
     let mut entries = match tokio::fs::read_dir(spool_dir).await {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),

@@ -45,7 +45,8 @@ def _compiler_artifact(output: str) -> dict:
         if record.get("reason") == "compiler-artifact"
         and record.get("target", {}).get("name") == "sqrzl-emulator"
         and record.get("target", {}).get("kind") == ["bin"]
-        and record.get("target", {}).get("src_path") == str(REPO_ROOT / "src/main.rs")
+        and record.get("target", {}).get("src_path")
+        == str(REPO_ROOT / "crates/sqrzl-server/src/main.rs")
         and record.get("executable")
     ]
     if len(binaries) != 1:

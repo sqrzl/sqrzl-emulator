@@ -21,7 +21,6 @@ http-body-util.workspace = true
 hyper.workspace = true
 md5.workspace = true
 quick-xml.workspace = true
-reqwest.workspace = true
 rsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true

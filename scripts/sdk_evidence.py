@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -126,6 +127,12 @@ def validate_sdk_lane(lane: dict, head: str, source_tree: str, tracked_file) -> 
         or provenance.get("build_profile") != "debug"
     ):
         raise ValueError("SDK build manifest lacks the expected Cargo artifact command")
+    manifest = tomllib.loads(tracked_file("Cargo.toml").decode())
+    binary_source = (
+        "src/main.rs"
+        if manifest.get("package", {}).get("name") == "sqrzl-emulator"
+        else "crates/sqrzl-server/src/main.rs"
+    )
     artifact = provenance.get("compiler_artifact")
     if (
         not isinstance(artifact, dict)
@@ -133,7 +140,7 @@ def validate_sdk_lane(lane: dict, head: str, source_tree: str, tracked_file) -> 
         or artifact.get("target", {}).get("name") != "sqrzl-emulator"
         or artifact.get("target", {}).get("kind") != ["bin"]
         or artifact.get("target", {}).get("src_path")
-        != str(Path(command[6]).parent / "src/main.rs")
+        != str(Path(command[6]).parent / binary_source)
         or not isinstance(artifact.get("executable"), str)
         or not Path(artifact["executable"]).is_absolute()
     ):

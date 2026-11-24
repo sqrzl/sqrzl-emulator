@@ -17,10 +17,9 @@ use sqrzl_core::server::http;
 pub use sqrzl_core::server::{
     serve_h1_connection, serve_h1_connection_until, RequestExt, RequestParseError, ResponseBuilder,
 };
+use sqrzl_object::server::streaming;
 pub use sqrzl_object::server::{RouteMatch, Router};
 use sqrzl_vault::{Provider as VaultProvider, Vault};
-
-mod streaming;
 
 fn simple_text_response(status: StatusCode, body: &str) -> Response<Body> {
     ResponseBuilder::new(status)

@@ -137,7 +137,7 @@ class ProvenanceChecks(unittest.TestCase):
             "target": {
                 "name": "sqrzl-emulator",
                 "kind": ["bin"],
-                "src_path": str(self.repo / "src/main.rs"),
+                "src_path": str(self.repo / "crates/sqrzl-server/src/main.rs"),
             },
             "executable": str(actual),
             "profile": {"opt_level": "0"},
