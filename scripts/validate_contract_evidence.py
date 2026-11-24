@@ -39,13 +39,11 @@ def rust_records(text: str, *, listing: bool) -> dict[str, str]:
     skip = False
     records: dict[str, str] = {}
     for line in text.splitlines():
-        if re.search(r"Running benches/", line):
-            skip = True
         binary = re.search(r"Running (?:unittests )?(\S+\.rs)", line)
         if binary:
-            skip = False
             path = Path(binary[1])
-            prefix = f"{path.stem}::" if path.parts[0] == "tests" else ""
+            skip = path.parent.name == "benches"
+            prefix = f"{path.stem}::" if path.parent.name == "tests" else ""
         match = (
             re.fullmatch(r"(\S+): test", line.strip())
             if listing

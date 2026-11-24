@@ -41,7 +41,7 @@ jobs:
 
       - name: Validate Test Structure
         run: |
-          for package_dir in . crates/*; do
+          for package_dir in crates/*; do
             (cd "$package_dir" && cntryl-tools validate-tests)
           done
 

@@ -45,7 +45,7 @@ constraint; SMTP returns 552 and accepts a later valid transaction on the same
 connection. SMTP also bounds necessarily oversized raw DATA before constructing
 MIME/body copies. These are conservative local admission limits, separate from
 the configured per-request cap and provider capacities. They do not establish
-a measured process RSS bound. `tests/contract_capture_resources.rs` and selected
+a measured process RSS bound. `crates/sqrzl-server/tests/contract_capture_resources.rs` and selected
 official email SDK tests cover rejected fan-out, no mutation and smaller retries.
 
 The qualification boundary is process termination on a local filesystem with a
@@ -61,7 +61,7 @@ transaction preparation, durable intent, each staged file, each destination
 rename, each directory synchronization, and commit publication. It checks
 invisibility before reopening, rollback recovery, complete committed batches,
 raw MIME/media content, and matching replay records. Returned-error injection
-also checks cleanup independently. `tests/contract_messaging.rs` covers concurrent
+also checks cleanup independently. `crates/sqrzl-server/tests/contract_messaging.rs` covers concurrent
 retries behind start barriers, competing operation IDs, case insensitive GUIDs,
 per-recipient claims, changed senders/bodies, restart, admin deletion, client-error
 replay, and retry after a persistence failure.

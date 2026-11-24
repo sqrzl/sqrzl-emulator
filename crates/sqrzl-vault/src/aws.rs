@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{body, crypto, Fault, Store};
 
 const KEY_SPEC: &str = "SYMMETRIC_DEFAULT";
-const ACCOUNT: &str = "000000000000";
+pub(crate) const ACCOUNT: &str = "000000000000";
 const CIPHERTEXT_HEADER: &[u8] = b"SQKMS1";
 const PLAINTEXT_MAX: usize = 4096;
 
@@ -114,7 +114,7 @@ pub(crate) fn handle(
     }
 }
 
-fn region(request: &RequestExt) -> Result<&str, Fault> {
+pub(crate) fn region(request: &RequestExt) -> Result<&str, Fault> {
     let scope = request
         .header("authorization")
         .and_then(|header| header.strip_prefix("AWS4-HMAC-SHA256 "))

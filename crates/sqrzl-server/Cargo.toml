@@ -1,0 +1,94 @@
+[package]
+name = "sqrzl-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["smiggleworth"]
+license.workspace = true
+readme = "../../README.md"
+description = "A multi-provider blob and object storage emulator for S3, Azure Blob, GCS, and OCI-compatible workflows"
+repository.workspace = true
+keywords = ["s3", "azure", "gcs", "oci", "storage", "emulator"]
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+mime_guess.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+urlencoding.workspace = true
+uuid.workspace = true
+sqrzl-core.workspace = true
+sqrzl-storage.workspace = true
+sqrzl-object.workspace = true
+sqrzl-messaging.workspace = true
+sqrzl-vault.workspace = true
+
+[dev-dependencies]
+crc32c.workspace = true
+flate2.workspace = true
+hex.workspace = true
+hmac.workspace = true
+hyper-util.workspace = true
+md5.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+sqrzl-storage = { workspace = true, features = ["test-support"] }
+cntryl-stress = { git = "https://github.com/cntryl/stress", rev = "e0ec8103a0cc59e9a1bd13d46070eb9b183104a5", package = "cntryl-stress" }
+
+[[bench]]
+name = "tier1_hotpath"
+harness = false
+
+[[bench]]
+name = "tier2_subsystem"
+harness = false
+
+[[bench]]
+name = "tier3_system"
+harness = false
+
+[[bench]]
+name = "tier3_admin_api"
+harness = false
+
+[[bench]]
+name = "tier4_integration_s3"
+harness = false
+
+[[bench]]
+name = "tier4_integration_azure"
+harness = false
+
+[[bench]]
+name = "tier4_integration_gcs"
+harness = false
+
+[[bench]]
+name = "tier4_integration_oci"
+harness = false
+
+[[bench]]
+name = "tier4_integration_oci_multipart"
+harness = false
+
+[[bench]]
+name = "tier4_integration_oci_multipart_stream"
+harness = false
+
+[lib]
+name = "sqrzl_emulator"
+
+[[bin]]
+name = "sqrzl-emulator"
+path = "src/main.rs"

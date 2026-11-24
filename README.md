@@ -15,8 +15,8 @@ codes, headers, response documents, identity tokens, and failure behavior are
 provider-specific. An unsupported request variant must be rejected; it must not
 be accepted through a normalized approximation or silently ignored.
 
-See [Vault emulation](docs/vault.md) for AWS KMS, Azure Key Vault, and Google
-Cloud KMS.
+See [Vault emulation](docs/vault.md) for AWS KMS, AWS Secrets Manager, Azure
+Key Vault, and Google Cloud KMS.
 
 ## Start with Docker Compose
 

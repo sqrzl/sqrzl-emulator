@@ -7,23 +7,25 @@ Sqrzl emulator.
 
 | Package | Ownership |
 | --- | --- |
-| `sqrzl-emulator` | Public Rust facade, process startup, listener routing, admin and MCP, integration tests, and benchmarks |
+| `sqrzl-server` | Process startup, listener routing, admin and MCP, integration tests, and benchmarks. Builds the `sqrzl-emulator` executable |
 | `sqrzl-core` | Parsed HTTP requests and responses, body limits, runtime admission and draining, configuration, and shared authentication |
 | `sqrzl-storage` | Object models, storage capabilities, filesystem publication and recovery, writer ownership, and lifecycle |
-| `sqrzl-object` | S3, Azure Blob, GCS, and OCI wire protocols and shared object routing and coordination |
+| `sqrzl-object` | S3, Azure Blob, GCS, and OCI wire protocols, routing, upload spooling, and shared object coordination |
 | `sqrzl-messaging` | Mail, SMS, SMTP, provider adapters, and the durable capture journal |
-| `sqrzl-vault` | AWS KMS, Azure Key Vault, Google Cloud KMS, and encrypted local vault state |
+| `sqrzl-vault` | AWS KMS, AWS Secrets Manager, Azure Key Vault, Google Cloud KMS, and encrypted local vault state |
 
-The root composes the domains. Object protocols depend on storage and core.
+The workspace root defines shared dependencies and build profiles.
+`sqrzl-server` composes the domains and is the default workspace member.
+Object protocols depend on storage and core.
 Storage and messaging each depend on core. GCS XML delegates to the S3 handler,
 and object adapters share one data-protection activation lock. Mail and SMS share
 capture recovery and callback delivery. Use `cargo test --workspace` to exercise
-all crates. The root integration tests launch the built `sqrzl-emulator`
+all crates. The server integration tests launch the built `sqrzl-emulator`
 executable using Cargo’s `CARGO_BIN_EXE_sqrzl-emulator` path.
 
 ### Vaults
 
-The root listener selects AWS KMS, Azure Key Vault, and Google Cloud KMS
+The provider listener selects AWS KMS, AWS Secrets Manager, Azure Key Vault, and Google Cloud KMS
 before the S3 fallback. It uses that selection for admission, bounded body
 handling, errors, and dispatch. The vault crate depends on core and keeps
 provider resources in separate namespaces. It can keep state in memory or
@@ -93,7 +95,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    Main["src/main.rs"]
+    Main["crates/sqrzl-server/src/main.rs"]
     Config["Config::from_env<br/>crates/sqrzl-core/src/config.rs"]
     Logging["tracing subscriber<br/>text or json"]
     RootWriter["StorageRootWriter<br/>exclusive root owner through runtime shutdown"]
@@ -102,8 +104,8 @@ flowchart TB
     Mail["Arc&lt;FilesystemMailStore&gt;<br/>crates/sqrzl-messaging/src/mail/filesystem.rs"]
     Sms["Arc&lt;FilesystemSmsStore&gt;<br/>crates/sqrzl-messaging/src/sms/filesystem.rs"]
     Lifecycle["LifecycleExecutor::start<br/>crates/sqrzl-storage/src/lifecycle.rs"]
-    ProviderServer["Server::new_with_sms(...).start<br/>src/server/mod.rs"]
-    UiServer["start_ui_server_with_sms<br/>src/api/server.rs"]
+    ProviderServer["Server::new_with_sms(...).start<br/>crates/sqrzl-server/src/server/mod.rs"]
+    UiServer["start_ui_server_with_sms<br/>crates/sqrzl-server/src/api/server.rs"]
     SmtpServer["SmtpServer::start<br/>crates/sqrzl-messaging/src/mail/smtp.rs"]
 
     Main --> Config
@@ -271,7 +273,7 @@ flowchart TB
     GeneratedClient["Generated OpenAPI adapter<br/>ui/src/adapters/api.g.ts"]
     FetchClient["@fgrzl/fetch<br/>credentials: same-origin"]
 
-    UiListener["UI listener :9001<br/>src/api/server.rs"]
+    UiListener["UI listener :9001<br/>crates/sqrzl-server/src/api/server.rs"]
     Static["Static asset serving<br/>./static or /app/ui/dist"]
     SessionRoutes["/admin/v1/auth/login<br/>/logout<br/>/session"]
     AdminRoutes["/admin/v1/buckets...<br/>/objects...<br/>/versioning, ACL, policy, lifecycle"]
@@ -507,7 +509,7 @@ flowchart TB
 ```mermaid
 flowchart LR
     Unit["Rust unit tests<br/>module-level storage, auth, routing, helpers"]
-    E2E["Rust e2e and interop tests<br/>tests/e2e_*.rs<br/>tests/interop_*.rs"]
+    E2E["Rust e2e and interop tests<br/>crates/sqrzl-server/tests/"]
     SDK["Python SDK certification<br/>sdk-tests/test_*_sdk.py"]
     Benches["cntryl-stress tiers and artifacts<br/>tier1 hotpath<br/>tier2 subsystem<br/>tier3 system/admin<br/>tier4 provider integration"]
     LiveServer["LiveServer harness<br/>ephemeral ports and temp storage"]

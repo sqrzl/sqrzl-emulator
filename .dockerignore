@@ -43,9 +43,8 @@ temp/
 
 # Non-build project files
 docs/
-tests/
+crates/*/tests/
 sdk-tests/
-askr-bug.md
 docker-compose.override.yml
 
 # Misc

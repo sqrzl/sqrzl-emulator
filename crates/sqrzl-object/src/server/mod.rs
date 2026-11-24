@@ -1,5 +1,6 @@
 mod handlers;
 mod http;
+pub mod streaming;
 
 pub(crate) use handlers::handle_request as handle_s3_request;
 pub use http::{RouteMatch, Router};

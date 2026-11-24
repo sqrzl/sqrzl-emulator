@@ -1,10 +1,11 @@
 # Vault emulation
 
-All three adapters use the emulator API port, `9000` by default.
+The vault adapters use the emulator API port, `9000` by default.
 
 | Service | Initial operations | Route selector |
 | --- | --- | --- |
 | AWS KMS | `CreateKey`, `DescribeKey`, `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext` for symmetric keys | `X-Amz-Target: TrentService.<operation>` |
+| AWS Secrets Manager | `CreateSecret`, `PutSecretValue`, `GetSecretValue`, and `DescribeSecret` for string and binary secrets | `X-Amz-Target: secretsmanager.<operation>` |
 | Azure Key Vault | Set and get versioned secrets. Create and get RSA key versions. Encrypt, decrypt, wrap, and unwrap with `RSA-OAEP` or `RSA-OAEP-256` | Vault hostname or `/keys` and `/secrets` requests from a Key Vault SDK. Add `X-Sqrzl-Vault: azure-key-vault` for raw loopback requests. |
 | Google Cloud KMS | Create and get key rings and symmetric keys. Get the initial key version. Encrypt and decrypt with optional additional authenticated data and CRC32C | Cloud KMS hostname or key-ring paths with a Google SDK client header. Add `X-Sqrzl-Vault: google-kms` for raw loopback requests. |
 
@@ -21,6 +22,12 @@ local fixture bearer tokens through `SQRZL_AZURE_VAULT_TOKEN` and
 `SQRZL_GOOGLE_KMS_TOKEN` respectively. Set these when using the vault adapters
 with global authentication enabled. Azure and Google accept unsigned requests
 when both their token and global authentication are disabled.
+
+Secrets Manager accepts names and full ARNs in the request's AWS region.
+`PutSecretValue` applies staging labels and moves `AWSCURRENT` and `AWSPREVIOUS`
+as versions change. Requests can select a version by label or ID. Secrets use
+the same emulator vault persistence as the other adapters. The supported
+subset covers versioned writes, reads, and metadata. [AWS Secrets Manager API](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_Operations.html)
 
 ## Persistence
 
