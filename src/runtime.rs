@@ -1,4 +1,4 @@
-pub use sqrzl_emulator_core::runtime::*;
+pub use sqrzl_core::runtime::*;
 
 /// Rejects overload before reading a body using the selected provider's error shape.
 #[must_use]

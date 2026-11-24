@@ -1,4 +1,4 @@
-pub use sqrzl_emulator_core::config::*;
+pub use sqrzl_core::config::*;
 
 #[cfg(test)]
 mod tests {

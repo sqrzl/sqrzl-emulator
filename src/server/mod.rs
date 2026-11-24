@@ -13,11 +13,11 @@ use hyper::{Request, Response, StatusCode};
 use std::sync::Arc;
 use tracing::error;
 
-use sqrzl_emulator_core::server::http;
-pub use sqrzl_emulator_core::server::{
+use sqrzl_core::server::http;
+pub use sqrzl_core::server::{
     serve_h1_connection, serve_h1_connection_until, RequestExt, RequestParseError, ResponseBuilder,
 };
-pub use sqrzl_emulator_object::server::{RouteMatch, Router};
+pub use sqrzl_object::server::{RouteMatch, Router};
 
 mod streaming;
 

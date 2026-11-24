@@ -7,10 +7,10 @@ pub mod runtime;
 pub mod server;
 pub mod storage;
 
-pub use sqrzl_emulator_core::{auth, body, error, hyper_compat, Config, Error, Result};
-pub use sqrzl_emulator_messaging::{capture, mail, sms};
-pub use sqrzl_emulator_object::{providers, services, utils};
-pub use sqrzl_emulator_storage::{blob, lifecycle, models};
+pub use sqrzl_core::{auth, body, error, hyper_compat, Config, Error, Result};
+pub use sqrzl_messaging::{capture, mail, sms};
+pub use sqrzl_object::{providers, services, utils};
+pub use sqrzl_storage::{blob, lifecycle, models};
 
 pub use lifecycle::LifecycleExecutor;
 pub use server::Server;

@@ -2120,45 +2120,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sqrzl-emulator"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bytes",
- "chrono",
- "cntryl-stress",
- "crc32c",
- "crc32fast",
- "crc64fast-nvme",
- "flate2",
- "hex",
- "hmac",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "md5",
- "mime_guess",
- "reqwest",
- "rmcp",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "sqrzl-emulator-core",
- "sqrzl-emulator-messaging",
- "sqrzl-emulator-object",
- "sqrzl-emulator-storage",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "sqrzl-emulator-core"
+name = "sqrzl-core"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -2190,7 +2152,45 @@ dependencies = [
 ]
 
 [[package]]
-name = "sqrzl-emulator-messaging"
+name = "sqrzl-emulator"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "chrono",
+ "cntryl-stress",
+ "crc32c",
+ "crc32fast",
+ "crc64fast-nvme",
+ "flate2",
+ "hex",
+ "hmac",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "md5",
+ "mime_guess",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "sqrzl-core",
+ "sqrzl-messaging",
+ "sqrzl-object",
+ "sqrzl-storage",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "sqrzl-messaging"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -2208,7 +2208,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
- "sqrzl-emulator-core",
+ "sqrzl-core",
  "tokio",
  "tracing",
  "urlencoding",
@@ -2216,7 +2216,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sqrzl-emulator-object"
+name = "sqrzl-object"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -2240,8 +2240,8 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
- "sqrzl-emulator-core",
- "sqrzl-emulator-storage",
+ "sqrzl-core",
+ "sqrzl-storage",
  "tokio",
  "tracing",
  "urlencoding",
@@ -2249,7 +2249,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sqrzl-emulator-storage"
+name = "sqrzl-storage"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -2265,7 +2265,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
- "sqrzl-emulator-core",
+ "sqrzl-core",
  "tokio",
  "tracing",
  "urlencoding",

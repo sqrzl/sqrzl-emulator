@@ -38,14 +38,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 urlencoding.workspace = true
 uuid.workspace = true
-sqrzl-emulator-core.workspace = true
-sqrzl-emulator-storage.workspace = true
-sqrzl-emulator-object.workspace = true
-sqrzl-emulator-messaging.workspace = true
+sqrzl-core.workspace = true
+sqrzl-storage.workspace = true
+sqrzl-object.workspace = true
+sqrzl-messaging.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true
-sqrzl-emulator-storage = { workspace = true, features = ["test-support"] }
+sqrzl-storage = { workspace = true, features = ["test-support"] }
 cntryl-stress = { git = "https://github.com/cntryl/stress", rev = "e0ec8103a0cc59e9a1bd13d46070eb9b183104a5", package = "cntryl-stress" }
 
 [[bench]]
@@ -106,10 +106,10 @@ incremental = false
 [workspace]
 resolver = "2"
 members = [
-    "crates/sqrzl-emulator-core",
-    "crates/sqrzl-emulator-storage",
-    "crates/sqrzl-emulator-object",
-    "crates/sqrzl-emulator-messaging",
+    "crates/sqrzl-core",
+    "crates/sqrzl-storage",
+    "crates/sqrzl-object",
+    "crates/sqrzl-messaging",
 ]
 
 [workspace.package]
@@ -156,7 +156,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 urlencoding = "2"
 uuid = { version = "1.29", features = ["v4", "serde"] }
 libc = "0.2"
-sqrzl-emulator-core = { path = "crates/sqrzl-emulator-core", version = "0.1.0" }
-sqrzl-emulator-storage = { path = "crates/sqrzl-emulator-storage", version = "0.1.0" }
-sqrzl-emulator-object = { path = "crates/sqrzl-emulator-object", version = "0.1.0" }
-sqrzl-emulator-messaging = { path = "crates/sqrzl-emulator-messaging", version = "0.1.0" }
+sqrzl-core = { path = "crates/sqrzl-core", version = "0.1.0" }
+sqrzl-storage = { path = "crates/sqrzl-storage", version = "0.1.0" }
+sqrzl-object = { path = "crates/sqrzl-object", version = "0.1.0" }
+sqrzl-messaging = { path = "crates/sqrzl-messaging", version = "0.1.0" }
