@@ -1,6 +1,16 @@
-use super::*;
+use super::{FilesystemStorage, TestPhase};
+use crate::models::Object;
+use crate::storage::{
+    BucketStore, LifecycleStore, MultipartStore, ObjectListingStore, ObjectStore, VersionStore,
+};
+use crate::utils::headers::compute_etag;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
+use uuid::Uuid;
 
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -28,11 +38,11 @@ fn should_list_sparse_objects_without_loading_payloads_through_indexed_storage()
         .unwrap();
     let reads = Arc::new(AtomicUsize::new(0));
     let observed = reads.clone();
-    *inner.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    inner.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::FullPayload {
             observed.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
 
     // Act
     let page = wrapper
@@ -57,11 +67,11 @@ async fn verify_request_read_path(
     let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
     let full_reads = Arc::new(AtomicUsize::new(0));
     let observed_reads = full_reads.clone();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == forbidden_phase {
             observed_reads.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
     let (status, _, bytes) = wire_get(storage, path, headers, range).await;
     assert_eq!(status, expected);
     assert_eq!(
@@ -160,11 +170,11 @@ async fn should_read_only_requested_gcs_download_bytes_from_a_sparse_object() {
     let (base, storage) = sparse_gcs_storage();
     let reads = Arc::new(AtomicUsize::new(0));
     let observed = reads.clone();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::FullPayload {
             observed.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
 
     // Act
     let (status, headers, bytes) = wire_get(
@@ -192,11 +202,11 @@ async fn should_admit_gcs_media_extents_before_materializing_sparse_payloads() {
     let (base, storage) = sparse_gcs_storage();
     let reads = Arc::new(AtomicUsize::new(0));
     let observed = reads.clone();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::FullPayload || phase == TestPhase::ReadPayloadMetadata {
             observed.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
     let json_routes = [
         "/download/storage/v1/b/sparse/o/large?generation=1",
         "/storage/v1/b/sparse/o/large?alt=media&generation=1",
@@ -267,11 +277,11 @@ async fn should_keep_gcs_sparse_metadata_and_rejected_generation_reads_payload_f
     let (base, storage) = sparse_gcs_storage();
     let reads = Arc::new(AtomicUsize::new(0));
     let observed = reads.clone();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::FullPayload || phase == TestPhase::ReadPayloadMetadata {
             observed.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
     let cases = [
         (
             "/download/storage/v1/b/sparse/o/large?ifGenerationNotMatch=1",
@@ -369,7 +379,7 @@ async fn wire_get(
         secret_access_key: None,
         enforce_auth: false,
         admin_auth_disabled: false,
-        blobs_path: storage.base_path.to_string_lossy().to_string(),
+        blobs_path: storage.test_base_path().to_string_lossy().to_string(),
         lifecycle_interval: Duration::from_hours(1),
         api_port: address.port(),
         ui_port: 0,
@@ -472,7 +482,7 @@ async fn should_keep_held_http_reads_on_the_generation_used_for_response_conditi
             })
             .await
             .unwrap();
-            *storage.test_hook.lock().unwrap() = None;
+            storage.set_test_hook(None);
             resume.send(()).unwrap();
             let (status, headers, bytes) =
                 tokio::time::timeout(WAIT, reader).await.unwrap().unwrap();
@@ -490,7 +500,7 @@ async fn should_keep_held_http_reads_on_the_generation_used_for_response_conditi
             assert_eq!(headers["content-length"], bytes.len().to_string());
             assert_eq!(
                 headers["etag"].to_str().unwrap().trim_matches('"'),
-                md5_hash(&bytes)
+                compute_etag(&bytes)
             );
             if range {
                 assert_eq!(headers["content-range"], "bytes 0-7/8");
@@ -530,12 +540,12 @@ fn paused_storage(
     let (entered_tx, entered_rx) = mpsc::channel();
     let (resume_tx, resume_rx) = mpsc::channel();
     let resume_rx = Mutex::new(resume_rx);
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |observed| {
+    storage.set_test_hook(Some(Arc::new(move |observed| {
         if observed == phase {
             entered_tx.send(()).unwrap();
             resume_rx.lock().unwrap().recv_timeout(WAIT).unwrap();
         }
-    }));
+    })));
     (base, storage, entered_rx, resume_tx)
 }
 
@@ -580,7 +590,7 @@ fn verify_held_read(replacement: &[u8], streamed: bool, range: bool) {
         done_tx.send(()).unwrap();
     });
     let wrote_during_read = done_rx.recv_timeout(Duration::from_millis(100)).is_ok();
-    *storage.test_hook.lock().unwrap() = None;
+    storage.set_test_hook(None);
     resume.send(()).unwrap();
     let observed = reader.join().unwrap();
     writer.join().unwrap();
@@ -591,7 +601,7 @@ fn verify_held_read(replacement: &[u8], streamed: bool, range: bool) {
     );
     assert_eq!(bytes, b"{\"v\":1}\n");
     assert_eq!(metadata.size, bytes.len() as u64);
-    assert_eq!(metadata.etag, md5_hash(&bytes));
+    assert_eq!(metadata.etag, compute_etag(&bytes));
     fs::remove_dir_all(base).unwrap();
 }
 
@@ -647,7 +657,7 @@ fn should_hide_the_body_publication_window_from_all_object_readers() {
                 observed
             });
             let read_during_publication = done_rx.recv_timeout(Duration::from_millis(100)).is_ok();
-            *storage.test_hook.lock().unwrap() = None;
+            storage.set_test_hook(None);
             resume.send(()).unwrap();
             writer.join().unwrap();
             let observed = reader.join().unwrap().unwrap();
@@ -656,7 +666,7 @@ fn should_hide_the_body_publication_window_from_all_object_readers() {
                 "read escaped between body and metadata publication"
             );
             assert_eq!(observed.size, 10);
-            assert_eq!(observed.etag, md5_hash(b"{\"v\":100}\n"));
+            assert_eq!(observed.etag, compute_etag(b"{\"v\":100}\n"));
             if read_kind != 1 {
                 assert_eq!(observed.data, b"{\"v\":100}\n");
             }
@@ -672,11 +682,11 @@ async fn should_admit_s3_replacements_and_subresources_without_loading_existing_
     let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
     let reads = Arc::new(AtomicUsize::new(0));
     let counter = reads.clone();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::FullPayload {
             counter.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
     storage
         .put_bucket_lifecycle(
             "coherent",
@@ -727,7 +737,7 @@ async fn should_bound_s3_current_and_historical_materialization_before_payload_r
     use http_body_util::{BodyExt as _, Full};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
-    *storage.test_hook.lock().unwrap() = None;
+    storage.set_test_hook(None);
     storage.enable_versioning("coherent").unwrap();
     storage
         .put_object(
@@ -740,28 +750,29 @@ async fn should_bound_s3_current_and_historical_materialization_before_payload_r
             ),
         )
         .unwrap();
-    let object_id = FilesystemStorage::compute_object_id("coherent", "large");
-    let metadata_path = storage.object_metadata_path("coherent", &object_id);
-    let mut object = FilesystemStorage::read_object_metadata(&metadata_path).unwrap();
+    let object_id = FilesystemStorage::test_compute_object_id("coherent", "large");
+    let metadata_path = storage.test_object_metadata_path("coherent", &object_id);
+    let mut object = FilesystemStorage::test_read_object_metadata(&metadata_path).unwrap();
     let version = object.version_id.clone().unwrap();
     object.size = 64 * 1024 * 1024 + 1;
     std::fs::OpenOptions::new()
         .write(true)
-        .open(storage.object_data_path("coherent", &object_id))
+        .open(storage.test_object_data_path("coherent", &object_id))
         .unwrap()
         .set_len(object.size)
         .unwrap();
-    FilesystemStorage::atomic_write(&metadata_path, &serde_json::to_vec(&object).unwrap()).unwrap();
+    FilesystemStorage::test_atomic_write(&metadata_path, &serde_json::to_vec(&object).unwrap())
+        .unwrap();
     let reads = Arc::new(AtomicUsize::new(0));
     let counter = reads.clone();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if matches!(
             phase,
             TestPhase::FullPayload | TestPhase::ReadPayloadMetadata
         ) {
             counter.fetch_add(1, Ordering::SeqCst);
         }
-    }));
+    })));
     let config = Arc::new(crate::Config {
         access_key_id: None,
         secret_access_key: None,
@@ -1030,7 +1041,7 @@ async fn should_bound_s3_current_and_historical_materialization_before_payload_r
         response.into_body().collect().await.unwrap().to_bytes(),
         b"see".as_slice()
     );
-    *storage.test_hook.lock().unwrap() = None;
+    storage.set_test_hook(None);
     storage
         .put_object(
             "coherent",
@@ -1071,24 +1082,24 @@ fn should_bound_copy_snapshots_when_source_grows_after_metadata_admission() {
     let limit = 1024;
     let mut old_metadata = storage.get_object_metadata("sparse", "large").unwrap();
     old_metadata.size = 1;
-    let metadata_path = storage.object_metadata_path(
+    let metadata_path = storage.test_object_metadata_path(
         "sparse",
-        &FilesystemStorage::compute_object_id("sparse", "large"),
+        &FilesystemStorage::test_compute_object_id("sparse", "large"),
     );
-    FilesystemStorage::write_object_metadata(&metadata_path, &old_metadata).unwrap();
+    FilesystemStorage::test_write_object_metadata(&metadata_path, &old_metadata).unwrap();
     let replacement_path = metadata_path.clone();
     let mut replacement = old_metadata.clone();
     replacement.size = 64 * 1024 * 1024 + 3;
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(move |phase| {
+    storage.set_test_hook(Some(Arc::new(move |phase| {
         if phase == TestPhase::ReadMetadata {
-            FilesystemStorage::write_object_metadata(&replacement_path, &replacement).unwrap();
+            FilesystemStorage::test_write_object_metadata(&replacement_path, &replacement).unwrap();
         }
         assert_ne!(
             phase,
             TestPhase::FullPayload,
             "copy must use a bounded read"
         );
-    }));
+    })));
 
     // Act
     let snapshot =
@@ -1105,19 +1116,20 @@ async fn should_serve_current_head_metadata_without_opening_payload_files() {
     // Arrange
     use http_body_util::{BodyExt as _, Full};
     let (base, storage, _, _) = paused_storage(TestPhase::BodyPublished);
-    *storage.test_hook.lock().unwrap() = None;
-    let object_id = FilesystemStorage::compute_object_id("coherent", "lease");
-    let metadata_path = storage.object_metadata_path("coherent", &object_id);
-    let mut object = FilesystemStorage::read_object_metadata(&metadata_path).unwrap();
+    storage.set_test_hook(None);
+    let object_id = FilesystemStorage::test_compute_object_id("coherent", "lease");
+    let metadata_path = storage.test_object_metadata_path("coherent", &object_id);
+    let mut object = FilesystemStorage::test_read_object_metadata(&metadata_path).unwrap();
     object.size = 1024 * 1024 * 1024;
     std::fs::OpenOptions::new()
         .write(true)
-        .open(storage.object_data_path("coherent", &object_id))
+        .open(storage.test_object_data_path("coherent", &object_id))
         .unwrap()
         .set_len(object.size)
         .unwrap();
-    FilesystemStorage::atomic_write(&metadata_path, &serde_json::to_vec(&object).unwrap()).unwrap();
-    *storage.test_hook.lock().unwrap() = Some(Arc::new(|phase| {
+    FilesystemStorage::test_atomic_write(&metadata_path, &serde_json::to_vec(&object).unwrap())
+        .unwrap();
+    storage.set_test_hook(Some(Arc::new(|phase| {
         assert!(
             !matches!(
                 phase,
@@ -1125,7 +1137,7 @@ async fn should_serve_current_head_metadata_without_opening_payload_files() {
             ),
             "HEAD opened a payload file"
         );
-    }));
+    })));
     let config = Arc::new(crate::Config {
         access_key_id: None,
         secret_access_key: None,

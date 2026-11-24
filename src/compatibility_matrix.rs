@@ -617,6 +617,7 @@ mod tests {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut rust_source = String::new();
         collect_source(&manifest.join("src"), &["rs"], &mut rust_source);
+        collect_source(&manifest.join("crates"), &["rs"], &mut rust_source);
         collect_source(&manifest.join("tests"), &["rs"], &mut rust_source);
         let mut python_source = String::new();
         collect_source(&manifest.join("sdk-tests"), &["py"], &mut python_source);

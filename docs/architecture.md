@@ -1,8 +1,38 @@
 # Sqrzl Architecture
 
-This document maps the current Sqrzl emulator architecture as Mermaid diagrams.
-It is source-oriented: the nodes name the modules, contracts, ports, and runtime
-paths that exist in this repository.
+The diagrams name the modules, contracts, ports, and runtime paths in the
+Sqrzl emulator.
+
+## Cargo workspace
+
+| Package | Ownership |
+| --- | --- |
+| `sqrzl-emulator` | Public Rust facade, process startup, listener routing, admin and MCP, integration tests, and benchmarks |
+| `sqrzl-emulator-core` | Parsed HTTP requests and responses, body limits, runtime admission and draining, configuration, and shared authentication |
+| `sqrzl-emulator-storage` | Object models, storage capabilities, filesystem publication and recovery, writer ownership, and lifecycle |
+| `sqrzl-emulator-object` | S3, Azure Blob, GCS, and OCI wire protocols and shared object routing and coordination |
+| `sqrzl-emulator-messaging` | Mail, SMS, SMTP, provider adapters, and the durable capture journal |
+
+The root composes the domains. Object protocols depend on storage and core.
+Storage and messaging each depend on core. GCS XML delegates to the S3 handler,
+and object adapters share one data-protection activation lock. Mail and SMS share
+capture recovery and callback delivery. Use `cargo test --workspace` to exercise
+all crates. Root integration tests also exercise the built `sqrzl-emulator`
+executable and retain its existing Cargo target name.
+
+### Azure Key Vault and AWS KMS
+
+Give Key Vault and KMS a key-management crate that owns their state and keeps
+each service's namespace, wire protocol, and authentication separate. It can
+use core's HTTP and runtime primitives. Compose its routes in the root listener using explicit service
+matching ahead of the S3 fallback. Use the same match for request admission,
+body handling, and dispatch so key requests reach the key-management handlers.
+Service-specific overload responses belong at that boundary. Object upload
+spooling stays with object traffic.
+
+Blob encryption scopes and object CMEK references remain part of the object
+protocols. Introduce a narrow key-resolution interface if an object operation
+later needs to use key material.
 
 ## System Context
 
@@ -65,17 +95,17 @@ flowchart LR
 ```mermaid
 flowchart TB
     Main["src/main.rs"]
-    Config["Config::from_env<br/>src/config.rs"]
+    Config["Config::from_env<br/>crates/sqrzl-emulator-core/src/config.rs"]
     Logging["tracing subscriber<br/>text or json"]
     RootWriter["StorageRootWriter<br/>exclusive root owner through runtime shutdown"]
     StartupBuckets["SQRZL_BUCKET_LIST validation<br/>ensure_startup_buckets"]
-    Storage["Arc&lt;FilesystemStorage&gt;<br/>src/storage/filesystem.rs"]
-    Mail["Arc&lt;FilesystemMailStore&gt;<br/>src/mail/filesystem.rs"]
-    Sms["Arc&lt;FilesystemSmsStore&gt;<br/>src/sms/filesystem.rs"]
-    Lifecycle["LifecycleExecutor::start<br/>src/lifecycle.rs"]
+    Storage["Arc&lt;FilesystemStorage&gt;<br/>crates/sqrzl-emulator-storage/src/storage/filesystem.rs"]
+    Mail["Arc&lt;FilesystemMailStore&gt;<br/>crates/sqrzl-emulator-messaging/src/mail/filesystem.rs"]
+    Sms["Arc&lt;FilesystemSmsStore&gt;<br/>crates/sqrzl-emulator-messaging/src/sms/filesystem.rs"]
+    Lifecycle["LifecycleExecutor::start<br/>crates/sqrzl-emulator-storage/src/lifecycle.rs"]
     ProviderServer["Server::new_with_sms(...).start<br/>src/server/mod.rs"]
     UiServer["start_ui_server_with_sms<br/>src/api/server.rs"]
-    SmtpServer["SmtpServer::start<br/>src/mail/smtp.rs"]
+    SmtpServer["SmtpServer::start<br/>crates/sqrzl-emulator-messaging/src/mail/smtp.rs"]
 
     Main --> Config
     Main --> Logging
@@ -114,9 +144,9 @@ flowchart TD
     Parse["Request::from_hyper_with_max_body<br/>buffer control payload"]
     BodyLimit{"Body exceeds<br/>SQRZL_MAX_REQUEST_BYTES?"}
     Health{"GET /healthz?"}
-    SmsRegistry{"SmsAdapterRegistry::route<br/>src/sms/providers/mod.rs"}
-    MailRegistry{"MailAdapterRegistry::route<br/>src/mail/providers/mod.rs"}
-    Registry["AdapterRegistry::handle<br/>src/providers/mod.rs"]
+    SmsRegistry{"SmsAdapterRegistry::route<br/>crates/sqrzl-emulator-messaging/src/sms/providers/mod.rs"}
+    MailRegistry{"MailAdapterRegistry::route<br/>crates/sqrzl-emulator-messaging/src/mail/providers/mod.rs"}
+    Registry["AdapterRegistry::handle<br/>crates/sqrzl-emulator-object/src/providers/mod.rs"]
     Azure{"AzureBlobAdapter.matches"}
     GCS{"GcsAdapter.matches"}
     OCI{"OciAdapter.matches"}
@@ -136,8 +166,8 @@ flowchart TD
     S3SigV4["S3 auth internals<br/>sigv4 + context helpers"]
     ProviderStateHelper["Provider state helper<br/>providers::state JSON sidecars"]
     BlobBackend["BlobBackend facade<br/>namespace/blob vocabulary"]
-    Services["S3 service helpers<br/>src/services/bucket.rs<br/>src/services/object.rs"]
-    Storage["Storage trait<br/>src/storage/mod.rs"]
+    Services["S3 service helpers<br/>crates/sqrzl-emulator-object/src/services/bucket.rs<br/>crates/sqrzl-emulator-object/src/services/object.rs"]
+    Storage["Storage trait<br/>crates/sqrzl-emulator-storage/src/storage/mod.rs"]
     Response["Provider-compatible response<br/>XML, JSON, headers"]
     TooLarge["SMS, mail or storage registry<br/>provider-shaped 413 response"]
     HealthResponse["health::response"]

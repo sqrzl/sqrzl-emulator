@@ -1,27 +1,16 @@
-// Re-exports for convenience
 pub mod api;
-pub mod auth;
-pub mod blob;
-pub mod body;
-pub mod capture;
 mod compatibility_matrix;
 pub mod config;
-pub mod error;
 pub mod health;
-pub mod hyper_compat;
-pub mod lifecycle;
-pub mod mail;
 pub mod metrics;
-pub mod models;
-pub mod providers;
 pub mod runtime;
 pub mod server;
-pub mod services;
-pub mod sms;
 pub mod storage;
-pub mod utils;
 
-pub use config::Config;
-pub use error::{Error, Result};
+pub use sqrzl_emulator_core::{auth, body, error, hyper_compat, Config, Error, Result};
+pub use sqrzl_emulator_messaging::{capture, mail, sms};
+pub use sqrzl_emulator_object::{providers, services, utils};
+pub use sqrzl_emulator_storage::{blob, lifecycle, models};
+
 pub use lifecycle::LifecycleExecutor;
 pub use server::Server;

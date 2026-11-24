@@ -34,6 +34,8 @@ WORKDIR /usr/src/sqrzl-emulator
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY crates ./crates
+COPY compatibility-matrix.json ./
 COPY benches ./benches
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

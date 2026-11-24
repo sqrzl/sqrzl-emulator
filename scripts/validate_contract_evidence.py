@@ -279,7 +279,7 @@ def main() -> int:
         )
     rust = rust_records(
         command(
-            ["cargo", "test", "--lib", "--tests", "--all-features", "--", "--list"]
+            ["cargo", "test", "--workspace", "--lib", "--tests", "--all-features", "--", "--list"]
         ),
         listing=True,
     )

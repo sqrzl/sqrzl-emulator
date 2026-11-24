@@ -1,58 +1,51 @@
 [package]
 name = "sqrzl-emulator"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.96"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 authors = ["smiggleworth"]
-license = "Apache-2.0"
+license.workspace = true
 readme = "README.md"
 description = "A multi-provider blob and object storage emulator for S3, Azure Blob, GCS, and OCI-compatible workflows"
-homepage = "https://github.com/sqrzl/sqrzl-emulator"
 documentation = "https://docs.rs/sqrzl-emulator"
-repository = "https://github.com/sqrzl/sqrzl-emulator"
+repository.workspace = true
 keywords = ["s3", "azure", "gcs", "oci", "storage", "emulator"]
 
 [dependencies]
-base64 = "0.23"
-bytes = "1"
-chrono = { version = "0.4", features = ["serde"] }
-crossbeam-skiplist = "0.1"
-crc32c = "0.6.9"
-crc32fast = "1.5"
-crc64fast-nvme = "1.2.1"
-hex = "0.4"
-hmac = "0.13"
-http = "1.5"
-hyper = { version = "1.12.0", features = ["full"] }
-hyper-util = { version = "0.1.21", features = ["client", "client-legacy", "http1", "http2"] }
-jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
-md5 = "0.8"
-mime_guess = "2"
-quick-xml = "0.42.0"
-redb = "=4.6.0"
-rand = "0.10.3"
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
-rmcp = { version = "=3.10.0", features = ["transport-streamable-http-server"] }
-rsa = { version = "0.10.0", features = ["getrandom", "pkcs1v15"] }
-sha1 = "0.11.0"
-sha2 = "0.11.1"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0.21"
-getrandom = "0.4"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util", "fs", "process", "signal"] }
-tower = "0.5.3"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
-urlencoding = "2"
-uuid = { version = "1.29", features = ["v4", "serde"] }
-http-body-util = "0.1"
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+crc32c.workspace = true
+crc32fast.workspace = true
+crc64fast-nvme.workspace = true
+hex.workspace = true
+hmac.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+md5.workspace = true
+mime_guess.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+urlencoding.workspace = true
+uuid.workspace = true
+sqrzl-emulator-core.workspace = true
+sqrzl-emulator-storage.workspace = true
+sqrzl-emulator-object.workspace = true
+sqrzl-emulator-messaging.workspace = true
 
 [dev-dependencies]
+flate2.workspace = true
+sqrzl-emulator-storage = { workspace = true, features = ["test-support"] }
 cntryl-stress = { git = "https://github.com/cntryl/stress", rev = "e0ec8103a0cc59e9a1bd13d46070eb9b183104a5", package = "cntryl-stress" }
 
 [[bench]]
@@ -109,3 +102,61 @@ incremental = false
 
 [profile.test]
 incremental = false
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/sqrzl-emulator-core",
+    "crates/sqrzl-emulator-storage",
+    "crates/sqrzl-emulator-object",
+    "crates/sqrzl-emulator-messaging",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "Apache-2.0"
+repository = "https://github.com/sqrzl/sqrzl-emulator"
+
+[workspace.dependencies]
+base64 = "0.23"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+crc32c = "0.6.9"
+crc32fast = "1.5"
+crc64fast-nvme = "1.2.1"
+crossbeam-skiplist = "0.1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+getrandom = "0.4"
+hex = "0.4"
+hmac = "0.13"
+http = "1.5"
+http-body-util = "0.1"
+hyper = { version = "1.12.0", features = ["full"] }
+hyper-util = { version = "0.1.21", features = ["client", "client-legacy", "http1", "http2"] }
+jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
+md5 = "0.8"
+mime_guess = "2"
+quick-xml = "0.42.0"
+rand = "0.10.3"
+redb = "=4.6.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "=3.10.0", features = ["transport-streamable-http-server"] }
+rsa = { version = "0.10.0", features = ["getrandom", "pkcs1v15"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "io-util", "fs", "process", "signal"] }
+tower = "0.5.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+urlencoding = "2"
+uuid = { version = "1.29", features = ["v4", "serde"] }
+libc = "0.2"
+sqrzl-emulator-core = { path = "crates/sqrzl-emulator-core", version = "0.1.0" }
+sqrzl-emulator-storage = { path = "crates/sqrzl-emulator-storage", version = "0.1.0" }
+sqrzl-emulator-object = { path = "crates/sqrzl-emulator-object", version = "0.1.0" }
+sqrzl-emulator-messaging = { path = "crates/sqrzl-emulator-messaging", version = "0.1.0" }
