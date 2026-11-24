@@ -42,6 +42,7 @@ sqrzl-core.workspace = true
 sqrzl-storage.workspace = true
 sqrzl-object.workspace = true
 sqrzl-messaging.workspace = true
+sqrzl-vault.workspace = true
 
 [dev-dependencies]
 flate2.workspace = true
@@ -110,6 +111,7 @@ members = [
     "crates/sqrzl-storage",
     "crates/sqrzl-object",
     "crates/sqrzl-messaging",
+    "crates/sqrzl-vault",
 ]
 
 [workspace.package]
@@ -120,6 +122,7 @@ license = "Apache-2.0"
 repository = "https://github.com/sqrzl/sqrzl-emulator"
 
 [workspace.dependencies]
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["alloc", "aws-lc-sys"] }
 base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -160,3 +163,4 @@ sqrzl-core = { path = "crates/sqrzl-core", version = "0.1.0" }
 sqrzl-storage = { path = "crates/sqrzl-storage", version = "0.1.0" }
 sqrzl-object = { path = "crates/sqrzl-object", version = "0.1.0" }
 sqrzl-messaging = { path = "crates/sqrzl-messaging", version = "0.1.0" }
+sqrzl-vault = { path = "crates/sqrzl-vault", version = "0.1.0" }

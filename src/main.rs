@@ -72,6 +72,14 @@ async fn run(config: Config) -> Result<()> {
     let storage = Arc::new(FilesystemStorage::open(&config.blobs_path)?);
     let mail = Arc::new(FilesystemMailStore::open(&config.blobs_path)?);
     let sms = Arc::new(FilesystemSmsStore::open(&config.blobs_path)?);
+    let vault_key = std::env::var("SQRZL_VAULT_KEY").ok();
+    let vault = Arc::new(
+        sqrzl_emulator::vault::Vault::open(&config.blobs_path, vault_key.as_deref())?
+            .with_bearer_tokens(
+                std::env::var("SQRZL_AZURE_VAULT_TOKEN").ok(),
+                std::env::var("SQRZL_GOOGLE_KMS_TOKEN").ok(),
+            ),
+    );
     let startup_buckets = Config::startup_bucket_names_from_env();
 
     ensure_startup_buckets(storage.as_ref(), &startup_buckets)?;
@@ -109,6 +117,7 @@ async fn run(config: Config) -> Result<()> {
                 config.api_port,
                 metrics,
             )
+            .with_vault(vault)
             .start()
             .await
         }

@@ -12,6 +12,7 @@ Sqrzl emulator.
 | `sqrzl-storage` | Object models, storage capabilities, filesystem publication and recovery, writer ownership, and lifecycle |
 | `sqrzl-object` | S3, Azure Blob, GCS, and OCI wire protocols and shared object routing and coordination |
 | `sqrzl-messaging` | Mail, SMS, SMTP, provider adapters, and the durable capture journal |
+| `sqrzl-vault` | AWS KMS, Azure Key Vault, Google Cloud KMS, and encrypted local vault state |
 
 The root composes the domains. Object protocols depend on storage and core.
 Storage and messaging each depend on core. GCS XML delegates to the S3 handler,
@@ -20,16 +21,13 @@ capture recovery and callback delivery. Use `cargo test --workspace` to exercise
 all crates. The root integration tests launch the built `sqrzl-emulator`
 executable using Cargo’s `CARGO_BIN_EXE_sqrzl-emulator` path.
 
-### Azure Key Vault and AWS KMS
+### Vaults
 
-Give Key Vault and KMS a `sqrzl-key-management` crate that owns their state and
-keeps each service's namespace, wire protocol, and authentication separate. It
-can use core's HTTP and runtime primitives. Compose its routes in the root
-listener using explicit service matching ahead of the S3 fallback. Use the same
-match for request admission, body handling, and dispatch so key requests reach
-the key-management handlers.
-Service-specific overload responses belong at that boundary. Object upload
-spooling stays with object traffic.
+The root listener selects AWS KMS, Azure Key Vault, and Google Cloud KMS
+before the S3 fallback. It uses that selection for admission, bounded body
+handling, errors, and dispatch. The vault crate depends on core and keeps
+provider resources in separate namespaces. It can keep state in memory or
+publish an encrypted snapshot under the storage root. [Vault usage](vault.md)
 
 Blob encryption scopes and object CMEK references remain part of the object
 protocols. Introduce a narrow key-resolution interface if an object operation

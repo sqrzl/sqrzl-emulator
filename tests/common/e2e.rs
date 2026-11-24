@@ -60,7 +60,15 @@ impl LiveServer {
             ..auth_config
         });
 
-        let task = tokio::spawn(Server::new(storage, mail, config, api_port).start());
+        let vault = Arc::new(
+            sqrzl_emulator::vault::Vault::open(&storage_dir, None)
+                .expect("ephemeral vault should open"),
+        );
+        let task = tokio::spawn(
+            Server::new(storage, mail, config, api_port)
+                .with_vault(vault)
+                .start(),
+        );
         let server = Self {
             base_url: format!("http://127.0.0.1:{api_port}"),
             client: Client::builder(TokioExecutor::new()).build_http(),
