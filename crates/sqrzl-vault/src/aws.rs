@@ -54,7 +54,9 @@ pub(crate) fn handle(
         return Err(Fault::Unsupported);
     }
     if !aws_request::authorized(request, config, "kms") {
-        return Err(Fault::Denied);
+        return Err(Fault::Denied(
+            "The request lacks the configured emulator credentials",
+        ));
     }
     let region = region(request)?;
     let operation = request

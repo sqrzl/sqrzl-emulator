@@ -101,7 +101,10 @@ pub(crate) fn handle(store: &Store, request: &RequestExt) -> Result<Value, Fault
         ("secrets", &Method::PUT, []) => set_secret(store, request, record, &id),
         ("secrets", &Method::GET, [] | [_]) => {
             let version = version(rest.first().copied())?;
-            let secret = store.get_version(&record, version)?;
+            let secret: Secret = store.get_version(&record, version)?;
+            if secret.attributes.enabled == Some(false) {
+                return Err(Fault::Denied("The selected secret version is disabled"));
+            }
             Ok(secret_response(&id, &secret))
         }
         ("keys", &Method::POST, ["create"]) => create_key(store, request, record, &id),
@@ -242,7 +245,9 @@ fn run_crypto(request: &RequestExt, id: &str, key: &Key, operation: &str) -> Res
         || key.attributes.exp.is_some_and(|value| value <= now)
         || !key.ops.iter().any(|op| op == usage)
     {
-        return Err(Fault::Denied);
+        return Err(Fault::Denied(
+            "The selected key version cannot perform this operation",
+        ));
     }
     let request: CryptoRequest = body(request)?;
     let value = URL_SAFE_NO_PAD

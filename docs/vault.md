@@ -5,7 +5,7 @@ All three adapters use the emulator API port, `9000` by default.
 | Service | Initial operations | Route selector |
 | --- | --- | --- |
 | AWS KMS | `CreateKey`, `DescribeKey`, `Encrypt`, `Decrypt`, `GenerateDataKey`, `GenerateDataKeyWithoutPlaintext` for symmetric keys | `X-Amz-Target: TrentService.<operation>` |
-| Azure Key Vault | Set and get versioned secrets. Create and get RSA key versions. Encrypt, decrypt, wrap, and unwrap with `RSA-OAEP` or `RSA-OAEP-256` | Vault hostname or `/keys` and `/secrets` requests with `api-version` |
+| Azure Key Vault | Set and get versioned secrets. Create and get RSA key versions. Encrypt, decrypt, wrap, and unwrap with `RSA-OAEP` or `RSA-OAEP-256` | Vault hostname or `/keys` and `/secrets` requests from a Key Vault SDK. Add `X-Sqrzl-Vault: azure-key-vault` for raw loopback requests. |
 | Google Cloud KMS | Create and get key rings and symmetric keys. Get the initial key version. Encrypt and decrypt with optional additional authenticated data and CRC32C | Cloud KMS hostname or key-ring paths with a Google SDK client header. Add `X-Sqrzl-Vault: google-kms` for raw loopback requests. |
 
 Use the AWS SDK with its endpoint set to the emulator URL. AWS and Google

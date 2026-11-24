@@ -282,7 +282,7 @@ jobs:
           docker info --format '{{json .RegistryConfig.Mirrors}}'
 
       - name: Build container image
-        run: docker build -t sqrzl-emulator:smoke .
+        run: docker build -t sqrzl:smoke .
 
       - name: Start container
         run: |
@@ -297,7 +297,7 @@ jobs:
             -e SES_CONFIGURATION_SETS=sqrzl-events \
             -e AZURE_ENCRYPTION_SCOPES=tenant-a,tenant-b \
             -e 'ACS_CONNECTION_STRING=endpoint=http://127.0.0.1:9000;accesskey=c2hhcmVkLXNlY3JldA==' \
-            sqrzl-emulator:smoke
+            sqrzl:smoke
 
       - name: Wait for health
         run: |

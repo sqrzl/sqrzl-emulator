@@ -72,7 +72,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           git diff --exit-code
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
           if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo 'Release tag must match Cargo package version'
             exit 1

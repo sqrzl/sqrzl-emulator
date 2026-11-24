@@ -106,8 +106,11 @@ enabled, also set:
 Build the image from this repository:
 
 ```bash
-docker build -t sqrzl-emulator:local .
+docker build -t sqrzl:latest -t sqrzl-emulator:latest .
 ```
+
+The publish workflow tags the same image as `ghcr.io/sqrzl/sqrzl:latest` and
+`ghcr.io/sqrzl/sqrzl-emulator:latest` during the migration.
 
 Run it with a persistent named volume and authentication disabled:
 
@@ -117,7 +120,7 @@ docker run --rm \
   -p 9000:9000 \
   -p 9001:9001 \
   -v sqrzl-blobs:/app/blobs \
-  sqrzl-emulator:local
+  sqrzl:latest
 ```
 
 Pass configuration with repeated `--env` flags or an env file:
@@ -131,7 +134,7 @@ docker run --rm \
   --env SQRZL_ACCESS_KEY_ID=admin \
   --env SQRZL_SECRET_ACCESS_KEY=change-this-local-secret \
   --env SQRZL_BUCKET_LIST=uploads,fixtures \
-  sqrzl-emulator:local
+  sqrzl:latest
 ```
 
 ## Environment variables

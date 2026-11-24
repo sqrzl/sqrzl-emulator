@@ -31,7 +31,7 @@ enum Fault {
     Missing,
     Conflict,
     Unsupported,
-    Denied,
+    Denied(&'static str),
     Ciphertext,
     WrongKey,
     Internal,
@@ -122,7 +122,11 @@ impl Vault {
                 .insert(http::header::WWW_AUTHENTICATE, challenge);
             Some(response)
         } else {
-            enforce_auth.then(|| provider.fault(Fault::Denied))
+            enforce_auth.then(|| {
+                provider.fault(Fault::Denied(
+                    "The request lacks the configured emulator credentials",
+                ))
+            })
         }
     }
 }
@@ -159,12 +163,7 @@ impl Provider {
             || path.starts_with("/keys/")
             || path == "/secrets"
             || path.starts_with("/secrets/"))
-            && (requested_service == Some("azure-key-vault")
-                || uri.query().is_some_and(|query| {
-                    query
-                        .split('&')
-                        .any(|pair| pair.starts_with("api-version="))
-                }))
+            && (requested_service == Some("azure-key-vault") || azure_key_vault_client(headers))
         {
             return Some(Self::Azure);
         }
@@ -259,12 +258,12 @@ impl Provider {
                 "UNIMPLEMENTED",
                 "This operation is outside the emulated subset",
             ),
-            Fault::Denied => (
+            Fault::Denied(message) => (
                 StatusCode::FORBIDDEN,
                 "AccessDeniedException",
                 "Forbidden",
                 "PERMISSION_DENIED",
-                "The request lacks the configured emulator credentials",
+                message,
             ),
             Fault::Ciphertext => (
                 StatusCode::BAD_REQUEST,
@@ -334,6 +333,23 @@ impl Provider {
         };
         builder.body_str(&value.to_string()).build()
     }
+}
+
+fn azure_key_vault_client(headers: &HeaderMap) -> bool {
+    headers
+        .get(http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .to_ascii_lowercase()
+                .split_ascii_whitespace()
+                .any(|product| {
+                    product.starts_with("azsdk-")
+                        && (product.contains("keyvault")
+                            || product.contains("-azsecrets/")
+                            || product.contains("-azkeys/"))
+                })
+        })
 }
 
 fn authority(uri: &Uri, headers: &HeaderMap) -> Option<Authority> {

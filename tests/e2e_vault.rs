@@ -92,19 +92,34 @@ async fn should_bind_aws_ciphertext_to_its_key_and_context_given_envelope_encryp
 async fn should_read_azure_secret_versions_given_multiple_set_operations() {
     // Arrange
     let server = LiveServer::start_api(auth_disabled()).await;
+    let headers = [("x-sqrzl-vault", "azure-key-vault")];
     let path = "/secrets/example?api-version=7.6";
-    let (_, first) = request(&server, "PUT", path, &[], Some(json!({"value": "first"}))).await;
+    let (_, first) = request(
+        &server,
+        "PUT",
+        path,
+        &headers,
+        Some(json!({"value": "first"})),
+    )
+    .await;
     let first: Value = serde_json::from_str(&first).unwrap();
     let version = first["id"].as_str().unwrap().rsplit('/').next().unwrap();
 
     // Act
-    let (status, _) = request(&server, "PUT", path, &[], Some(json!({"value": "second"}))).await;
-    let (_, latest) = request(&server, "GET", path, &[], None).await;
+    let (status, _) = request(
+        &server,
+        "PUT",
+        path,
+        &headers,
+        Some(json!({"value": "second"})),
+    )
+    .await;
+    let (_, latest) = request(&server, "GET", path, &headers, None).await;
     let (_, original) = request(
         &server,
         "GET",
         &format!("/secrets/example/{version}?api-version=7.6"),
-        &[],
+        &headers,
         None,
     )
     .await;
@@ -125,11 +140,12 @@ async fn should_read_azure_secret_versions_given_multiple_set_operations() {
 async fn should_round_trip_azure_wrapped_material_given_rsa_key() {
     // Arrange
     let server = LiveServer::start_api(auth_disabled()).await;
+    let headers = [("x-sqrzl-vault", "azure-key-vault")];
     let (status, created) = request(
         &server,
         "POST",
         "/keys/example/create?api-version=7.6",
-        &[],
+        &headers,
         Some(json!({"kty": "RSA"})),
     )
     .await;
@@ -148,7 +164,7 @@ async fn should_round_trip_azure_wrapped_material_given_rsa_key() {
         &server,
         "POST",
         &format!("/keys/example/{version}/wrapkey?api-version=7.6"),
-        &[],
+        &headers,
         Some(json!({"alg": "RSA-OAEP-256", "value": material})),
     )
     .await;
@@ -157,7 +173,7 @@ async fn should_round_trip_azure_wrapped_material_given_rsa_key() {
         &server,
         "POST",
         &format!("/keys/example/{version}/unwrapkey?api-version=7.6"),
-        &[],
+        &headers,
         Some(json!({"alg": "RSA-OAEP-256", "value": wrapped["value"]})),
     )
     .await;
@@ -220,4 +236,59 @@ async fn should_route_google_cloud_kms_round_trips_given_a_service_discriminator
         plaintext
     );
     assert!(storage.contains("NoSuchBucket"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_keep_versioned_query_on_s3_given_a_vault_shaped_object_path() {
+    // Arrange
+    let server = LiveServer::start_api(auth_disabled()).await;
+    let (status, _) = request(&server, "PUT", "/keys", &[], None).await;
+    assert_eq!(status, StatusCode::OK);
+    let fixture = json!({ "object": "S3 data" });
+    let (status, _) = request(&server, "PUT", "/keys/report", &[], Some(fixture.clone())).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Act
+    let (status, response) =
+        request(&server, "GET", "/keys/report?api-version=7.6", &[], None).await;
+
+    // Assert
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(serde_json::from_str::<Value>(&response).unwrap(), fixture);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_reject_get_given_a_disabled_azure_secret_version() {
+    // Arrange
+    let server = LiveServer::start_api(auth_disabled()).await;
+    let path = "/secrets/example?api-version=7.6";
+    let headers = [("x-sqrzl-vault", "azure-key-vault")];
+    let (status, created) = request(
+        &server,
+        "PUT",
+        path,
+        &headers,
+        Some(json!({"value": "disabled fixture", "attributes": {"enabled": false}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let created: Value = serde_json::from_str(&created).unwrap();
+    let version = created["id"].as_str().unwrap().rsplit('/').next().unwrap();
+
+    // Act
+    let (status, response) = request(
+        &server,
+        "GET",
+        &format!("/secrets/example/{version}?api-version=7.6"),
+        &headers,
+        None,
+    )
+    .await;
+
+    // Assert
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(serde_json::from_str::<Value>(&response)
+        .unwrap()
+        .get("value")
+        .is_none());
 }
