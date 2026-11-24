@@ -131,10 +131,32 @@ impl Store {
         serde_json::from_value(value.clone()).map_err(|_| Fault::Internal)
     }
 
-    fn update(&self, change: impl FnOnce(&mut Records) -> Result<(), Fault>) -> Result<(), Fault> {
+    pub(crate) fn alter<T, R>(
+        &self,
+        key: String,
+        change: impl FnOnce(Option<T>) -> Result<(T, R), Fault>,
+    ) -> Result<R, Fault>
+    where
+        T: DeserializeOwned + Serialize,
+    {
+        self.update(|records| {
+            let record = records
+                .get(&key)
+                .map(|value| serde_json::from_value(value.clone()).map_err(|_| Fault::Internal))
+                .transpose()?;
+            let (record, result) = change(record)?;
+            records.insert(
+                key,
+                serde_json::to_value(record).map_err(|_| Fault::Internal)?,
+            );
+            Ok(result)
+        })
+    }
+
+    fn update<T>(&self, change: impl FnOnce(&mut Records) -> Result<T, Fault>) -> Result<T, Fault> {
         let mut current = self.records.lock().map_err(|_| Fault::Internal)?;
         let mut next = current.clone();
-        change(&mut next)?;
+        let result = change(&mut next)?;
         if let Some(snapshot) = &self.snapshot {
             snapshot.publish(&next)?;
         }
@@ -147,7 +169,7 @@ impl Store {
                 .and_then(|directory| directory.sync_all())
                 .map_err(|_| Fault::Internal)?;
         }
-        Ok(())
+        Ok(result)
     }
 }
 

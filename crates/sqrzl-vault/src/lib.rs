@@ -9,6 +9,7 @@ use sqrzl_core::server::{RequestExt, ResponseBuilder};
 use uuid::Uuid;
 
 mod aws;
+mod aws_secrets;
 mod azure;
 mod crypto;
 mod google;
@@ -21,6 +22,7 @@ pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
     Aws,
+    AwsSecrets,
     Azure,
     Google,
 }
@@ -77,6 +79,7 @@ impl Vault {
         }
         let result = match provider {
             Provider::Aws => aws::handle(&self.store, request, config),
+            Provider::AwsSecrets => aws_secrets::handle(&self.store, request, config),
             Provider::Azure => azure::handle(&self.store, request),
             Provider::Google => google::handle(&self.store, request),
         };
@@ -93,7 +96,7 @@ impl Vault {
         enforce_auth: bool,
     ) -> Option<http::Response<Body>> {
         let expected = match provider {
-            Provider::Aws => return None,
+            Provider::Aws | Provider::AwsSecrets => return None,
             Provider::Azure => self.azure_token.as_deref(),
             Provider::Google => self.google_token.as_deref(),
         };
@@ -135,12 +138,14 @@ impl Provider {
     /// Resolve a vault protocol from the request head before storage fallback.
     #[must_use]
     pub fn resolve(uri: &Uri, headers: &HeaderMap) -> Option<Self> {
-        if headers
+        let aws_target = headers
             .get("x-amz-target")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("TrentService."))
-        {
+            .and_then(|value| value.to_str().ok());
+        if aws_target.is_some_and(|target| target.starts_with("TrentService.")) {
             return Some(Self::Aws);
+        }
+        if aws_target.is_some_and(|target| target.starts_with(aws_secrets::TARGET_PREFIX)) {
+            return Some(Self::AwsSecrets);
         }
 
         let host = authority(uri, headers).map(|authority| authority.host().to_ascii_lowercase());
@@ -186,6 +191,7 @@ impl Provider {
     pub fn name(self) -> &'static str {
         match self {
             Self::Aws => "aws-kms",
+            Self::AwsSecrets => "aws-secrets-manager",
             Self::Azure => "azure-key-vault",
             Self::Google => "google-kms",
         }
@@ -287,9 +293,18 @@ impl Provider {
                 "The vault operation could not be completed",
             ),
         };
-        let code = if self == Self::Aws { aws } else { azure };
+        let code = match (self, fault) {
+            (Self::AwsSecrets, Fault::Invalid(_)) => "InvalidParameterException",
+            (Self::AwsSecrets, Fault::Missing) => "ResourceNotFoundException",
+            (Self::AwsSecrets, Fault::Conflict) => "ResourceExistsException",
+            (Self::AwsSecrets, Fault::Internal) => "InternalServiceError",
+            (Self::Aws | Self::AwsSecrets, _) => aws,
+            _ => azure,
+        };
         // AWS JSON-RPC reports the service exception code in the body/header.
-        let status = if self == Self::Aws && matches!(fault, Fault::Missing | Fault::Conflict) {
+        let status = if matches!(self, Self::Aws | Self::AwsSecrets)
+            && matches!(fault, Fault::Missing | Fault::Conflict)
+        {
             StatusCode::BAD_REQUEST
         } else {
             status
@@ -305,14 +320,14 @@ impl Provider {
         message: &str,
     ) -> http::Response<Body> {
         let value = match self {
-            Self::Aws => json!({ "__type": code, "message": message }),
+            Self::Aws | Self::AwsSecrets => json!({ "__type": code, "message": message }),
             Self::Azure => json!({ "error": { "code": code, "message": message } }),
             Self::Google => {
                 json!({ "error": { "code": status.as_u16(), "status": google_status, "message": message } })
             }
         };
         let mut response = self.response(status, &value);
-        if self == Self::Aws {
+        if matches!(self, Self::Aws | Self::AwsSecrets) {
             if let Ok(header) = http::HeaderValue::from_str(code) {
                 response.headers_mut().insert("x-amzn-errortype", header);
             }
@@ -323,7 +338,7 @@ impl Provider {
     fn response(self, status: StatusCode, value: &Value) -> http::Response<Body> {
         let builder = ResponseBuilder::new(status).header("cache-control", "no-store");
         let builder = match self {
-            Self::Aws => builder
+            Self::Aws | Self::AwsSecrets => builder
                 .content_type("application/x-amz-json-1.1")
                 .header("x-amzn-requestid", &Uuid::new_v4().to_string()),
             Self::Azure => builder

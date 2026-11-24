@@ -12,7 +12,7 @@ Sqrzl emulator.
 | `sqrzl-storage` | Object models, storage capabilities, filesystem publication and recovery, writer ownership, and lifecycle |
 | `sqrzl-object` | S3, Azure Blob, GCS, and OCI wire protocols, routing, upload spooling, and shared object coordination |
 | `sqrzl-messaging` | Mail, SMS, SMTP, provider adapters, and the durable capture journal |
-| `sqrzl-vault` | AWS KMS, Azure Key Vault, Google Cloud KMS, and encrypted local vault state |
+| `sqrzl-vault` | AWS KMS, AWS Secrets Manager, Azure Key Vault, Google Cloud KMS, and encrypted local vault state |
 
 The workspace root defines shared dependencies and build profiles.
 `sqrzl-server` composes the domains and is the default workspace member.
@@ -25,7 +25,7 @@ executable using Cargo’s `CARGO_BIN_EXE_sqrzl-emulator` path.
 
 ### Vaults
 
-The root listener selects AWS KMS, Azure Key Vault, and Google Cloud KMS
+The provider listener selects AWS KMS, AWS Secrets Manager, Azure Key Vault, and Google Cloud KMS
 before the S3 fallback. It uses that selection for admission, bounded body
 handling, errors, and dispatch. The vault crate depends on core and keeps
 provider resources in separate namespaces. It can keep state in memory or

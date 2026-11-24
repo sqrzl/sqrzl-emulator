@@ -29,16 +29,113 @@ async fn request(
 }
 
 async fn aws(server: &LiveServer, operation: &str, parameters: Value) -> (StatusCode, Value) {
-    let target = format!("TrentService.{operation}");
+    aws_json(server, &format!("TrentService.{operation}"), parameters).await
+}
+
+async fn aws_secrets(
+    server: &LiveServer,
+    operation: &str,
+    parameters: Value,
+) -> (StatusCode, Value) {
+    aws_json(server, &format!("secretsmanager.{operation}"), parameters).await
+}
+
+async fn aws_json(server: &LiveServer, target: &str, parameters: Value) -> (StatusCode, Value) {
     let (status, body) = request(
         server,
         "POST",
         "/",
-        &[("x-amz-target", &target)],
+        &[("x-amz-target", target)],
         Some(parameters),
     )
     .await;
     (status, serde_json::from_str(&body).unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_read_current_and_previous_aws_secret_values_after_putting_a_binary_version() {
+    // Arrange
+    let server = LiveServer::start_api(auth_disabled()).await;
+    let (created_status, created) = aws_secrets(
+        &server,
+        "CreateSecret",
+        json!({"Name": "fixture/password", "SecretString": "original", "Description": "fixture"}),
+    )
+    .await;
+    assert_eq!(created_status, StatusCode::OK);
+    let arn = &created["ARN"];
+    let binary = STANDARD.encode(b"\x00\xfffixture");
+
+    // Act
+    let (put_status, put) = aws_secrets(
+        &server,
+        "PutSecretValue",
+        json!({"SecretId": arn, "SecretBinary": binary}),
+    )
+    .await;
+    let (current_status, current) =
+        aws_secrets(&server, "GetSecretValue", json!({"SecretId": arn})).await;
+    let (previous_status, previous) = aws_secrets(
+        &server,
+        "GetSecretValue",
+        json!({"SecretId": "fixture/password", "VersionStage": "AWSPREVIOUS"}),
+    )
+    .await;
+    let (describe_status, metadata) =
+        aws_secrets(&server, "DescribeSecret", json!({"SecretId": arn})).await;
+
+    // Assert
+    assert_eq!(put_status, StatusCode::OK);
+    assert_eq!(current_status, StatusCode::OK);
+    assert_eq!(previous_status, StatusCode::OK);
+    assert_eq!(describe_status, StatusCode::OK);
+    assert_eq!(current["VersionId"], put["VersionId"]);
+    assert_eq!(current["VersionStages"], json!(["AWSCURRENT"]));
+    assert_eq!(current["SecretBinary"], binary);
+    assert_eq!(previous["VersionId"], created["VersionId"]);
+    assert_eq!(previous["SecretString"], "original");
+    assert_eq!(metadata["Description"], "fixture");
+    assert_eq!(
+        metadata["VersionIdsToStages"][created["VersionId"].as_str().unwrap()],
+        json!(["AWSPREVIOUS"])
+    );
+    assert!(metadata.get("SecretString").is_none());
+    assert!(metadata.get("SecretBinary").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn should_reject_aws_secret_value_changes_given_a_reused_version_token() {
+    // Arrange
+    let server = LiveServer::start_api(auth_disabled()).await;
+    let (created, _) = aws_secrets(&server, "CreateSecret", json!({"Name": "idempotent"})).await;
+    assert_eq!(created, StatusCode::OK);
+    let token = uuid::Uuid::new_v4().to_string();
+    let fixture =
+        json!({"SecretId": "idempotent", "ClientRequestToken": token, "SecretString": "first"});
+    let (written, _) = aws_secrets(&server, "PutSecretValue", fixture.clone()).await;
+    assert_eq!(written, StatusCode::OK);
+
+    // Act
+    let (retry_status, retry) = aws_secrets(&server, "PutSecretValue", fixture).await;
+    let (conflict_status, conflict) = aws_secrets(
+        &server,
+        "PutSecretValue",
+        json!({"SecretId": "idempotent", "ClientRequestToken": token, "SecretString": "changed"}),
+    )
+    .await;
+    let (_, value) = aws_secrets(
+        &server,
+        "GetSecretValue",
+        json!({"SecretId": "idempotent", "VersionId": token}),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(retry_status, StatusCode::OK);
+    assert_eq!(retry["VersionId"], token);
+    assert_eq!(conflict_status, StatusCode::BAD_REQUEST);
+    assert_eq!(conflict["__type"], "ResourceExistsException");
+    assert_eq!(value["SecretString"], "first");
 }
 
 #[tokio::test(flavor = "multi_thread")]
