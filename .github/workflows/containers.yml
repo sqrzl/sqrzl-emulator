@@ -10,20 +10,13 @@ env:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  qualification:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Require exact source qualification before publishing
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/require_release_checks.py
+  version:
+    uses: ./.github/workflows/version.yml
 
   build:
-    needs: qualification
+    needs: version
     name: Build ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -59,9 +52,10 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.semver }},enable=${{ github.ref_type == 'tag' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.semver }},enable=${{ github.ref_type == 'tag' }}
             type=raw,value=latest,enable={{is_default_branch}}
+          labels: org.opencontainers.image.version=${{ needs.version.outputs.semver }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
@@ -99,7 +93,7 @@ jobs:
 
   merge:
     name: Merge multi-arch manifest
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -134,8 +128,8 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.semver }},enable=${{ github.ref_type == 'tag' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.semver }},enable=${{ github.ref_type == 'tag' }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Publish the manifest under both image names

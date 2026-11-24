@@ -5,26 +5,22 @@ on:
   workflow_call:
     outputs:
       semver:
-        description: Semantic version (GitVersion semVer)
-        value: ${{ jobs.gitversion.outputs.semver }}
+        description: Cargo workspace package version
+        value: ${{ jobs.cargo-version.outputs.semver }}
 
 permissions:
   contents: read
 
 jobs:
-  gitversion:
+  cargo-version:
     runs-on: ubuntu-latest
     outputs:
-      semver: ${{ steps.gitversion.outputs.semVer }}
+      semver: ${{ steps.version.outputs.semver }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Setup GitVersion
-        uses: gittools/actions/gitversion/setup@v4
-
-      - name: Compute Version
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@v4
+      - uses: actions/checkout@v7
+      - name: Read Cargo workspace version
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          printf 'semver=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'Cargo version %s\n' "$version"
