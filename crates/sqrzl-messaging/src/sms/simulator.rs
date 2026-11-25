@@ -22,11 +22,13 @@ const DEFAULT_CALLBACK_TIMEOUT_MS: u64 = 5_000;
 pub(crate) struct CallbackPolicy {
     pub allowed_hosts_env: &'static str,
     pub timeout_env: &'static str,
+    pub allow_https: bool,
 }
 
 pub(crate) const TEXT_CALLBACK_POLICY: CallbackPolicy = CallbackPolicy {
     allowed_hosts_env: "SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS",
     timeout_env: "SQRZL_TEXT_CALLBACK_TIMEOUT_MS",
+    allow_https: true,
 };
 const MAX_RECORDED_RESPONSE_BYTES: usize = 64 * 1024;
 
@@ -391,20 +393,15 @@ pub(crate) async fn send_http_callback(
     headers: &HashMap<String, String>,
     body: &[u8],
 ) -> std::result::Result<(u16, String), String> {
-    let uri = url
-        .parse::<Uri>()
-        .map_err(|err| format!("invalid callback URL: {err}"))?;
-    if uri.scheme_str() != Some("http") {
-        return Err(
-            "callback URL must use http; redirects and TLS callbacks are disabled".to_string(),
-        );
-    }
-    let host = uri
-        .host()
-        .ok_or_else(|| "callback URL must include a host".to_string())?;
-    if !callback_host_allowed(policy, host) {
-        return Err(format!("callback host is not allowlisted: {host}"));
-    }
+    let timeout = callback_timeout(policy);
+    let uri = match parse_callback_endpoint(policy, url)? {
+        CallbackEndpoint::Http(uri) => uri,
+        CallbackEndpoint::Https(url) => {
+            return send_https_callback(url, headers, body, timeout).await;
+        }
+    };
+    let host = uri.host().ok_or("callback URL must include a host")?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
     let port = uri.port_u16().unwrap_or(80);
     let authority = uri
         .authority()
@@ -413,8 +410,6 @@ pub(crate) async fn send_http_callback(
     let path = uri
         .path_and_query()
         .map_or("/", http::uri::PathAndQuery::as_str);
-    let timeout = callback_timeout(policy);
-
     tokio::time::timeout(timeout, async {
         let mut stream = tokio::net::TcpStream::connect((host, port))
             .await
@@ -503,23 +498,85 @@ pub fn validate_callback_url(url: &str) -> Result<()> {
 }
 
 pub(crate) fn validate_callback_url_for(policy: CallbackPolicy, url: &str) -> Result<()> {
+    parse_callback_endpoint(policy, url)
+        .map(|_| ())
+        .map_err(Error::InvalidRequest)
+}
+
+enum CallbackEndpoint {
+    Http(Uri),
+    Https(reqwest::Url),
+}
+
+fn parse_callback_endpoint(
+    policy: CallbackPolicy,
+    url: &str,
+) -> std::result::Result<CallbackEndpoint, String> {
     let uri = url
         .parse::<Uri>()
-        .map_err(|err| Error::InvalidRequest(format!("invalid callback URL: {err}")))?;
-    if uri.scheme_str() != Some("http") {
-        return Err(Error::InvalidRequest(
-            "callback URL must use http; redirects and TLS callbacks are disabled".to_string(),
-        ));
+        .map_err(|err| format!("invalid callback URL: {err}"))?;
+    let endpoint = match uri.scheme_str() {
+        Some("http") => CallbackEndpoint::Http(uri),
+        Some("https") if policy.allow_https => CallbackEndpoint::Https(callback_https_url(&uri)?),
+        _ if policy.allow_https => return Err("callback URL must use http or https".to_string()),
+        _ => return Err("callback URL must use http".to_string()),
+    };
+    let host = match &endpoint {
+        CallbackEndpoint::Https(url) => url.host_str(),
+        CallbackEndpoint::Http(uri) => uri.host(),
     }
-    let host = uri
-        .host()
-        .ok_or_else(|| Error::InvalidRequest("callback URL must include a host".to_string()))?;
+    .ok_or("callback URL must include a host")?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
     if !callback_host_allowed(policy, host) {
-        return Err(Error::InvalidRequest(format!(
-            "callback host is not allowlisted: {host}"
-        )));
+        return Err(format!("callback host is not allowlisted: {host}"));
     }
-    Ok(())
+    Ok(endpoint)
+}
+
+fn callback_https_url(uri: &Uri) -> std::result::Result<reqwest::Url, String> {
+    let authority = uri.authority().ok_or("callback URL must include a host")?;
+    if authority.as_str().contains('@') {
+        return Err("callback URL must not include credentials".to_string());
+    }
+    reqwest::Url::parse(&uri.to_string()).map_err(|err| format!("invalid callback URL: {err}"))
+}
+
+async fn send_https_callback(
+    url: reqwest::Url,
+    headers: &HashMap<String, String>,
+    body: &[u8],
+    timeout: Duration,
+) -> std::result::Result<(u16, String), String> {
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .retry(reqwest::retry::never())
+        .timeout(timeout)
+        .build()
+        .map_err(|err| format!("callback client initialization failed: {err}"))?;
+    let mut request = client.post(url).body(body.to_vec());
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    let mut response = request
+        .send()
+        .await
+        .map_err(|err| format!("callback request failed: {}", err.without_url()))?;
+    let status = response.status().as_u16();
+    let mut recorded = Vec::new();
+    while recorded.len() < MAX_RECORDED_RESPONSE_BYTES {
+        let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|err| format!("callback response read failed: {}", err.without_url()))?
+        else {
+            break;
+        };
+        let remaining = MAX_RECORDED_RESPONSE_BYTES - recorded.len();
+        recorded.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+    }
+    Ok((status, String::from_utf8_lossy(&recorded).into_owned()))
 }
 
 fn callback_timeout(policy: CallbackPolicy) -> Duration {
@@ -584,6 +641,34 @@ mod tests {
         assert!(callback_host_allowed(TEXT_CALLBACK_POLICY, "localhost"));
         assert!(callback_host_allowed(TEXT_CALLBACK_POLICY, "127.0.0.1"));
         assert!(!callback_host_allowed(TEXT_CALLBACK_POLICY, "example.com"));
+    }
+
+    #[test]
+    fn should_require_a_configured_host_for_non_loopback_https_callbacks() {
+        // Arrange
+        const HOSTS_ENV: &str = "SQRZL_TEST_HTTPS_CALLBACK_ALLOWED_HOSTS";
+        let policy = CallbackPolicy {
+            allowed_hosts_env: HOSTS_ENV,
+            ..TEXT_CALLBACK_POLICY
+        };
+        let url = "https://api.example.test/callbacks/status?send=test-1";
+
+        // Act
+        let denied = validate_callback_url_for(policy, url);
+        std::env::set_var(HOSTS_ENV, " API.EXAMPLE.TEST ");
+        let allowed = validate_callback_url_for(policy, url);
+        let denied_mail = validate_callback_url_for(
+            crate::mail::ses_events::MAIL_CALLBACK_POLICY,
+            "https://localhost/events",
+        );
+        std::env::remove_var(HOSTS_ENV);
+
+        // Assert
+        assert!(
+            matches!(denied, Err(Error::InvalidRequest(reason)) if reason.contains("not allowlisted"))
+        );
+        assert!(allowed.is_ok());
+        assert!(denied_mail.is_err());
     }
 
     #[test]
@@ -851,5 +936,72 @@ mod tests {
             .transition_delivery(&message.message_id, SmsDeliveryState::Failed)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn should_record_failed_https_callback_without_rolling_back_delivery() {
+        // Arrange
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let callback_url = format!("https://127.0.0.1:{port}/status?send=test-1");
+        let receiver = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.read_u8().await.unwrap()
+        });
+        let store: Arc<dyn SmsStore> = Arc::new(
+            FilesystemSmsStore::open(std::env::temp_dir().join(format!(
+                "sqrzl-https-delivery-test-{}",
+                uuid::Uuid::new_v4()
+            )))
+            .unwrap(),
+        );
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "status_callback".to_string(),
+            serde_json::Value::String(callback_url.clone()),
+        );
+        let message = store
+            .store_message(NewSmsMessage {
+                batch_id: None,
+                provider: SmsProvider::Twilio,
+                provider_message_id: None,
+                direction: SmsDirection::Outbound,
+                channel: SmsChannel::Sms,
+                from: "+15550000001".to_string(),
+                to: "+15550000002".to_string(),
+                body: "outbound".to_string(),
+                media: Vec::new(),
+                metadata,
+            })
+            .unwrap();
+
+        // Act
+        let simulator = SmsSimulator::new(store.clone());
+        let delivered = simulator
+            .transition_delivery(&message.message_id, SmsDeliveryState::Delivered)
+            .await
+            .unwrap();
+        let attempts = store.list_callbacks(&message.message_id).unwrap();
+
+        // Assert
+        let record_type = tokio::time::timeout(Duration::from_secs(5), receiver)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record_type, 0x16); // TLS handshake record
+        assert_eq!(delivered.delivery_state, SmsDeliveryState::Delivered);
+        assert_eq!(
+            store
+                .get_message(&message.message_id)
+                .unwrap()
+                .delivery_state,
+            SmsDeliveryState::Delivered
+        );
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].url, callback_url);
+        assert_eq!(attempts[0].state, CallbackAttemptState::Failed);
+        assert_eq!(attempts[0].response_status, None);
     }
 }

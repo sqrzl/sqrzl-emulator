@@ -41,10 +41,11 @@ The Texts admin surface can configure a callback destination per provider and
 local number, inject an inbound message, explicitly transition outbound delivery
 to delivered or failed, inspect every callback request and bounded response, and
 create linked retries. Callback failures never roll back messages or terminal
-delivery state. Callback redirects are not followed. Callback hosts default to
-`localhost`, `127.0.0.1`, and `::1`; add comma-separated hosts with
-`SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS`. `SQRZL_TEXT_CALLBACK_TIMEOUT_MS` defaults
-to 5000.
+delivery state. Text callbacks support HTTP and HTTPS. HTTPS uses the system
+trust store for certificate verification. Callback redirects are not followed.
+Callback hosts default to `localhost`, `127.0.0.1`, and `::1`. Add
+comma-separated hosts with `SQRZL_TEXT_CALLBACK_ALLOWED_HOSTS`.
+`SQRZL_TEXT_CALLBACK_TIMEOUT_MS` defaults to 5000.
 
 Set both `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` to require
 Twilio Basic authentication and sign inbound/status callback forms. Optionally

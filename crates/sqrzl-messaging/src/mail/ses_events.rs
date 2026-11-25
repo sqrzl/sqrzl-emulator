@@ -22,6 +22,7 @@ use std::sync::Arc;
 pub(crate) const MAIL_CALLBACK_POLICY: CallbackPolicy = CallbackPolicy {
     allowed_hosts_env: "SQRZL_MAIL_CALLBACK_ALLOWED_HOSTS",
     timeout_env: "SQRZL_MAIL_CALLBACK_TIMEOUT_MS",
+    allow_https: false,
 };
 
 const ACCOUNT_ID: &str = "000000000000";
