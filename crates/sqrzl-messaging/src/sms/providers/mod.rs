@@ -245,6 +245,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_capture_twilio_https_status_callback() {
+        // Arrange
+        let store = store();
+        let callback = "https://localhost:8443/twilio/status?message=abc";
+        let form = format!(
+            "To=%2B15550000002&From=%2B15550000001&Body=hello&StatusCallback={}",
+            urlencoding::encode(callback),
+        );
+        let request = request(
+            "POST",
+            "http://localhost/2010-04-01/Accounts/AC00000000000000000000000000000001/Messages.json",
+            &[("content-type", "application/x-www-form-urlencoded")],
+            &form,
+        )
+        .await;
+
+        // Act
+        let response = SmsAdapterRegistry::default()
+            .route(store.clone(), auth(), request)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Assert
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let messages = store
+            .list_messages("+15550000002", ListSmsParams::default())
+            .unwrap();
+        assert_eq!(messages.messages[0].metadata["status_callback"], callback);
+    }
+
+    #[tokio::test]
     async fn should_return_twilio_accepted_only_while_messaging_service_selects_sender() {
         // Arrange
         let registry = SmsAdapterRegistry::default();

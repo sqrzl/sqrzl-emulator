@@ -15,6 +15,7 @@ http.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 redb.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
