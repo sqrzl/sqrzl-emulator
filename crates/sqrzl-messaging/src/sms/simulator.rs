@@ -664,7 +664,9 @@ mod tests {
         std::env::remove_var(HOSTS_ENV);
 
         // Assert
-        assert!(denied.unwrap_err().to_string().contains("not allowlisted"));
+        assert!(
+            matches!(denied, Err(Error::InvalidRequest(reason)) if reason.contains("not allowlisted"))
+        );
         assert!(allowed.is_ok());
         assert!(denied_mail.is_err());
     }
